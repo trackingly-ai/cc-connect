@@ -2777,8 +2777,9 @@ func (e *Engine) sendPermissionPrompt(p Platform, replyCtx any, prompt string) {
 		}
 		if err := bs.SendWithButtons(e.ctx, replyCtx, prompt, buttons); err == nil {
 			return
+		} else {
+			slog.Warn("sendPermissionPrompt: inline buttons failed, falling back to text", "error", err)
 		}
-		slog.Warn("sendPermissionPrompt: inline buttons failed, falling back to text")
 	}
 	e.send(p, replyCtx, prompt)
 }

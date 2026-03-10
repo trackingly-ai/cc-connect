@@ -1108,20 +1108,26 @@ func buildCardWithButtonsJSON(content string, buttons [][]core.ButtonOption) str
 		processed = preprocessFeishuMarkdown(content)
 	}
 
-	var actionElements []map[string]any
+	// Schema 2.0: buttons go directly in elements array (no "action" wrapper)
+	elements := []any{
+		map[string]any{
+			"tag":     "markdown",
+			"content": processed,
+		},
+	}
 	for _, row := range buttons {
 		for _, b := range row {
 			btnType := "default"
-			// Use primary style for allow buttons, danger for deny
 			if strings.Contains(b.Data, "allow") {
 				btnType = "primary"
 			} else if strings.Contains(b.Data, "deny") {
 				btnType = "danger"
 			}
-			actionElements = append(actionElements, map[string]any{
+			elements = append(elements, map[string]any{
 				"tag":  "button",
 				"text": map[string]any{"tag": "plain_text", "content": b.Text},
 				"type": btnType,
+				"size": "medium",
 				"value": map[string]any{
 					"data": b.Data,
 				},
@@ -1133,16 +1139,7 @@ func buildCardWithButtonsJSON(content string, buttons [][]core.ButtonOption) str
 		"schema": "2.0",
 		"config": map[string]any{"wide_screen_mode": true},
 		"body": map[string]any{
-			"elements": []any{
-				map[string]any{
-					"tag":     "markdown",
-					"content": processed,
-				},
-				map[string]any{
-					"tag":     "action",
-					"actions": actionElements,
-				},
-			},
+			"elements": elements,
 		},
 	}
 	b, _ := json.Marshal(card)
