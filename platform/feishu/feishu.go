@@ -16,6 +16,7 @@ import (
 	lark "github.com/larksuite/oapi-sdk-go/v3"
 	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
+	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 	larkws "github.com/larksuite/oapi-sdk-go/v3/ws"
 )
@@ -108,6 +109,10 @@ func (p *Platform) Start(handler core.MessageHandler) error {
 		}).
 		OnP2MessageReactionDeletedV1(func(ctx context.Context, event *larkim.P2MessageReactionDeletedV1) error {
 			return nil // ignore reaction removal events (triggered by our own removeReaction)
+		}).
+		OnP2CardActionTrigger(func(ctx context.Context, event *callback.CardActionTriggerEvent) (*callback.CardActionTriggerResponse, error) {
+			slog.Debug("feishu: card action trigger received", "app_id", p.appID)
+			return p.onCardAction(event)
 		})
 
 	p.wsClient = larkws.NewClient(p.appID, p.appSecret,
@@ -923,6 +928,225 @@ func (p *Platform) UpdateMessage(ctx context.Context, previewHandle any, content
 		return fmt.Errorf("feishu: patch message code=%d msg=%s", resp.Code, resp.Msg)
 	}
 	return nil
+}
+
+// onCardAction handles card button click callbacks from Feishu.
+// It extracts the action value and routes it as a regular user message,
+// similar to Telegram's handleCallbackQuery.
+func (p *Platform) onCardAction(event *callback.CardActionTriggerEvent) (*callback.CardActionTriggerResponse, error) {
+	if event.Event == nil || event.Event.Action == nil {
+		return nil, nil
+	}
+
+	action := event.Event.Action
+	operator := event.Event.Operator
+
+	userID := ""
+	if operator != nil {
+		userID = operator.OpenID
+	}
+
+	if !core.AllowList(p.allowFrom, userID) {
+		slog.Debug("feishu: card action from unauthorized user", "user", userID)
+		return nil, nil
+	}
+
+	chatID := ""
+	messageID := ""
+	if event.Event.Context != nil {
+		chatID = event.Event.Context.OpenChatID
+		messageID = event.Event.Context.OpenMessageID
+	}
+
+	// Extract the callback data from the button's value map
+	data, _ := action.Value["data"].(string)
+	if data == "" {
+		slog.Debug("feishu: card action with no data value", "value", action.Value)
+		return nil, nil
+	}
+
+	var sessionKey string
+	if p.shareSessionInChannel {
+		sessionKey = fmt.Sprintf("feishu:%s", chatID)
+	} else {
+		sessionKey = fmt.Sprintf("feishu:%s:%s", chatID, userID)
+	}
+	rctx := replyContext{messageID: messageID, chatID: chatID}
+
+	// Handle command callbacks (cmd:/lang en, cmd:/mode yolo, etc.)
+	if strings.HasPrefix(data, "cmd:") {
+		command := strings.TrimPrefix(data, "cmd:")
+		p.handler(p, &core.Message{
+			SessionKey: sessionKey,
+			Platform:   "feishu",
+			UserID:     userID,
+			Content:    command,
+			MessageID:  messageID,
+			ReplyCtx:   rctx,
+		})
+		// Update the card to show the chosen option and remove buttons
+		return p.buildCardActionResponse(event, command), nil
+	}
+
+	// Handle permission callbacks (perm:allow, perm:deny, perm:allow_all)
+	var responseText string
+	var choiceLabel string
+	switch data {
+	case "perm:allow":
+		responseText = "allow"
+		choiceLabel = "✅ Allowed"
+	case "perm:deny":
+		responseText = "deny"
+		choiceLabel = "❌ Denied"
+	case "perm:allow_all":
+		responseText = "allow all"
+		choiceLabel = "✅ Allow All"
+	default:
+		slog.Debug("feishu: unknown card action data", "data", data)
+		return nil, nil
+	}
+
+	p.handler(p, &core.Message{
+		SessionKey: sessionKey,
+		Platform:   "feishu",
+		UserID:     userID,
+		Content:    responseText,
+		MessageID:  messageID,
+		ReplyCtx:   rctx,
+	})
+
+	// Update the card to show the choice and remove buttons
+	return p.buildCardActionResponseWithLabel(event, choiceLabel), nil
+}
+
+// buildCardActionResponse returns a card update that shows the chosen command.
+func (p *Platform) buildCardActionResponse(event *callback.CardActionTriggerEvent, command string) *callback.CardActionTriggerResponse {
+	card := map[string]any{
+		"schema": "2.0",
+		"config": map[string]any{"wide_screen_mode": true},
+		"body": map[string]any{
+			"elements": []map[string]any{
+				{"tag": "markdown", "content": "> " + command},
+			},
+		},
+	}
+	return &callback.CardActionTriggerResponse{
+		Toast: &callback.Toast{Type: "info", Content: command},
+		Card:  &callback.Card{Type: "raw", Data: card},
+	}
+}
+
+// buildCardActionResponseWithLabel returns a card update that shows the permission choice.
+func (p *Platform) buildCardActionResponseWithLabel(event *callback.CardActionTriggerEvent, label string) *callback.CardActionTriggerResponse {
+	card := map[string]any{
+		"schema": "2.0",
+		"config": map[string]any{"wide_screen_mode": true},
+		"body": map[string]any{
+			"elements": []map[string]any{
+				{"tag": "markdown", "content": label},
+			},
+		},
+	}
+	return &callback.CardActionTriggerResponse{
+		Toast: &callback.Toast{Type: "info", Content: label},
+		Card:  &callback.Card{Type: "raw", Data: card},
+	}
+}
+
+// SendWithButtons sends a card message with interactive buttons.
+// Implements core.InlineButtonSender interface.
+func (p *Platform) SendWithButtons(ctx context.Context, rctx any, content string, buttons [][]core.ButtonOption) error {
+	rc, ok := rctx.(replyContext)
+	if !ok {
+		return fmt.Errorf("feishu: invalid reply context type %T", rctx)
+	}
+
+	cardJSON := buildCardWithButtonsJSON(content, buttons)
+
+	if p.replyInThread && rc.messageID != "" {
+		resp, err := p.client.Im.Message.Reply(ctx, larkim.NewReplyMessageReqBuilder().
+			MessageId(rc.messageID).
+			Body(larkim.NewReplyMessageReqBodyBuilder().
+				MsgType(larkim.MsgTypeInteractive).
+				Content(cardJSON).
+				Build()).
+			Build())
+		if err != nil {
+			return fmt.Errorf("feishu: sendWithButtons reply: %w", err)
+		}
+		if !resp.Success() {
+			return fmt.Errorf("feishu: sendWithButtons reply code=%d msg=%s", resp.Code, resp.Msg)
+		}
+		return nil
+	}
+
+	if rc.chatID == "" {
+		return fmt.Errorf("feishu: chatID is empty, cannot send message with buttons")
+	}
+
+	resp, err := p.client.Im.Message.Create(ctx, larkim.NewCreateMessageReqBuilder().
+		ReceiveIdType(larkim.ReceiveIdTypeChatId).
+		Body(larkim.NewCreateMessageReqBodyBuilder().
+			ReceiveId(rc.chatID).
+			MsgType(larkim.MsgTypeInteractive).
+			Content(cardJSON).
+			Build()).
+		Build())
+	if err != nil {
+		return fmt.Errorf("feishu: sendWithButtons: %w", err)
+	}
+	if !resp.Success() {
+		return fmt.Errorf("feishu: sendWithButtons code=%d msg=%s", resp.Code, resp.Msg)
+	}
+	return nil
+}
+
+// buildCardWithButtonsJSON builds a Feishu interactive card with markdown content and action buttons.
+func buildCardWithButtonsJSON(content string, buttons [][]core.ButtonOption) string {
+	processed := content
+	if containsMarkdown(content) {
+		processed = preprocessFeishuMarkdown(content)
+	}
+
+	var actionElements []map[string]any
+	for _, row := range buttons {
+		for _, b := range row {
+			btnType := "default"
+			// Use primary style for allow buttons, danger for deny
+			if strings.Contains(b.Data, "allow") {
+				btnType = "primary"
+			} else if strings.Contains(b.Data, "deny") {
+				btnType = "danger"
+			}
+			actionElements = append(actionElements, map[string]any{
+				"tag":  "button",
+				"text": map[string]any{"tag": "plain_text", "content": b.Text},
+				"type": btnType,
+				"value": map[string]any{
+					"data": b.Data,
+				},
+			})
+		}
+	}
+
+	card := map[string]any{
+		"schema": "2.0",
+		"config": map[string]any{"wide_screen_mode": true},
+		"body": map[string]any{
+			"elements": []any{
+				map[string]any{
+					"tag":     "markdown",
+					"content": processed,
+				},
+				map[string]any{
+					"tag":     "action",
+					"actions": actionElements,
+				},
+			},
+		},
+	}
+	b, _ := json.Marshal(card)
+	return string(b)
 }
 
 func (p *Platform) Stop() error {
