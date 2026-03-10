@@ -199,6 +199,124 @@ func (q *QwenASR) Transcribe(ctx context.Context, audio []byte, format string, l
 	return strings.TrimSpace(result.Choices[0].Message.Content), nil
 }
 
+// GeminiSTT implements SpeechToText using the Gemini API.
+// Instead of raw transcription, it sends the audio to Gemini with a prompt
+// that asks it to understand the user's intent and output a clear, actionable
+// requirement — ready to be passed directly to Claude Code.
+type GeminiSTT struct {
+	APIKey    string
+	Model     string
+	ProjectID string
+	Location  string
+	Client    *http.Client
+}
+
+func NewGeminiSTT(apiKey, model, projectID, location string) *GeminiSTT {
+	if model == "" {
+		model = "gemini-2.5-flash"
+	}
+	if location == "" {
+		location = "us-central1"
+	}
+	return &GeminiSTT{
+		APIKey:    apiKey,
+		Model:     model,
+		ProjectID: projectID,
+		Location:  location,
+		Client:    &http.Client{Timeout: 120 * time.Second},
+	}
+}
+
+func (g *GeminiSTT) Transcribe(ctx context.Context, audio []byte, format string, lang string) (string, error) {
+	b64 := base64.StdEncoding.EncodeToString(audio)
+	mime := formatToAudioMIME(format)
+
+	systemPrompt := "You are a voice-to-task interpreter. Listen to the audio and extract the user's intent. " +
+		"Output ONLY the clear, actionable requirement or instruction — as if the user had typed it. " +
+		"Do not include filler words, hesitations, or conversational artifacts. " +
+		"If the user speaks in a non-English language, output the requirement in that same language. " +
+		"Do not add any explanation or commentary."
+
+	reqBody := map[string]any{
+		"system_instruction": map[string]any{
+			"parts": []map[string]any{
+				{"text": systemPrompt},
+			},
+		},
+		"contents": []map[string]any{
+			{
+				"parts": []any{
+					map[string]any{
+						"inline_data": map[string]any{
+							"mime_type": mime,
+							"data":     b64,
+						},
+					},
+					map[string]any{
+						"text": "Listen to this audio and output the user's requirement.",
+					},
+				},
+			},
+		},
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("gemini stt: marshal request: %w", err)
+	}
+
+	var apiURL string
+	if g.ProjectID != "" {
+		// Vertex AI endpoint
+		apiURL = fmt.Sprintf("https://%s-aiplatform.googleapis.com/v1/projects/%s/locations/%s/publishers/google/models/%s:generateContent",
+			g.Location, g.ProjectID, g.Location, g.Model)
+	} else {
+		// Gemini API endpoint
+		apiURL = fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", g.Model, g.APIKey)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(jsonData))
+	if err != nil {
+		return "", fmt.Errorf("gemini stt: create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if g.ProjectID != "" {
+		req.Header.Set("Authorization", "Bearer "+g.APIKey)
+	}
+
+	resp, err := g.Client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("gemini stt: request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("gemini stt: read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("gemini stt API %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Candidates []struct {
+			Content struct {
+				Parts []struct {
+					Text string `json:"text"`
+				} `json:"parts"`
+			} `json:"content"`
+		} `json:"candidates"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", fmt.Errorf("gemini stt: parse response: %w", err)
+	}
+	if len(result.Candidates) == 0 || len(result.Candidates[0].Content.Parts) == 0 {
+		return "", fmt.Errorf("gemini stt: empty response")
+	}
+
+	return strings.TrimSpace(result.Candidates[0].Content.Parts[0].Text), nil
+}
+
 // ConvertAudioToMP3 uses ffmpeg to convert audio from unsupported formats to mp3.
 // Returns the mp3 bytes. If ffmpeg is not installed, returns an error.
 func ConvertAudioToMP3(audio []byte, srcFormat string) ([]byte, error) {
