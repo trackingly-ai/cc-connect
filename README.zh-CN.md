@@ -528,12 +528,12 @@ Router → Gemini Pro（长上下文模型）
 
 ## 语音消息（语音转文字）
 
-直接发送语音消息 — cc-connect 自动将语音转为文字，再将文字转发给 Agent 处理。
+直接发送语音消息 — cc-connect 自动将语音转为文字，并在转发给 Agent 之前先回推确认。
 
 **支持平台：** 飞书、企业微信、Telegram、LINE、Discord、Slack
 
 **前置条件：**
-- OpenAI 或 Groq 的 API Key（用于 Whisper 语音识别）
+- OpenAI、Groq、Qwen 或 Gemini / Vertex AI 的 API Key
 - 安装 `ffmpeg`（用于音频格式转换 — 大部分平台语音格式为 AMR/OGG，Whisper 不直接支持）
 
 ### 配置
@@ -541,18 +541,15 @@ Router → Gemini Pro（长上下文模型）
 ```toml
 [speech]
 enabled = true
-provider = "openai"    # "openai" 或 "groq"
+provider = "gemini"    # "openai"、"groq"、"qwen" 或 "gemini"
 language = ""          # 如 "zh"、"en"；留空自动检测
+confirm_before_send = true
 
-[speech.openai]
-api_key = "sk-xxx"     # OpenAI API Key
-# base_url = ""        # 自定义端点（可选，兼容 OpenAI 接口的服务）
-# model = "whisper-1"  # 默认模型
-
-# -- 或使用 Groq（更快更便宜） --
-# [speech.groq]
-# api_key = "gsk_xxx"
-# model = "whisper-large-v3-turbo"
+[speech.gemini]
+api_key = "AIza..."    # Gemini API Key；若使用 Vertex AI，可填 Google Cloud API Key 或 OAuth access token
+model = "gemini-2.5-flash"
+project_id = ""        # 为空时走 Gemini API；设置后走 Vertex AI
+location = "us-central1"
 ```
 
 ### 工作原理
@@ -560,8 +557,11 @@ api_key = "sk-xxx"     # OpenAI API Key
 1. 用户在任何支持的平台发送语音消息
 2. cc-connect 从平台下载音频文件
 3. 如需格式转换（AMR、OGG → MP3），由 `ffmpeg` 处理
-4. 音频发送至 Whisper API 进行转录
-5. 转录文字展示给用户，并转发给 Agent
+4. 音频发送至配置的 STT 提供商进行转录或语义理解
+5. 在真正发送给 Agent 之前，cc-connect 会先把理解结果回推给用户确认
+6. 飞书和 Telegram 会显示 `Confirm` / `Modify` 按钮
+7. 不支持按钮的平台可直接回复 `confirm`、`modify` 或 `/cancel`
+8. 用户确认后，最终文本才会发送给 Agent
 
 ### 安装 ffmpeg
 

@@ -277,7 +277,7 @@ func (p *Platform) onMessage(event *larkim.P2MessageReceiveV1) error {
 		p.handler(p, &core.Message{
 			SessionKey: sessionKey, Platform: "feishu",
 			MessageID: messageID,
-			UserID: userID, UserName: userName,
+			UserID:    userID, UserName: userName,
 			Content: text, ReplyCtx: rctx,
 		})
 
@@ -297,8 +297,8 @@ func (p *Platform) onMessage(event *larkim.P2MessageReceiveV1) error {
 		p.handler(p, &core.Message{
 			SessionKey: sessionKey, Platform: "feishu",
 			MessageID: messageID,
-			UserID: userID, UserName: userName,
-			Images:  []core.ImageAttachment{{MimeType: mimeType, Data: imgData}},
+			UserID:    userID, UserName: userName,
+			Images:   []core.ImageAttachment{{MimeType: mimeType, Data: imgData}},
 			ReplyCtx: rctx,
 		})
 
@@ -320,7 +320,7 @@ func (p *Platform) onMessage(event *larkim.P2MessageReceiveV1) error {
 		p.handler(p, &core.Message{
 			SessionKey: sessionKey, Platform: "feishu",
 			MessageID: messageID,
-			UserID: userID, UserName: userName,
+			UserID:    userID, UserName: userName,
 			Audio: &core.AudioAttachment{
 				MimeType: "audio/opus",
 				Data:     audioData,
@@ -339,7 +339,7 @@ func (p *Platform) onMessage(event *larkim.P2MessageReceiveV1) error {
 		p.handler(p, &core.Message{
 			SessionKey: sessionKey, Platform: "feishu",
 			MessageID: messageID,
-			UserID: userID, UserName: userName,
+			UserID:    userID, UserName: userName,
 			Content: text, Images: images,
 			ReplyCtx: rctx,
 		})
@@ -988,6 +988,30 @@ func (p *Platform) onCardAction(event *callback.CardActionTriggerEvent) (*callba
 		return p.buildCardActionResponse(event, command), nil
 	}
 
+	// Handle voice confirmation callbacks (voice:confirm, voice:modify)
+	switch data {
+	case "voice:confirm":
+		p.handler(p, &core.Message{
+			SessionKey: sessionKey,
+			Platform:   "feishu",
+			UserID:     userID,
+			Content:    "voice confirm",
+			MessageID:  messageID,
+			ReplyCtx:   rctx,
+		})
+		return p.buildCardActionResponseWithLabel(event, "✅ Confirmed"), nil
+	case "voice:modify":
+		p.handler(p, &core.Message{
+			SessionKey: sessionKey,
+			Platform:   "feishu",
+			UserID:     userID,
+			Content:    "voice modify",
+			MessageID:  messageID,
+			ReplyCtx:   rctx,
+		})
+		return p.buildCardActionResponseWithLabel(event, "✏️ Modify requested"), nil
+	}
+
 	// Handle permission callbacks (perm:allow, perm:deny, perm:allow_all)
 	var responseText string
 	var choiceLabel string
@@ -1282,4 +1306,3 @@ func (p *Platform) extractPostParts(messageID string, post *postLang) ([]string,
 	}
 	return textParts, images
 }
-

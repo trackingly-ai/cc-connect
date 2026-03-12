@@ -99,6 +99,7 @@ level = "info" # debug, info, warn, error
 # enabled = true
 # provider = "openai"    # "openai", "groq", "qwen", or "gemini" / "openai"、"groq"、"qwen" 或 "gemini"
 # language = ""          # e.g. "zh", "en"; empty = auto-detect / 如 "zh"、"en"；留空自动检测
+# confirm_before_send = true  # ask user to confirm/edit Gemini-understood voice text before sending to agent / 发送给 Agent 前先确认或修改
 #
 # [speech.openai]
 # api_key = "sk-xxx"     # OpenAI API key

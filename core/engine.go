@@ -165,6 +165,8 @@ type Engine struct {
 	// Interactive agent session management
 	interactiveMu     sync.Mutex
 	interactiveStates map[string]*interactiveState // key = sessionKey
+	voiceConfirmMu    sync.Mutex
+	voiceConfirms     map[string]*pendingVoiceConfirmation
 
 	quietMu sync.RWMutex
 	quiet   bool // when true, suppress thinking and tool progress messages globally
@@ -177,9 +179,9 @@ type interactiveState struct {
 	replyCtx     any
 	mu           sync.Mutex
 	pending      *pendingPermission
-	approveAll bool // when true, auto-approve all permission requests for this session
-	quiet      bool // when true, suppress thinking and tool progress for this session
-	fromVoice  bool // true if current turn originated from voice transcription
+	approveAll   bool // when true, auto-approve all permission requests for this session
+	quiet        bool // when true, suppress thinking and tool progress for this session
+	fromVoice    bool // true if current turn originated from voice transcription
 }
 
 // pendingPermission represents a permission request waiting for user response.
@@ -190,6 +192,11 @@ type pendingPermission struct {
 	InputPreview string
 	Resolved     chan struct{} // closed when user responds
 	resolveOnce  sync.Once
+}
+
+type pendingVoiceConfirmation struct {
+	Text         string
+	AwaitingEdit bool
 }
 
 // resolve safely closes the Resolved channel exactly once.
@@ -212,6 +219,7 @@ func NewEngine(name string, ag Agent, platforms []Platform, sessionStorePath str
 		skills:            NewSkillRegistry(),
 		aliases:           make(map[string]string),
 		interactiveStates: make(map[string]*interactiveState),
+		voiceConfirms:     make(map[string]*pendingVoiceConfirmation),
 		startedAt:         time.Now(),
 		streamPreview:     DefaultStreamPreviewCfg(),
 		eventIdleTimeout:  defaultEventIdleTimeout,
@@ -586,6 +594,10 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 		return
 	}
 
+	if e.handlePendingVoiceConfirmation(p, msg, content) {
+		return
+	}
+
 	// Resolve aliases: check if the first word (or whole content) matches an alias
 	content = e.resolveAlias(content)
 	msg.Content = content
@@ -669,6 +681,13 @@ func (e *Engine) handleVoiceMessage(p Platform, msg *Message) {
 	}
 
 	slog.Info("voice transcribed", "text_len", len(text))
+
+	if e.speech.ConfirmBeforeSend {
+		e.storeVoiceConfirmation(msg.SessionKey, text)
+		e.replyVoiceConfirmationPrompt(p, msg.ReplyCtx, text)
+		return
+	}
+
 	e.send(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgVoiceTranscribed), text))
 
 	// Replace audio with transcribed text and re-dispatch
@@ -676,6 +695,118 @@ func (e *Engine) handleVoiceMessage(p Platform, msg *Message) {
 	msg.Content = text
 	msg.FromVoice = true
 	e.handleMessage(p, msg)
+}
+
+func (e *Engine) handlePendingVoiceConfirmation(p Platform, msg *Message, content string) bool {
+	pending, ok := e.getVoiceConfirmation(msg.SessionKey)
+	if !ok {
+		return false
+	}
+
+	lower := strings.ToLower(strings.TrimSpace(content))
+	switch {
+	case isVoiceConfirmResponse(lower):
+		e.clearVoiceConfirmation(msg.SessionKey)
+		msg.Content = pending.Text
+		msg.FromVoice = true
+		e.handleMessage(p, msg)
+		return true
+	case isVoiceModifyResponse(lower):
+		pending.AwaitingEdit = true
+		e.storeVoiceConfirmation(msg.SessionKey, pending.Text, pending)
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgVoiceEditPrompt))
+		return true
+	case isVoiceCancelResponse(lower):
+		e.clearVoiceConfirmation(msg.SessionKey)
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgVoiceCanceled))
+		return true
+	}
+
+	if strings.HasPrefix(content, "/") {
+		if pending.AwaitingEdit {
+			e.reply(p, msg.ReplyCtx, e.i18n.T(MsgVoiceEditPrompt))
+		} else {
+			e.reply(p, msg.ReplyCtx, e.i18n.T(MsgVoiceConfirmHint))
+		}
+		return true
+	}
+
+	pending.Text = content
+	pending.AwaitingEdit = false
+	e.storeVoiceConfirmation(msg.SessionKey, pending.Text, pending)
+	e.replyVoiceConfirmationPrompt(p, msg.ReplyCtx, pending.Text)
+	return true
+}
+
+func (e *Engine) replyVoiceConfirmationPrompt(p Platform, replyCtx any, text string) {
+	content := fmt.Sprintf(e.i18n.T(MsgVoiceConfirmPrompt), text)
+	buttons := [][]ButtonOption{
+		{
+			{Text: e.i18n.T(MsgVoiceBtnConfirm), Data: "voice:confirm"},
+			{Text: e.i18n.T(MsgVoiceBtnModify), Data: "voice:modify"},
+		},
+	}
+	e.replyWithButtons(p, replyCtx, content, buttons)
+}
+
+func (e *Engine) storeVoiceConfirmation(sessionKey, text string, existing ...*pendingVoiceConfirmation) {
+	e.voiceConfirmMu.Lock()
+	defer e.voiceConfirmMu.Unlock()
+
+	if len(existing) > 0 && existing[0] != nil {
+		existing[0].Text = text
+		e.voiceConfirms[sessionKey] = existing[0]
+		return
+	}
+
+	e.voiceConfirms[sessionKey] = &pendingVoiceConfirmation{Text: text}
+}
+
+func (e *Engine) getVoiceConfirmation(sessionKey string) (*pendingVoiceConfirmation, bool) {
+	e.voiceConfirmMu.Lock()
+	defer e.voiceConfirmMu.Unlock()
+
+	pending, ok := e.voiceConfirms[sessionKey]
+	return pending, ok
+}
+
+func (e *Engine) clearVoiceConfirmation(sessionKey string) {
+	e.voiceConfirmMu.Lock()
+	defer e.voiceConfirmMu.Unlock()
+	delete(e.voiceConfirms, sessionKey)
+}
+
+func isVoiceConfirmResponse(s string) bool {
+	for _, w := range []string{
+		"voice confirm", "confirm", "send", "yes", "ok", "好的", "确认", "發送", "发送", "是",
+	} {
+		if s == w {
+			return true
+		}
+	}
+	return false
+}
+
+func isVoiceModifyResponse(s string) bool {
+	for _, w := range []string{
+		"voice modify", "modify", "edit", "change", "修改", "编辑", "編輯",
+	} {
+		if s == w {
+			return true
+		}
+	}
+	return false
+}
+
+func isVoiceCancelResponse(s string) bool {
+	for _, w := range []string{
+		"voice cancel", "cancel", "/cancel", "取消",
+	} {
+		if s == w {
+			return true
+		}
+	}
+	return false
 }
 
 // ──────────────────────────────────────────────────────────────

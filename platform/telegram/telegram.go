@@ -309,8 +309,42 @@ func (p *Platform) handleCallbackQuery(cb *tgbotapi.CallbackQuery) {
 		return
 	}
 
-	// Permission callbacks (perm:allow, perm:deny, perm:allow_all)
+	// Voice confirmation callbacks (voice:confirm, voice:modify)
 	var responseText string
+	var choiceLabel string
+	switch data {
+	case "voice:confirm":
+		responseText = "voice confirm"
+		choiceLabel = "✅ Confirmed"
+	case "voice:modify":
+		responseText = "voice modify"
+		choiceLabel = "✏️ Modify requested"
+	}
+	if responseText != "" {
+		origText := cb.Message.Text
+		if origText == "" {
+			origText = "(voice transcription)"
+		}
+		edit := tgbotapi.NewEditMessageText(chatID, msgID, origText+"\n\n"+choiceLabel)
+		emptyMarkup := tgbotapi.NewInlineKeyboardMarkup()
+		edit.ReplyMarkup = &emptyMarkup
+		if _, err := p.bot.Send(edit); err != nil {
+			slog.Debug("telegram: edit voice confirmation message failed", "error", err)
+		}
+
+		p.handler(p, &core.Message{
+			SessionKey: sessionKey,
+			Platform:   "telegram",
+			UserID:     userID,
+			UserName:   userName,
+			Content:    responseText,
+			MessageID:  strconv.Itoa(msgID),
+			ReplyCtx:   rctx,
+		})
+		return
+	}
+
+	// Permission callbacks (perm:allow, perm:deny, perm:allow_all)
 	switch data {
 	case "perm:allow":
 		responseText = "allow"
@@ -323,7 +357,7 @@ func (p *Platform) handleCallbackQuery(cb *tgbotapi.CallbackQuery) {
 		return
 	}
 
-	choiceLabel := responseText
+	choiceLabel = responseText
 	switch data {
 	case "perm:allow":
 		choiceLabel = "✅ Allowed"

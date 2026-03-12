@@ -23,10 +23,11 @@ type SpeechToText interface {
 
 // SpeechConfig holds STT configuration for the engine.
 type SpeechCfg struct {
-	Enabled  bool
-	Provider string
-	Language string
-	STT      SpeechToText
+	Enabled           bool
+	Provider          string
+	Language          string
+	ConfirmBeforeSend bool
+	STT               SpeechToText
 }
 
 // OpenAIWhisper implements SpeechToText using the OpenAI-compatible Whisper API.

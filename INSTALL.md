@@ -679,7 +679,7 @@ The following additional features are available:
 - **Qoder CLI**: Qoder CLI integration (`qodercli -p -f stream-json`)
 - **OpenCode**: OpenCode CLI integration (`opencode run --format json`)
 - **iFlow CLI**: iFlow CLI integration (`iflow -i -r -o`)
-- **Voice Messages (STT)**: Speech-to-text via Whisper API (OpenAI / Groq / SiliconFlow). Requires `ffmpeg` and `[speech]` config.
+- **Voice Messages (STT)**: Speech-to-text / intent understanding via OpenAI, Groq, Qwen, or Gemini. Supports confirm-before-send flow with buttons on Feishu and Telegram. Requires `ffmpeg` and `[speech]` config.
 - **Voice Reply (TTS)**: Text-to-speech via Qwen TTS / OpenAI TTS. Requires `ffmpeg` and `[tts]` config.
 - **Image Messages**: Send images to Claude Code for multimodal analysis
 - **API Provider Management**: Runtime switching between API providers via `/provider` command or CLI

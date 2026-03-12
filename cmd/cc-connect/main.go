@@ -304,9 +304,14 @@ func main() {
 
 		// Wire speech-to-text if enabled
 		if cfg.Speech.Enabled {
+			confirmBeforeSend := true
+			if cfg.Speech.ConfirmBeforeSend != nil {
+				confirmBeforeSend = *cfg.Speech.ConfirmBeforeSend
+			}
 			speechCfg := core.SpeechCfg{
-				Enabled:  true,
-				Language: cfg.Speech.Language,
+				Enabled:           true,
+				Language:          cfg.Speech.Language,
+				ConfirmBeforeSend: confirmBeforeSend,
 			}
 			switch cfg.Speech.Provider {
 			case "groq":

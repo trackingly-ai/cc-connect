@@ -530,12 +530,12 @@ For more details, see the [Claude Code Router documentation](https://github.com/
 
 ## Voice Messages (Speech-to-Text)
 
-Send voice messages directly — cc-connect transcribes them to text using a configurable STT provider, then forwards the text to the agent.
+Send voice messages directly — cc-connect transcribes them to text using a configurable STT provider, then asks for confirmation before forwarding the text to the agent.
 
 **Supported platforms:** Feishu, WeChat Work, Telegram, LINE, Discord, Slack
 
 **Prerequisites:**
-- An API key for OpenAI or Groq (for Whisper STT)
+- An API key for OpenAI, Groq, Qwen, or Gemini / Vertex AI
 - `ffmpeg` installed (for audio format conversion — most platforms send AMR/OGG which Whisper doesn't accept directly)
 
 ### Configure
@@ -543,18 +543,15 @@ Send voice messages directly — cc-connect transcribes them to text using a con
 ```toml
 [speech]
 enabled = true
-provider = "openai"    # "openai" or "groq"
+provider = "gemini"    # "openai", "groq", "qwen", or "gemini"
 language = ""          # e.g. "zh", "en"; empty = auto-detect
+confirm_before_send = true
 
-[speech.openai]
-api_key = "sk-xxx"     # your OpenAI API key
-# base_url = ""        # custom endpoint (optional, for OpenAI-compatible APIs)
-# model = "whisper-1"  # default model
-
-# -- OR use Groq (faster and cheaper) --
-# [speech.groq]
-# api_key = "gsk_xxx"
-# model = "whisper-large-v3-turbo"
+[speech.gemini]
+api_key = "AIza..."    # Gemini API key; for Vertex AI, use a Google Cloud API key or OAuth access token
+model = "gemini-2.5-flash"
+project_id = ""        # leave empty for Gemini API; set for Vertex AI
+location = "us-central1"
 ```
 
 ### How It Works
@@ -562,8 +559,11 @@ api_key = "sk-xxx"     # your OpenAI API key
 1. User sends a voice message on any supported platform
 2. cc-connect downloads the audio from the platform
 3. If the format needs conversion (AMR, OGG → MP3), `ffmpeg` handles it
-4. Audio is sent to the Whisper API for transcription
-5. Transcribed text is shown to the user and forwarded to the agent
+4. Audio is sent to the configured STT provider for transcription / intent extraction
+5. cc-connect sends the understood text back for confirmation before it reaches the agent
+6. On Feishu and Telegram, users can click `Confirm` / `Modify` buttons
+7. On platforms without button support, users can reply with `confirm`, `modify`, or `/cancel`
+8. After confirmation, the final text is forwarded to the agent
 
 ### Install ffmpeg
 

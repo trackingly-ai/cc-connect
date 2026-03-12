@@ -183,6 +183,12 @@ const (
 	MsgVoiceTranscribed      MsgKey = "voice_transcribed"
 	MsgVoiceTranscribeFailed MsgKey = "voice_transcribe_failed"
 	MsgVoiceEmpty            MsgKey = "voice_empty"
+	MsgVoiceConfirmPrompt    MsgKey = "voice_confirm_prompt"
+	MsgVoiceEditPrompt       MsgKey = "voice_edit_prompt"
+	MsgVoiceConfirmHint      MsgKey = "voice_confirm_hint"
+	MsgVoiceCanceled         MsgKey = "voice_canceled"
+	MsgVoiceBtnConfirm       MsgKey = "voice_btn_confirm"
+	MsgVoiceBtnModify        MsgKey = "voice_btn_modify"
 
 	MsgTTSNotEnabled MsgKey = "tts_not_enabled"
 	MsgTTSStatus     MsgKey = "tts_status"
@@ -991,6 +997,48 @@ var messages = map[MsgKey]map[Language]string{
 		LangTraditionalChinese: "🎙 語音訊息為空或無法識別。",
 		LangJapanese:           "🎙 音声メッセージが空か、認識できませんでした。",
 		LangSpanish:            "🎙 El mensaje de voz estaba vacío o no se pudo reconocer.",
+	},
+	MsgVoiceConfirmPrompt: {
+		LangEnglish:            "🎙 I understood this voice message as:\n\n%s\n\nConfirm to send it to the agent, or modify it first.",
+		LangChinese:            "🎙 我理解这条语音的意思是：\n\n%s\n\n确认后发送给 Agent，或先修改。",
+		LangTraditionalChinese: "🎙 我理解這條語音的意思是：\n\n%s\n\n確認後發送給 Agent，或先修改。",
+		LangJapanese:           "🎙 この音声メッセージは次のように理解しました:\n\n%s\n\n確認して Agent に送信するか、先に修正してください。",
+		LangSpanish:            "🎙 Entendí este mensaje de voz así:\n\n%s\n\nConfirme para enviarlo al agente o modifíquelo primero.",
+	},
+	MsgVoiceEditPrompt: {
+		LangEnglish:            "✏️ Send the corrected text for this voice message, or send /cancel to discard it.",
+		LangChinese:            "✏️ 请发送这条语音对应的修正文本，或发送 /cancel 放弃。",
+		LangTraditionalChinese: "✏️ 請發送這條語音對應的修正文字，或發送 /cancel 放棄。",
+		LangJapanese:           "✏️ この音声メッセージの修正版テキストを送信してください。破棄する場合は /cancel を送信してください。",
+		LangSpanish:            "✏️ Envíe el texto corregido para este mensaje de voz, o envíe /cancel para descartarlo.",
+	},
+	MsgVoiceConfirmHint: {
+		LangEnglish:            "🎙 A voice transcription is waiting. Reply with confirm, modify, or /cancel.",
+		LangChinese:            "🎙 当前有一条语音转写待确认。请回复 confirm、modify，或 /cancel。",
+		LangTraditionalChinese: "🎙 目前有一條語音轉寫待確認。請回覆 confirm、modify，或 /cancel。",
+		LangJapanese:           "🎙 確認待ちの音声文字起こしがあります。confirm、modify、または /cancel を送信してください。",
+		LangSpanish:            "🎙 Hay una transcripción de voz pendiente. Responda con confirm, modify o /cancel.",
+	},
+	MsgVoiceCanceled: {
+		LangEnglish:            "🎙 Voice transcription canceled.",
+		LangChinese:            "🎙 已取消这条语音转写。",
+		LangTraditionalChinese: "🎙 已取消這條語音轉寫。",
+		LangJapanese:           "🎙 この音声文字起こしはキャンセルされました。",
+		LangSpanish:            "🎙 La transcripción de voz fue cancelada.",
+	},
+	MsgVoiceBtnConfirm: {
+		LangEnglish:            "Confirm",
+		LangChinese:            "确认",
+		LangTraditionalChinese: "確認",
+		LangJapanese:           "確認",
+		LangSpanish:            "Confirmar",
+	},
+	MsgVoiceBtnModify: {
+		LangEnglish:            "Modify",
+		LangChinese:            "修改",
+		LangTraditionalChinese: "修改",
+		LangJapanese:           "修正",
+		LangSpanish:            "Modificar",
 	},
 	MsgTTSNotEnabled: {
 		LangEnglish:            "TTS is not enabled. Please configure `[tts]` in config.toml.",
