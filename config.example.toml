@@ -97,7 +97,7 @@ level = "info" # debug, info, warn, error
 
 # [speech]
 # enabled = true
-# provider = "openai"    # "openai", "groq", or "qwen" / "openai"、"groq" 或 "qwen"
+# provider = "openai"    # "openai", "groq", "qwen", or "gemini" / "openai"、"groq"、"qwen" 或 "gemini"
 # language = ""          # e.g. "zh", "en"; empty = auto-detect / 如 "zh"、"en"；留空自动检测
 #
 # [speech.openai]
@@ -110,6 +110,14 @@ level = "info" # debug, info, warn, error
 # [speech.groq]
 # api_key = "gsk_xxx"
 # model = "whisper-large-v3-turbo"
+#
+# # Alternative: Gemini
+# # 备选：Gemini
+# [speech.gemini]
+# api_key = "AIza..."            # Gemini API key; when using Vertex AI, use a Google Cloud API key or OAuth access token
+# model = "gemini-2.5-flash"
+# project_id = ""                # Leave empty to use Gemini API; set only for Vertex AI
+# location = "us-central1"       # Used only when project_id is set
 
 # =============================================================================
 # Text-to-Speech (Voice Reply) / 文字转语音（语音回复）

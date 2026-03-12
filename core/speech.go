@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os/exec"
 	"strings"
 	"time"
@@ -249,7 +250,7 @@ func (g *GeminiSTT) Transcribe(ctx context.Context, audio []byte, format string,
 					map[string]any{
 						"inline_data": map[string]any{
 							"mime_type": mime,
-							"data":     b64,
+							"data":      b64,
 						},
 					},
 					map[string]any{
@@ -270,6 +271,9 @@ func (g *GeminiSTT) Transcribe(ctx context.Context, audio []byte, format string,
 		// Vertex AI endpoint
 		apiURL = fmt.Sprintf("https://%s-aiplatform.googleapis.com/v1/projects/%s/locations/%s/publishers/google/models/%s:generateContent",
 			g.Location, g.ProjectID, g.Location, g.Model)
+		if g.usesVertexAPIKey() {
+			apiURL += "?key=" + url.QueryEscape(g.APIKey)
+		}
 	} else {
 		// Gemini API endpoint
 		apiURL = fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", g.Model, g.APIKey)
@@ -279,7 +283,7 @@ func (g *GeminiSTT) Transcribe(ctx context.Context, audio []byte, format string,
 		return "", fmt.Errorf("gemini stt: create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if g.ProjectID != "" {
+	if g.ProjectID != "" && !g.usesVertexAPIKey() {
 		req.Header.Set("Authorization", "Bearer "+g.APIKey)
 	}
 
@@ -295,6 +299,9 @@ func (g *GeminiSTT) Transcribe(ctx context.Context, audio []byte, format string,
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		if msg := g.interpretAuthError(resp.StatusCode, body); msg != "" {
+			return "", fmt.Errorf("%s", msg)
+		}
 		return "", fmt.Errorf("gemini stt API %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -315,6 +322,26 @@ func (g *GeminiSTT) Transcribe(ctx context.Context, audio []byte, format string,
 	}
 
 	return strings.TrimSpace(result.Candidates[0].Content.Parts[0].Text), nil
+}
+
+func (g *GeminiSTT) interpretAuthError(statusCode int, body []byte) string {
+	if statusCode != http.StatusUnauthorized {
+		return ""
+	}
+
+	bodyText := string(body)
+	if g.ProjectID != "" && strings.Contains(bodyText, "API_KEY_SERVICE_BLOCKED") {
+		return "gemini stt auth failed: cc-connect is calling the Vertex AI endpoint, but the configured speech.gemini.api_key was rejected. If this value is a Vertex API key, it must be sent as an API key instead of an Authorization bearer token. If this value is an OAuth access token, make sure it is valid for the target project and region"
+	}
+
+	return ""
+}
+
+func (g *GeminiSTT) usesVertexAPIKey() bool {
+	if g.ProjectID == "" {
+		return false
+	}
+	return strings.HasPrefix(g.APIKey, "AIza") || strings.HasPrefix(g.APIKey, "AQ.")
 }
 
 // ConvertAudioToMP3 uses ffmpeg to convert audio from unsupported formats to mp3.
