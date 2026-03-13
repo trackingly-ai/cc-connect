@@ -339,7 +339,9 @@ func (cs *claudeSession) Send(prompt string, images []core.ImageAttachment) erro
 
 	// Save images to local files and build multimodal content
 	imgDir := filepath.Join(cs.workDir, ".cc-connect", "images")
-	os.MkdirAll(imgDir, 0o755)
+	if err := os.MkdirAll(imgDir, 0o755); err != nil {
+		return fmt.Errorf("create image dir: %w", err)
+	}
 
 	var parts []map[string]any
 	var savedPaths []string

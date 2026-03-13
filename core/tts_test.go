@@ -54,7 +54,9 @@ func TestTTSCfg_ConcurrentGetSet(t *testing.T) {
 func TestQwenTTS_Success(t *testing.T) {
 	// Stub: returns audio URL
 	audioServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("fake-wav-data"))
+		if _, err := w.Write([]byte("fake-wav-data")); err != nil {
+			t.Fatalf("write fake wav: %v", err)
+		}
 	}))
 	defer audioServer.Close()
 
@@ -66,7 +68,9 @@ func TestQwenTTS_Success(t *testing.T) {
 				},
 			},
 		}
-		json.NewEncoder(w).Encode(resp)
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			t.Fatalf("encode qwen success response: %v", err)
+		}
 	}))
 	defer apiServer.Close()
 
@@ -86,7 +90,9 @@ func TestQwenTTS_Success(t *testing.T) {
 func TestQwenTTS_APIError(t *testing.T) {
 	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
-		w.Write([]byte("unauthorized"))
+		if _, err := w.Write([]byte("unauthorized")); err != nil {
+			t.Fatalf("write unauthorized response: %v", err)
+		}
 	}))
 	defer apiServer.Close()
 
@@ -103,7 +109,9 @@ func TestQwenTTS_BusinessErrorCode(t *testing.T) {
 			"code":    "InvalidApiKey",
 			"message": "api key is invalid",
 		}
-		json.NewEncoder(w).Encode(resp)
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			t.Fatalf("encode qwen error response: %v", err)
+		}
 	}))
 	defer apiServer.Close()
 
@@ -123,7 +131,9 @@ func TestQwenTTS_EmptyAudioURL(t *testing.T) {
 				},
 			},
 		}
-		json.NewEncoder(w).Encode(resp)
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			t.Fatalf("encode empty audio url response: %v", err)
+		}
 	}))
 	defer apiServer.Close()
 
@@ -143,7 +153,9 @@ func TestQwenTTS_AudioDownloadFailed(t *testing.T) {
 				},
 			},
 		}
-		json.NewEncoder(w).Encode(resp)
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			t.Fatalf("encode download failure response: %v", err)
+		}
 	}))
 	defer apiServer.Close()
 
@@ -164,7 +176,9 @@ func TestOpenAITTS_Success(t *testing.T) {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("fake-mp3-data"))
+		if _, err := w.Write([]byte("fake-mp3-data")); err != nil {
+			t.Fatalf("write fake mp3: %v", err)
+		}
 	}))
 	defer apiServer.Close()
 
@@ -184,7 +198,9 @@ func TestOpenAITTS_Success(t *testing.T) {
 func TestOpenAITTS_APIError(t *testing.T) {
 	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte(`{"error":"bad request"}`))
+		if _, err := w.Write([]byte(`{"error":"bad request"}`)); err != nil {
+			t.Fatalf("write openai error response: %v", err)
+		}
 	}))
 	defer apiServer.Close()
 

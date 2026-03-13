@@ -146,7 +146,7 @@ func (p *Platform) Start(handler core.MessageHandler) error {
 				rctx := replyContext{chatID: msg.Chat.ID, messageID: msg.MessageID}
 
 				// Handle photo messages
-				if msg.Photo != nil && len(msg.Photo) > 0 {
+				if len(msg.Photo) > 0 {
 					best := msg.Photo[len(msg.Photo)-1]
 					imgData, err := p.downloadFile(best.FileID)
 					if err != nil {
@@ -269,7 +269,9 @@ func (p *Platform) handleCallbackQuery(cb *tgbotapi.CallbackQuery) {
 
 	// Answer the callback to clear the loading indicator
 	answer := tgbotapi.NewCallback(cb.ID, "")
-	p.bot.Request(answer)
+	if _, err := p.bot.Request(answer); err != nil {
+		slog.Debug("telegram: answer callback failed", "error", err)
+	}
 
 	userName := cb.From.UserName
 	if userName == "" {
@@ -295,7 +297,9 @@ func (p *Platform) handleCallbackQuery(cb *tgbotapi.CallbackQuery) {
 		edit := tgbotapi.NewEditMessageText(chatID, msgID, origText+"\n\n> "+command)
 		emptyMarkup := tgbotapi.NewInlineKeyboardMarkup()
 		edit.ReplyMarkup = &emptyMarkup
-		p.bot.Send(edit)
+		if _, err := p.bot.Send(edit); err != nil {
+			slog.Debug("telegram: edit command message failed", "error", err)
+		}
 
 		p.handler(p, &core.Message{
 			SessionKey: sessionKey,
@@ -422,7 +426,9 @@ func (p *Platform) handleCallbackQuery(cb *tgbotapi.CallbackQuery) {
 	edit := tgbotapi.NewEditMessageText(chatID, msgID, origText+"\n\n"+choiceLabel)
 	emptyMarkup := tgbotapi.NewInlineKeyboardMarkup()
 	edit.ReplyMarkup = &emptyMarkup
-	p.bot.Send(edit)
+	if _, err := p.bot.Send(edit); err != nil {
+		slog.Debug("telegram: edit permission request failed", "error", err)
+	}
 
 	p.handler(p, &core.Message{
 		SessionKey: sessionKey,
@@ -733,7 +739,9 @@ func (p *Platform) StartTyping(ctx context.Context, rctx any) (stop func()) {
 	}
 
 	action := tgbotapi.NewChatAction(rc.chatID, tgbotapi.ChatTyping)
-	p.bot.Send(action)
+	if _, err := p.bot.Send(action); err != nil {
+		slog.Debug("telegram: send typing action failed", "error", err)
+	}
 
 	done := make(chan struct{})
 	go func() {
@@ -746,7 +754,9 @@ func (p *Platform) StartTyping(ctx context.Context, rctx any) (stop func()) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				p.bot.Send(action)
+				if _, err := p.bot.Send(action); err != nil {
+					slog.Debug("telegram: refresh typing action failed", "error", err)
+				}
 			}
 		}
 	}()

@@ -33,8 +33,8 @@ func TestI18n_FallbackToEnglish(t *testing.T) {
 func TestI18n_MissingKey(t *testing.T) {
 	i := NewI18n(LangEnglish)
 	got := i.T(MsgKey("totally_missing_key"))
-	if got != "[totally_missing_key]" && got != "" {
-		// acceptable: either placeholder or empty
+	if got != "totally_missing_key" {
+		t.Fatalf("unexpected missing-key fallback: %q", got)
 	}
 }
 

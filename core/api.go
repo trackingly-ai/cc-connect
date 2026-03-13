@@ -47,7 +47,10 @@ func NewAPIServer(dataDir string) (*APIServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listen unix socket: %w", err)
 	}
-	os.Chmod(sockPath, 0o660)
+	if err := os.Chmod(sockPath, 0o660); err != nil {
+		listener.Close()
+		return nil, fmt.Errorf("chmod socket: %w", err)
+	}
 
 	s := &APIServer{
 		socketPath: sockPath,
@@ -150,7 +153,9 @@ func (s *APIServer) handleSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	if err := json.NewEncoder(w).Encode(map[string]string{"status": "ok"}); err != nil {
+		slog.Warn("api: encode /send response failed", "error", err)
+	}
 }
 
 func (s *APIServer) handleSessions(w http.ResponseWriter, r *http.Request) {
@@ -179,7 +184,9 @@ func (s *APIServer) handleSessions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	if err := json.NewEncoder(w).Encode(result); err != nil {
+		slog.Warn("api: encode /sessions response failed", "error", err)
+	}
 }
 
 // ── Cron API ───────────────────────────────────────────────────
@@ -248,7 +255,9 @@ func (s *APIServer) handleCronAdd(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(job)
+	if err := json.NewEncoder(w).Encode(job); err != nil {
+		slog.Warn("api: encode /cron/add response failed", "error", err)
+	}
 }
 
 func (s *APIServer) handleCronList(w http.ResponseWriter, r *http.Request) {
@@ -266,7 +275,9 @@ func (s *APIServer) handleCronList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(jobs)
+	if err := json.NewEncoder(w).Encode(jobs); err != nil {
+		slog.Warn("api: encode /cron/list response failed", "error", err)
+	}
 }
 
 func (s *APIServer) handleCronDel(w http.ResponseWriter, r *http.Request) {
@@ -293,7 +304,9 @@ func (s *APIServer) handleCronDel(w http.ResponseWriter, r *http.Request) {
 
 	if s.cron.RemoveJob(req.ID) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		if err := json.NewEncoder(w).Encode(map[string]string{"status": "ok"}); err != nil {
+			slog.Warn("api: encode /cron/del response failed", "error", err)
+		}
 	} else {
 		http.Error(w, fmt.Sprintf("job %q not found", req.ID), http.StatusNotFound)
 	}
@@ -328,7 +341,9 @@ func (s *APIServer) handleRelaySend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		slog.Warn("api: encode /relay/send response failed", "error", err)
+	}
 }
 
 func (s *APIServer) handleRelayBind(w http.ResponseWriter, r *http.Request) {
@@ -357,7 +372,9 @@ func (s *APIServer) handleRelayBind(w http.ResponseWriter, r *http.Request) {
 
 	s.relay.Bind(req.Platform, req.ChatID, req.Bots)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	if err := json.NewEncoder(w).Encode(map[string]string{"status": "ok"}); err != nil {
+		slog.Warn("api: encode /relay/bind response failed", "error", err)
+	}
 }
 
 func (s *APIServer) handleRelayBinding(w http.ResponseWriter, r *http.Request) {
@@ -376,5 +393,7 @@ func (s *APIServer) handleRelayBinding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(binding)
+	if err := json.NewEncoder(w).Encode(binding); err != nil {
+		slog.Warn("api: encode /relay/binding response failed", "error", err)
+	}
 }

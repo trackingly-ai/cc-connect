@@ -227,7 +227,9 @@ func replaceExecutable(target, src string) error {
 
 	if err := copyFile(src, target); err != nil {
 		// Attempt to restore
-		os.Rename(backup, target)
+		if restoreErr := os.Rename(backup, target); restoreErr != nil {
+			return fmt.Errorf("install new binary: %w (restore failed: %v)", err, restoreErr)
+		}
 		return fmt.Errorf("install new binary: %w", err)
 	}
 
@@ -302,10 +304,14 @@ func isNewer(latest, current string) bool {
 	for i := 0; i < len(lParts) || i < len(cParts); i++ {
 		var lv, cv int
 		if i < len(lParts) {
-			fmt.Sscanf(lParts[i], "%d", &lv)
+			if _, err := fmt.Sscanf(lParts[i], "%d", &lv); err != nil {
+				return false
+			}
 		}
 		if i < len(cParts) {
-			fmt.Sscanf(cParts[i], "%d", &cv)
+			if _, err := fmt.Sscanf(cParts[i], "%d", &cv); err != nil {
+				return false
+			}
 		}
 		if lv > cv {
 			return true

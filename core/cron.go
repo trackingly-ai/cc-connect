@@ -79,7 +79,9 @@ func (s *CronStore) Remove(id string) bool {
 	for i, j := range s.jobs {
 		if j.ID == id {
 			s.jobs = append(s.jobs[:i], s.jobs[i+1:]...)
-			s.save()
+			if err := s.save(); err != nil {
+				slog.Error("cron: failed to save jobs after remove", "id", id, "error", err)
+			}
 			return true
 		}
 	}
@@ -92,7 +94,9 @@ func (s *CronStore) SetEnabled(id string, enabled bool) bool {
 	for _, j := range s.jobs {
 		if j.ID == id {
 			j.Enabled = enabled
-			s.save()
+			if err := s.save(); err != nil {
+				slog.Error("cron: failed to save jobs after toggle", "id", id, "enabled", enabled, "error", err)
+			}
 			return true
 		}
 	}
@@ -110,7 +114,9 @@ func (s *CronStore) MarkRun(id string, err error) {
 			} else {
 				j.LastError = ""
 			}
-			s.save()
+			if saveErr := s.save(); saveErr != nil {
+				slog.Error("cron: failed to save jobs after mark run", "id", id, "error", saveErr)
+			}
 			return
 		}
 	}
@@ -344,7 +350,10 @@ func (cs *CronScheduler) executeJob(jobID string) {
 
 func GenerateCronID() string {
 	b := make([]byte, 4)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		slog.Warn("cron: failed to generate random id bytes", "error", err)
+		return fmt.Sprintf("%08x", time.Now().UnixNano())
+	}
 	return hex.EncodeToString(b)
 }
 
@@ -403,9 +412,8 @@ func CronExprToHuman(expr string, lang Language) string {
 
 	// Weekday
 	if dow != "*" {
-		if d, err := fmt.Sscanf(dow, "%d", new(int)); err == nil && d == 1 {
-			var n int
-			fmt.Sscanf(dow, "%d", &n)
+		var n int
+		if _, err := fmt.Sscanf(dow, "%d", &n); err == nil {
 			if n >= 0 && n <= 6 {
 				if cjk {
 					parts = append(parts, weekdays[n])
@@ -420,9 +428,8 @@ func CronExprToHuman(expr string, lang Language) string {
 
 	// Month
 	if month != "*" {
-		if m, err := fmt.Sscanf(month, "%d", new(int)); err == nil && m == 1 {
-			var n int
-			fmt.Sscanf(month, "%d", &n)
+		var n int
+		if _, err := fmt.Sscanf(month, "%d", &n); err == nil {
 			if n >= 1 && n <= 12 {
 				parts = append(parts, months[n])
 			}

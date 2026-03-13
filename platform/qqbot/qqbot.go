@@ -24,7 +24,7 @@ func init() {
 const (
 	apiBaseProduction = "https://api.sgroup.qq.com"
 	apiBaseSandbox    = "https://sandbox.api.sgroup.qq.com"
-	tokenURL         = "https://bots.qq.com/app/getAppAccessToken"
+	tokenURL          = "https://bots.qq.com/app/getAppAccessToken"
 
 	// Default intent: GROUP_AND_C2C_EVENT (1 << 25)
 	defaultIntents = 1 << 25
@@ -38,14 +38,14 @@ const (
 
 // WebSocket opcodes for the QQ Bot gateway protocol.
 const (
-	opDispatch        = 0
-	opHeartbeat       = 1
-	opIdentify        = 2
-	opResume          = 6
-	opReconnect       = 7
-	opInvalidSession  = 9
-	opHello           = 10
-	opHeartbeatACK    = 11
+	opDispatch       = 0
+	opHeartbeat      = 1
+	opIdentify       = 2
+	opResume         = 6
+	opReconnect      = 7
+	opInvalidSession = 9
+	opHello          = 10
+	opHeartbeatACK   = 11
 )
 
 // Platform implements core.Platform for the official QQ Bot API v2.
@@ -243,7 +243,9 @@ func (p *Platform) refreshToken() error {
 	}
 
 	var expiresSec int
-	fmt.Sscanf(result.ExpiresIn, "%d", &expiresSec)
+	if _, err := fmt.Sscanf(result.ExpiresIn, "%d", &expiresSec); err != nil {
+		slog.Debug("qqbot: parse expires_in failed", "value", result.ExpiresIn, "error", err)
+	}
 	if expiresSec <= 0 {
 		expiresSec = 7200
 	}
@@ -361,8 +363,14 @@ type wsPayload struct {
 }
 
 func (p *Platform) waitForHello(conn *websocket.Conn) error {
-	conn.SetReadDeadline(time.Now().Add(15 * time.Second))
-	defer conn.SetReadDeadline(time.Time{})
+	if err := conn.SetReadDeadline(time.Now().Add(15 * time.Second)); err != nil {
+		return fmt.Errorf("set hello deadline: %w", err)
+	}
+	defer func() {
+		if err := conn.SetReadDeadline(time.Time{}); err != nil {
+			slog.Debug("qqbot: clear hello deadline failed", "error", err)
+		}
+	}()
 
 	var msg wsPayload
 	if err := conn.ReadJSON(&msg); err != nil {
@@ -405,8 +413,14 @@ func (p *Platform) sendIdentify(conn *websocket.Conn, token string) error {
 }
 
 func (p *Platform) waitForReady(conn *websocket.Conn) error {
-	conn.SetReadDeadline(time.Now().Add(15 * time.Second))
-	defer conn.SetReadDeadline(time.Time{})
+	if err := conn.SetReadDeadline(time.Now().Add(15 * time.Second)); err != nil {
+		return fmt.Errorf("set ready deadline: %w", err)
+	}
+	defer func() {
+		if err := conn.SetReadDeadline(time.Time{}); err != nil {
+			slog.Debug("qqbot: clear ready deadline failed", "error", err)
+		}
+	}()
 
 	var msg wsPayload
 	if err := conn.ReadJSON(&msg); err != nil {
@@ -660,12 +674,12 @@ func (p *Platform) handleDispatch(eventType string, data json.RawMessage) {
 
 func (p *Platform) handleGroupMessage(data json.RawMessage) {
 	var d struct {
-		ID           string       `json:"id"`
-		GroupOpenID  string       `json:"group_openid"`
-		Content      string       `json:"content"`
-		Timestamp    string       `json:"timestamp"`
-		Attachments  []attachment `json:"attachments"`
-		Author       struct {
+		ID          string       `json:"id"`
+		GroupOpenID string       `json:"group_openid"`
+		Content     string       `json:"content"`
+		Timestamp   string       `json:"timestamp"`
+		Attachments []attachment `json:"attachments"`
+		Author      struct {
 			MemberOpenID string `json:"member_openid"`
 		} `json:"author"`
 	}

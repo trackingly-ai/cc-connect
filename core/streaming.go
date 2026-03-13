@@ -34,17 +34,17 @@ func DefaultStreamPreviewCfg() StreamPreviewCfg {
 type streamPreview struct {
 	mu sync.Mutex
 
-	cfg       StreamPreviewCfg
-	platform  Platform
-	replyCtx  any
-	ctx       context.Context
+	cfg      StreamPreviewCfg
+	platform Platform
+	replyCtx any
+	ctx      context.Context
 
-	fullText           string // accumulated full text so far
-	lastSentText       string // what was last successfully sent to the platform
-	lastSentAt         time.Time
-	lastSentViaUpdate  bool   // true if lastSentText was delivered via UpdateMessage (not SendPreviewStart)
-	previewMsgID       any    // platform-specific ID for the preview message (returned by SendPreviewStart)
-	degraded           bool   // if true, stop trying (platform doesn't support it or permanent error)
+	fullText          string // accumulated full text so far
+	lastSentText      string // what was last successfully sent to the platform
+	lastSentAt        time.Time
+	lastSentViaUpdate bool // true if lastSentText was delivered via UpdateMessage (not SendPreviewStart)
+	previewMsgID      any  // platform-specific ID for the preview message (returned by SendPreviewStart)
+	degraded          bool // if true, stop trying (platform doesn't support it or permanent error)
 
 	timer     *time.Timer
 	timerStop chan struct{} // closed when preview ends
@@ -305,11 +305,4 @@ func (sp *streamPreview) finish(finalText string) bool {
 	}
 	slog.Debug("stream preview finish: success via UpdateMessage")
 	return true
-}
-
-// getFullText returns the accumulated text so far.
-func (sp *streamPreview) getFullText() string {
-	sp.mu.Lock()
-	defer sp.mu.Unlock()
-	return sp.fullText
 }

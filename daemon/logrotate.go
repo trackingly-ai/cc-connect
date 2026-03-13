@@ -52,15 +52,29 @@ func (w *RotatingWriter) Write(p []byte) (int, error) {
 }
 
 func (w *RotatingWriter) rotate() {
-	w.file.Close()
+	if err := w.file.Close(); err != nil {
+		// Best effort: continue rotation and reopen a fresh file.
+		_ = err
+	}
 
 	backup := w.path + ".1"
-	os.Remove(backup)
-	os.Rename(w.path, backup)
+	if err := os.Remove(backup); err != nil && !os.IsNotExist(err) {
+		// Best effort cleanup; continue and let the rename below surface if needed.
+		_ = err
+	}
+	if err := os.Rename(w.path, backup); err != nil && !os.IsNotExist(err) {
+		f, openErr := os.OpenFile(w.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if openErr != nil {
+			f, _ = os.OpenFile(w.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		}
+		w.file = f
+		w.curSize = 0
+		return
+	}
 
-	f, err := os.OpenFile(w.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	f, err := os.OpenFile(w.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		f, _ = os.OpenFile(w.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		f, _ = os.OpenFile(w.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	}
 	w.file = f
 	w.curSize = 0

@@ -1,11 +1,11 @@
 package core
 
 import (
-	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -198,8 +198,7 @@ func ExpandPrompt(template string, args []string) string {
 			return ""
 		}
 		if strings.HasSuffix(key, "*") {
-			idx := 0
-			fmt.Sscanf(key, "%d", &idx)
+			idx, _ := strconv.Atoi(strings.TrimSuffix(key, "*"))
 			if idx >= 1 && idx-1 < len(args) {
 				return strings.Join(args[idx-1:], " ")
 			}
@@ -208,8 +207,7 @@ func ExpandPrompt(template string, args []string) string {
 			}
 			return ""
 		}
-		idx := 0
-		fmt.Sscanf(key, "%d", &idx)
+		idx, _ := strconv.Atoi(key)
 		if idx >= 1 && idx-1 < len(args) {
 			return args[idx-1]
 		}

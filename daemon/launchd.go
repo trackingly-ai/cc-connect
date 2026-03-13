@@ -34,7 +34,10 @@ func (m *launchdManager) Install(cfg Config) error {
 	}
 
 	// Unload existing service first (ignore errors)
-	exec.Command("launchctl", "bootout", fmt.Sprintf("gui/%d/%s", os.Getuid(), launchdLabel)).Run()
+	if err := exec.Command("launchctl", "bootout", fmt.Sprintf("gui/%d/%s", os.Getuid(), launchdLabel)).Run(); err != nil {
+		// Ignore bootout failures here; the service may simply not be loaded yet.
+		_ = err
+	}
 
 	plist := buildPlist(cfg)
 	if err := os.WriteFile(plistPath, []byte(plist), 0644); err != nil {
@@ -46,13 +49,18 @@ func (m *launchdManager) Install(cfg Config) error {
 		return fmt.Errorf("launchctl bootstrap: %s (%w)", out, err)
 	}
 
-	runLaunchctl("kickstart", "-kp", fmt.Sprintf("%s/%s", domain, launchdLabel))
+	if out, err := runLaunchctl("kickstart", "-kp", fmt.Sprintf("%s/%s", domain, launchdLabel)); err != nil {
+		return fmt.Errorf("launchctl kickstart: %s (%w)", out, err)
+	}
 	return nil
 }
 
 func (m *launchdManager) Uninstall() error {
 	domain := fmt.Sprintf("gui/%d", os.Getuid())
-	runLaunchctl("bootout", fmt.Sprintf("%s/%s", domain, launchdLabel))
+	if _, err := runLaunchctl("bootout", fmt.Sprintf("%s/%s", domain, launchdLabel)); err != nil {
+		// Ignore bootout failures on uninstall; the service may already be unloaded.
+		_ = err
+	}
 
 	plistPath := launchdPlistPath()
 	if err := os.Remove(plistPath); err != nil && !os.IsNotExist(err) {
@@ -64,10 +72,9 @@ func (m *launchdManager) Uninstall() error {
 func (*launchdManager) Start() error {
 	domain := fmt.Sprintf("gui/%d", os.Getuid())
 	plistPath := launchdPlistPath()
-	out, err := runLaunchctl("bootstrap", domain, plistPath)
-	if err != nil {
+	if _, err := runLaunchctl("bootstrap", domain, plistPath); err != nil {
 		// already bootstrapped — try kickstart
-		out, err = runLaunchctl("kickstart", "-kp", fmt.Sprintf("%s/%s", domain, launchdLabel))
+		out, err := runLaunchctl("kickstart", "-kp", fmt.Sprintf("%s/%s", domain, launchdLabel))
 		if err != nil {
 			return fmt.Errorf("start: %s (%w)", out, err)
 		}
@@ -87,14 +94,18 @@ func (*launchdManager) Stop() error {
 func (*launchdManager) Restart() error {
 	domain := fmt.Sprintf("gui/%d", os.Getuid())
 	target := fmt.Sprintf("%s/%s", domain, launchdLabel)
-	runLaunchctl("bootout", target)
+	if _, err := runLaunchctl("bootout", target); err != nil {
+		// Ignore bootout failures before restart; bootstrap below will surface real issues.
+		_ = err
+	}
 
 	plistPath := launchdPlistPath()
-	out, err := runLaunchctl("bootstrap", domain, plistPath)
-	if err != nil {
+	if out, err := runLaunchctl("bootstrap", domain, plistPath); err != nil {
 		return fmt.Errorf("restart: %s (%w)", out, err)
 	}
-	runLaunchctl("kickstart", "-kp", target)
+	if out, err := runLaunchctl("kickstart", "-kp", target); err != nil {
+		return fmt.Errorf("restart: %s (%w)", out, err)
+	}
 	return nil
 }
 
