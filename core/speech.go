@@ -21,12 +21,32 @@ type SpeechToText interface {
 	Transcribe(ctx context.Context, audio []byte, format string, lang string) (string, error)
 }
 
+// SpeechToTextWithHint is implemented by providers that can use extra
+// project/session context to improve semantic understanding.
+type SpeechToTextWithHint interface {
+	TranscribeWithHint(ctx context.Context, audio []byte, format string, lang string, hint SpeechTranscriptionHint) (string, error)
+}
+
+// SpeechTranscriptionHint carries project/session context for semantic STT.
+type SpeechTranscriptionHint struct {
+	ProjectName    string
+	AgentName      string
+	WorkDir        string
+	Platform       string
+	SessionKey     string
+	RecentHistory  []HistoryEntry
+	TechnicalTerms []string
+}
+
 // SpeechConfig holds STT configuration for the engine.
 type SpeechCfg struct {
 	Enabled           bool
 	Provider          string
 	Language          string
 	ConfirmBeforeSend bool
+	ProjectName       string
+	AgentName         string
+	WorkDir           string
 	STT               SpeechToText
 }
 
@@ -230,14 +250,14 @@ func NewGeminiSTT(apiKey, model, projectID, location string) *GeminiSTT {
 }
 
 func (g *GeminiSTT) Transcribe(ctx context.Context, audio []byte, format string, lang string) (string, error) {
+	return g.TranscribeWithHint(ctx, audio, format, lang, SpeechTranscriptionHint{})
+}
+
+func (g *GeminiSTT) TranscribeWithHint(ctx context.Context, audio []byte, format string, lang string, hint SpeechTranscriptionHint) (string, error) {
 	b64 := base64.StdEncoding.EncodeToString(audio)
 	mime := formatToAudioMIME(format)
 
-	systemPrompt := "You are a voice-to-task interpreter. Listen to the audio and extract the user's intent. " +
-		"Output ONLY the clear, actionable requirement or instruction — as if the user had typed it. " +
-		"Do not include filler words, hesitations, or conversational artifacts. " +
-		"If the user speaks in a non-English language, output the requirement in that same language. " +
-		"Do not add any explanation or commentary."
+	systemPrompt := g.buildSystemPrompt(hint)
 
 	reqBody := map[string]any{
 		"system_instruction": map[string]any{
@@ -247,6 +267,7 @@ func (g *GeminiSTT) Transcribe(ctx context.Context, audio []byte, format string,
 		},
 		"contents": []map[string]any{
 			{
+				"role": "user",
 				"parts": []any{
 					map[string]any{
 						"inline_data": map[string]any{
@@ -270,8 +291,16 @@ func (g *GeminiSTT) Transcribe(ctx context.Context, audio []byte, format string,
 	var apiURL string
 	if g.ProjectID != "" {
 		// Vertex AI endpoint
-		apiURL = fmt.Sprintf("https://%s-aiplatform.googleapis.com/v1/projects/%s/locations/%s/publishers/google/models/%s:generateContent",
-			g.Location, g.ProjectID, g.Location, g.Model)
+		host := fmt.Sprintf("%s-aiplatform.googleapis.com", g.Location)
+		if g.Location == "global" {
+			host = "aiplatform.googleapis.com"
+		}
+		apiVersion := "v1"
+		if g.usesVertexPreviewAPI() {
+			apiVersion = "v1beta1"
+		}
+		apiURL = fmt.Sprintf("https://%s/%s/projects/%s/locations/%s/publishers/google/models/%s:generateContent",
+			host, apiVersion, g.ProjectID, g.Location, g.Model)
 		if g.usesVertexAPIKey() {
 			apiURL += "?key=" + url.QueryEscape(g.APIKey)
 		}
@@ -325,6 +354,69 @@ func (g *GeminiSTT) Transcribe(ctx context.Context, audio []byte, format string,
 	return strings.TrimSpace(result.Candidates[0].Content.Parts[0].Text), nil
 }
 
+func (g *GeminiSTT) buildSystemPrompt(hint SpeechTranscriptionHint) string {
+	var sb strings.Builder
+	sb.WriteString("You are a voice-to-task interpreter for a software engineering workflow. ")
+	sb.WriteString("Listen to the audio and extract the user's intent. ")
+	sb.WriteString("Output ONLY the clear, actionable requirement or instruction, as if the user had typed it. ")
+	sb.WriteString("Do not include filler words, hesitations, or conversational artifacts. ")
+	sb.WriteString("If the user speaks in a non-English language, output the requirement in that same language. ")
+	sb.WriteString("Preserve technical terms, command names, product names, file paths, filenames, model names, repository names, and acronyms exactly when possible. ")
+	sb.WriteString("If a spoken word is close to a technical term from the provided context, prefer the technical term. ")
+	sb.WriteString("For example, prefer 'tmux' over similar-sounding ordinary words like 'tmax'. ")
+	sb.WriteString("Do not add explanation or commentary.\n\n")
+
+	if hint.ProjectName != "" || hint.AgentName != "" || hint.WorkDir != "" || hint.Platform != "" {
+		sb.WriteString("Project context:\n")
+		if hint.ProjectName != "" {
+			sb.WriteString("- Project: " + hint.ProjectName + "\n")
+		}
+		if hint.AgentName != "" {
+			sb.WriteString("- Agent: " + hint.AgentName + "\n")
+		}
+		if hint.WorkDir != "" {
+			sb.WriteString("- Work directory: " + hint.WorkDir + "\n")
+		}
+		if hint.Platform != "" {
+			sb.WriteString("- Messaging platform: " + hint.Platform + "\n")
+		}
+		sb.WriteString("\n")
+	}
+
+	if len(hint.TechnicalTerms) > 0 {
+		sb.WriteString("Technical terms that are likely relevant:\n")
+		for _, term := range hint.TechnicalTerms {
+			sb.WriteString("- " + term + "\n")
+		}
+		sb.WriteString("\n")
+	}
+
+	if len(hint.RecentHistory) > 0 {
+		sb.WriteString("Recent conversation context:\n")
+		for _, entry := range hint.RecentHistory {
+			text := strings.TrimSpace(entry.Content)
+			if text == "" {
+				continue
+			}
+			text = truncateRunes(text, 160)
+			sb.WriteString("- " + entry.Role + ": " + text + "\n")
+		}
+	}
+
+	return strings.TrimSpace(sb.String())
+}
+
+func truncateRunes(s string, limit int) string {
+	if limit <= 0 {
+		return s
+	}
+	runes := []rune(s)
+	if len(runes) <= limit {
+		return s
+	}
+	return string(runes[:limit]) + "..."
+}
+
 func (g *GeminiSTT) interpretAuthError(statusCode int, body []byte) string {
 	if statusCode != http.StatusUnauthorized {
 		return ""
@@ -343,6 +435,10 @@ func (g *GeminiSTT) usesVertexAPIKey() bool {
 		return false
 	}
 	return strings.HasPrefix(g.APIKey, "AIza") || strings.HasPrefix(g.APIKey, "AQ.")
+}
+
+func (g *GeminiSTT) usesVertexPreviewAPI() bool {
+	return g.ProjectID != "" && strings.Contains(g.Model, "preview")
 }
 
 // ConvertAudioToMP3 uses ffmpeg to convert audio from unsupported formats to mp3.
@@ -467,6 +563,10 @@ func formatToAudioMIME(format string) string {
 // TranscribeAudio is a convenience function used by the Engine.
 // It handles format conversion (if needed) and calls the STT provider.
 func TranscribeAudio(ctx context.Context, stt SpeechToText, audio *AudioAttachment, lang string) (string, error) {
+	return TranscribeAudioWithHint(ctx, stt, audio, lang, SpeechTranscriptionHint{})
+}
+
+func TranscribeAudioWithHint(ctx context.Context, stt SpeechToText, audio *AudioAttachment, lang string, hint SpeechTranscriptionHint) (string, error) {
 	data := audio.Data
 	format := strings.ToLower(audio.Format)
 
@@ -481,5 +581,8 @@ func TranscribeAudio(ctx context.Context, stt SpeechToText, audio *AudioAttachme
 	}
 
 	slog.Debug("speech: transcribing", "format", format, "size", len(data))
+	if hinted, ok := stt.(SpeechToTextWithHint); ok {
+		return hinted.TranscribeWithHint(ctx, data, format, lang, hint)
+	}
 	return stt.Transcribe(ctx, data, format, lang)
 }

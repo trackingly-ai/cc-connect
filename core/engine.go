@@ -667,7 +667,8 @@ func (e *Engine) handleVoiceMessage(p Platform, msg *Message) {
 	)
 	e.send(p, msg.ReplyCtx, e.i18n.T(MsgVoiceTranscribing))
 
-	text, err := TranscribeAudio(e.ctx, e.speech.STT, audio, e.speech.Language)
+	hint := e.buildSpeechHint(msg)
+	text, err := TranscribeAudioWithHint(e.ctx, e.speech.STT, audio, e.speech.Language, hint)
 	if err != nil {
 		slog.Error("speech transcription failed", "error", err)
 		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgVoiceTranscribeFailed), err))
@@ -695,6 +696,99 @@ func (e *Engine) handleVoiceMessage(p Platform, msg *Message) {
 	msg.Content = text
 	msg.FromVoice = true
 	e.handleMessage(p, msg)
+}
+
+func (e *Engine) buildSpeechHint(msg *Message) SpeechTranscriptionHint {
+	session := e.sessions.GetOrCreateActive(msg.SessionKey)
+	history := session.GetHistory(6)
+
+	return SpeechTranscriptionHint{
+		ProjectName:    e.speech.ProjectName,
+		AgentName:      e.speech.AgentName,
+		WorkDir:        e.speech.WorkDir,
+		Platform:       msg.Platform,
+		SessionKey:     msg.SessionKey,
+		RecentHistory:  history,
+		TechnicalTerms: collectTechnicalTerms(e.speech.ProjectName, e.speech.AgentName, e.speech.WorkDir, msg.SessionKey, history),
+	}
+}
+
+func collectTechnicalTerms(projectName, agentName, workDir, sessionKey string, history []HistoryEntry) []string {
+	candidates := []string{
+		projectName,
+		agentName,
+		workDir,
+		filepath.Base(workDir),
+		sessionKey,
+		"cc-connect",
+		"tmux",
+		"git",
+		"github",
+		"ffmpeg",
+		"config.toml",
+		"Claude Code",
+		"claudecode",
+		"Codex",
+		"Gemini",
+		"Vertex AI",
+		"Feishu",
+		"Telegram",
+		"Slack",
+		"Discord",
+		"LINE",
+	}
+	for _, entry := range history {
+		candidates = append(candidates, extractTechnicalTerms(entry.Content)...)
+	}
+
+	seen := make(map[string]bool)
+	terms := make([]string, 0, 24)
+	for _, candidate := range candidates {
+		term := strings.TrimSpace(candidate)
+		if term == "" {
+			continue
+		}
+		if filepath.IsAbs(term) {
+			term = filepath.Base(term)
+		}
+		if seen[term] {
+			continue
+		}
+		seen[term] = true
+		terms = append(terms, term)
+		if len(terms) >= 24 {
+			break
+		}
+	}
+	return terms
+}
+
+func extractTechnicalTerms(text string) []string {
+	fields := strings.FieldsFunc(text, func(r rune) bool {
+		switch {
+		case r >= 'a' && r <= 'z':
+			return false
+		case r >= 'A' && r <= 'Z':
+			return false
+		case r >= '0' && r <= '9':
+			return false
+		case r == '-', r == '_', r == '.', r == '/', r == ':':
+			return false
+		default:
+			return true
+		}
+	})
+
+	var out []string
+	for _, field := range fields {
+		if len(field) < 3 {
+			continue
+		}
+		if strings.ContainsAny(field, "-_./:") || strings.IndexFunc(field, func(r rune) bool { return r >= 'A' && r <= 'Z' }) >= 0 || strings.IndexFunc(field, func(r rune) bool { return r >= '0' && r <= '9' }) >= 0 {
+			out = append(out, field)
+		}
+	}
+	return out
 }
 
 func (e *Engine) handlePendingVoiceConfirmation(p Platform, msg *Message, content string) bool {

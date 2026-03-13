@@ -3,6 +3,7 @@ package core
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -45,13 +46,33 @@ func TestGeminiSTTUsesVertexAPIKey(t *testing.T) {
 	})
 }
 
+func TestGeminiSTTBuildSystemPromptIncludesContextHints(t *testing.T) {
+	g := &GeminiSTT{}
+	prompt := g.buildSystemPrompt(SpeechTranscriptionHint{
+		ProjectName:    "cc-connect",
+		AgentName:      "claudecode",
+		WorkDir:        "/Users/edward/Projects/cc-connect",
+		Platform:       "feishu",
+		TechnicalTerms: []string{"tmux", "config.toml", "gemini-3-flash-preview"},
+		RecentHistory: []HistoryEntry{
+			{Role: "user", Content: "Please restart tmux and check config.toml"},
+		},
+	})
+
+	for _, want := range []string{"tmux", "config.toml", "gemini-3-flash-preview", "Project: cc-connect", "user: Please restart tmux"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("expected prompt to contain %q, got %q", want, prompt)
+		}
+	}
+}
+
 func TestGeminiSTTTranscribeUsesQueryAPIKeyForVertexAPIKeys(t *testing.T) {
 	var capturedReq *http.Request
 	g := &GeminiSTT{
 		APIKey:    "AQ.test-key",
-		Model:     "gemini-2.5-flash",
+		Model:     "gemini-3-flash-preview",
 		ProjectID: "demo-project",
-		Location:  "us-central1",
+		Location:  "global",
 		Client: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			capturedReq = req.Clone(req.Context())
 			return jsonResponse(`{"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}`), nil
@@ -68,11 +89,28 @@ func TestGeminiSTTTranscribeUsesQueryAPIKeyForVertexAPIKeys(t *testing.T) {
 	if capturedReq == nil {
 		t.Fatal("expected request to be captured")
 	}
+	if got := capturedReq.URL.Host; got != "aiplatform.googleapis.com" {
+		t.Fatalf("expected global host, got %q", got)
+	}
+	if got := capturedReq.URL.Path; !strings.HasPrefix(got, "/v1beta1/projects/demo-project/locations/global/") {
+		t.Fatalf("expected preview API path, got %q", got)
+	}
 	if got := capturedReq.URL.Query().Get("key"); got != "AQ.test-key" {
 		t.Fatalf("expected query api key, got %q", got)
 	}
 	if got := capturedReq.Header.Get("Authorization"); got != "" {
 		t.Fatalf("did not expect bearer auth header, got %q", got)
+	}
+	var body struct {
+		Contents []struct {
+			Role string `json:"role"`
+		} `json:"contents"`
+	}
+	if err := json.NewDecoder(capturedReq.Body).Decode(&body); err != nil {
+		t.Fatalf("decode request body: %v", err)
+	}
+	if len(body.Contents) == 0 || body.Contents[0].Role != "user" {
+		t.Fatalf("expected first content role to be user, got %#v", body.Contents)
 	}
 }
 

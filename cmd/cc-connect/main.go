@@ -312,6 +312,9 @@ func main() {
 				Enabled:           true,
 				Language:          cfg.Speech.Language,
 				ConfirmBeforeSend: confirmBeforeSend,
+				ProjectName:       proj.Name,
+				AgentName:         agent.Name(),
+				WorkDir:           workDir,
 			}
 			switch cfg.Speech.Provider {
 			case "groq":
