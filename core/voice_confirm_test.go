@@ -18,6 +18,7 @@ type stubButtonPlatform struct {
 	n           string
 	sent        []string
 	buttonTexts []string
+	buttonData  []string
 }
 
 func (p *stubButtonPlatform) Name() string               { return p.n }
@@ -36,6 +37,7 @@ func (p *stubButtonPlatform) SendWithButtons(_ context.Context, _ any, content s
 	for _, row := range buttons {
 		for _, btn := range row {
 			p.buttonTexts = append(p.buttonTexts, btn.Text)
+			p.buttonData = append(p.buttonData, btn.Data)
 		}
 	}
 	return nil

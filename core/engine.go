@@ -165,6 +165,8 @@ type Engine struct {
 	// Interactive agent session management
 	interactiveMu     sync.Mutex
 	interactiveStates map[string]*interactiveState // key = sessionKey
+	promptMu          sync.Mutex
+	prompts           map[string]*pendingInteractionPrompt
 	voiceConfirmMu    sync.Mutex
 	voiceConfirms     map[string]*pendingVoiceConfirmation
 
@@ -219,6 +221,7 @@ func NewEngine(name string, ag Agent, platforms []Platform, sessionStorePath str
 		skills:            NewSkillRegistry(),
 		aliases:           make(map[string]string),
 		interactiveStates: make(map[string]*interactiveState),
+		prompts:           make(map[string]*pendingInteractionPrompt),
 		voiceConfirms:     make(map[string]*pendingVoiceConfirmation),
 		startedAt:         time.Now(),
 		streamPreview:     DefaultStreamPreviewCfg(),
@@ -594,6 +597,12 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 		return
 	}
 
+	content, consumed := e.resolvePendingInteraction(msg.SessionKey, content)
+	if consumed {
+		return
+	}
+	msg.Content = content
+
 	if e.handlePendingVoiceConfirmation(p, msg, content) {
 		return
 	}
@@ -685,7 +694,7 @@ func (e *Engine) handleVoiceMessage(p Platform, msg *Message) {
 
 	if e.speech.ConfirmBeforeSend {
 		e.storeVoiceConfirmation(msg.SessionKey, text)
-		e.replyVoiceConfirmationPrompt(p, msg.ReplyCtx, text)
+		e.replyVoiceConfirmationPrompt(msg.SessionKey, p, msg.ReplyCtx, text)
 		return
 	}
 
@@ -800,17 +809,20 @@ func (e *Engine) handlePendingVoiceConfirmation(p Platform, msg *Message, conten
 	lower := strings.ToLower(strings.TrimSpace(content))
 	switch {
 	case isVoiceConfirmResponse(lower):
+		e.clearInteractionPrompt(msg.SessionKey)
 		e.clearVoiceConfirmation(msg.SessionKey)
 		msg.Content = pending.Text
 		msg.FromVoice = true
 		e.handleMessage(p, msg)
 		return true
 	case isVoiceModifyResponse(lower):
+		e.clearInteractionPrompt(msg.SessionKey)
 		pending.AwaitingEdit = true
 		e.storeVoiceConfirmation(msg.SessionKey, pending.Text, pending)
 		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgVoiceEditPrompt))
 		return true
 	case isVoiceCancelResponse(lower):
+		e.clearInteractionPrompt(msg.SessionKey)
 		e.clearVoiceConfirmation(msg.SessionKey)
 		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgVoiceCanceled))
 		return true
@@ -828,19 +840,19 @@ func (e *Engine) handlePendingVoiceConfirmation(p Platform, msg *Message, conten
 	pending.Text = content
 	pending.AwaitingEdit = false
 	e.storeVoiceConfirmation(msg.SessionKey, pending.Text, pending)
-	e.replyVoiceConfirmationPrompt(p, msg.ReplyCtx, pending.Text)
+	e.replyVoiceConfirmationPrompt(msg.SessionKey, p, msg.ReplyCtx, pending.Text)
 	return true
 }
 
-func (e *Engine) replyVoiceConfirmationPrompt(p Platform, replyCtx any, text string) {
+func (e *Engine) replyVoiceConfirmationPrompt(sessionKey string, p Platform, replyCtx any, text string) {
 	content := fmt.Sprintf(e.i18n.T(MsgVoiceConfirmPrompt), text)
-	buttons := [][]ButtonOption{
+	choices := [][]interactionChoice{
 		{
-			{Text: e.i18n.T(MsgVoiceBtnConfirm), Data: "voice:confirm"},
-			{Text: e.i18n.T(MsgVoiceBtnModify), Data: "voice:modify"},
+			{ID: "confirm", Label: e.i18n.T(MsgVoiceBtnConfirm), SendText: "voice confirm", MatchTexts: []string{"voice confirm", "confirm"}},
+			{ID: "modify", Label: e.i18n.T(MsgVoiceBtnModify), SendText: "voice modify", MatchTexts: []string{"voice modify", "modify"}},
 		},
 	}
-	e.replyWithButtons(p, replyCtx, content, buttons)
+	e.replyWithInteraction(sessionKey, p, replyCtx, content, choices, true)
 }
 
 func (e *Engine) storeVoiceConfirmation(sessionKey, text string, existing ...*pendingVoiceConfirmation) {
@@ -868,6 +880,91 @@ func (e *Engine) clearVoiceConfirmation(sessionKey string) {
 	e.voiceConfirmMu.Lock()
 	defer e.voiceConfirmMu.Unlock()
 	delete(e.voiceConfirms, sessionKey)
+}
+
+func (e *Engine) replyWithInteraction(sessionKey string, p Platform, replyCtx any, content string, rows [][]interactionChoice, strict bool) {
+	prompt := &pendingInteractionPrompt{
+		Token:   newInteractionToken(),
+		Choices: make(map[string]interactionChoice),
+		Strict:  strict,
+	}
+
+	buttonRows := make([][]ButtonOption, 0, len(rows))
+	fallbackChoices := make([]string, 0, 4)
+	for _, row := range rows {
+		if len(row) == 0 {
+			continue
+		}
+		buttonRow := make([]ButtonOption, 0, len(row))
+		for _, choice := range row {
+			prompt.Choices[choice.ID] = choice
+			buttonRow = append(buttonRow, ButtonOption{
+				Text: choice.Label,
+				Data: buildInteractionCallbackData(prompt.Token, choice.ID),
+			})
+			fallbackChoices = append(fallbackChoices, choice.SendText)
+		}
+		buttonRows = append(buttonRows, buttonRow)
+	}
+
+	e.promptMu.Lock()
+	e.prompts[sessionKey] = prompt
+	e.promptMu.Unlock()
+
+	if bs, ok := p.(InlineButtonSender); ok {
+		if err := bs.SendWithButtons(e.ctx, replyCtx, content, buttonRows); err == nil {
+			return
+		}
+	}
+
+	if len(fallbackChoices) > 0 {
+		content += "\n\nReply with: `" + strings.Join(fallbackChoices, "` / `") + "`"
+	}
+	e.reply(p, replyCtx, content)
+}
+
+func (e *Engine) resolvePendingInteraction(sessionKey, content string) (string, bool) {
+	e.promptMu.Lock()
+	prompt := e.prompts[sessionKey]
+	e.promptMu.Unlock()
+	if prompt == nil {
+		return content, false
+	}
+
+	if token, choiceID, ok := parseInteractionCallbackData(content); ok {
+		if token != prompt.Token {
+			return "", true
+		}
+		if choice, ok := prompt.Choices[choiceID]; ok {
+			e.clearInteractionPrompt(sessionKey)
+			return choice.SendText, false
+		}
+		return "", true
+	}
+
+	normalized := strings.ToLower(strings.TrimSpace(content))
+	if normalized == "" {
+		return content, false
+	}
+	for _, choice := range prompt.Choices {
+		for _, match := range choice.MatchTexts {
+			if normalized == strings.ToLower(strings.TrimSpace(match)) {
+				e.clearInteractionPrompt(sessionKey)
+				return choice.SendText, false
+			}
+		}
+	}
+
+	if !prompt.Strict && !strings.HasPrefix(content, "/") {
+		e.clearInteractionPrompt(sessionKey)
+	}
+	return content, false
+}
+
+func (e *Engine) clearInteractionPrompt(sessionKey string) {
+	e.promptMu.Lock()
+	defer e.promptMu.Unlock()
+	delete(e.prompts, sessionKey)
 }
 
 func isVoiceConfirmResponse(s string) bool {
@@ -964,6 +1061,7 @@ func (e *Engine) handlePendingPermission(p Platform, msg *Message, content strin
 	state.mu.Lock()
 	state.pending = nil
 	state.mu.Unlock()
+	e.clearInteractionPrompt(msg.SessionKey)
 	pending.resolve()
 
 	return true
@@ -1145,6 +1243,7 @@ func (e *Engine) getOrCreateInteractiveState(sessionKey string, p Platform, repl
 }
 
 func (e *Engine) cleanupInteractiveState(sessionKey string) {
+	e.clearInteractionPrompt(sessionKey)
 	e.interactiveMu.Lock()
 	state, ok := e.interactiveStates[sessionKey]
 	delete(e.interactiveStates, sessionKey)
@@ -1320,7 +1419,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				permLimit = permLimit * 8 / 5 // permission prompts get ~1.6x more room
 			}
 			prompt := fmt.Sprintf(e.i18n.T(MsgPermissionPrompt), event.ToolName, truncateIf(event.ToolInput, permLimit))
-			e.sendPermissionPrompt(p, replyCtx, prompt)
+			e.sendPermissionPrompt(sessionKey, p, replyCtx, prompt)
 
 			pending := &pendingPermission{
 				RequestID:    event.RequestID,
@@ -1393,6 +1492,14 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 
 			if elapsed := time.Since(replyStart); elapsed >= slowPlatformSend {
 				slog.Warn("slow final reply send", "platform", p.Name(), "elapsed", elapsed, "response_len", len(fullResponse))
+			}
+
+			if prompt := detectTextInteractionPrompt(fullResponse); prompt != nil {
+				followUp := prompt.Description
+				if strings.TrimSpace(followUp) == "" {
+					followUp = "Choose a reply below, or type your own response."
+				}
+				e.replyWithInteraction(sessionKey, p, replyCtx, followUp, prompt.Choices, false)
 			}
 
 			// TTS: async voice reply if enabled
@@ -3000,24 +3107,16 @@ func (e *Engine) SendToSession(sessionKey, message string) error {
 }
 
 // sendPermissionPrompt sends a permission prompt, using inline buttons when the platform supports them.
-func (e *Engine) sendPermissionPrompt(p Platform, replyCtx any, prompt string) {
-	if bs, ok := p.(InlineButtonSender); ok {
-		buttons := [][]ButtonOption{
-			{
-				{Text: e.i18n.T(MsgPermBtnAllow), Data: "perm:allow"},
-				{Text: e.i18n.T(MsgPermBtnDeny), Data: "perm:deny"},
-			},
-			{
-				{Text: e.i18n.T(MsgPermBtnAllowAll), Data: "perm:allow_all"},
-			},
-		}
-		if err := bs.SendWithButtons(e.ctx, replyCtx, prompt, buttons); err == nil {
-			return
-		} else {
-			slog.Warn("sendPermissionPrompt: inline buttons failed, falling back to text", "error", err)
-		}
-	}
-	e.send(p, replyCtx, prompt)
+func (e *Engine) sendPermissionPrompt(sessionKey string, p Platform, replyCtx any, prompt string) {
+	e.replyWithInteraction(sessionKey, p, replyCtx, prompt, [][]interactionChoice{
+		{
+			{ID: "allow", Label: e.i18n.T(MsgPermBtnAllow), SendText: "allow", MatchTexts: []string{"allow", "yes", "approve"}},
+			{ID: "deny", Label: e.i18n.T(MsgPermBtnDeny), SendText: "deny", MatchTexts: []string{"deny", "no", "reject"}},
+		},
+		{
+			{ID: "allow_all", Label: e.i18n.T(MsgPermBtnAllowAll), SendText: "allow all", MatchTexts: []string{"allow all", "approve all"}},
+		},
+	}, true)
 }
 
 // send wraps p.Send with error logging and slow-operation warnings.

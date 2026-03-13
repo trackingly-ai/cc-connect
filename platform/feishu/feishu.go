@@ -988,6 +988,18 @@ func (p *Platform) onCardAction(event *callback.CardActionTriggerEvent) (*callba
 		return p.buildCardActionResponse(event, command), nil
 	}
 
+	if strings.HasPrefix(data, "ia:") {
+		p.handler(p, &core.Message{
+			SessionKey: sessionKey,
+			Platform:   "feishu",
+			UserID:     userID,
+			Content:    data,
+			MessageID:  messageID,
+			ReplyCtx:   rctx,
+		})
+		return p.buildCardActionResponseWithLabel(event, "✅ Selected"), nil
+	}
+
 	// Handle voice confirmation callbacks (voice:confirm, voice:modify)
 	switch data {
 	case "voice:confirm":

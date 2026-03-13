@@ -309,6 +309,30 @@ func (p *Platform) handleCallbackQuery(cb *tgbotapi.CallbackQuery) {
 		return
 	}
 
+	if strings.HasPrefix(data, "ia:") {
+		origText := cb.Message.Text
+		if origText == "" {
+			origText = "(interactive prompt)"
+		}
+		edit := tgbotapi.NewEditMessageText(chatID, msgID, origText+"\n\n✅ Selected")
+		emptyMarkup := tgbotapi.NewInlineKeyboardMarkup()
+		edit.ReplyMarkup = &emptyMarkup
+		if _, err := p.bot.Send(edit); err != nil {
+			slog.Debug("telegram: edit interactive prompt failed", "error", err)
+		}
+
+		p.handler(p, &core.Message{
+			SessionKey: sessionKey,
+			Platform:   "telegram",
+			UserID:     userID,
+			UserName:   userName,
+			Content:    data,
+			MessageID:  strconv.Itoa(msgID),
+			ReplyCtx:   rctx,
+		})
+		return
+	}
+
 	// Voice confirmation callbacks (voice:confirm, voice:modify)
 	var responseText string
 	var choiceLabel string
