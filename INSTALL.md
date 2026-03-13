@@ -680,7 +680,7 @@ The following additional features are available:
 - **OpenCode**: OpenCode CLI integration (`opencode run --format json`)
 - **iFlow CLI**: iFlow CLI integration (`iflow -i -r -o`)
 - **Voice Messages (STT)**: Speech-to-text / intent understanding via OpenAI, Groq, Qwen, or Gemini. Supports confirm-before-send flow with buttons on Feishu and Telegram. Requires `ffmpeg` and `[speech]` config.
-- **Voice Reply (TTS)**: Text-to-speech via Qwen TTS / OpenAI TTS. Requires `ffmpeg` and `[tts]` config.
+- **Voice Reply (TTS)**: Text-to-speech via Qwen TTS / OpenAI TTS, plus an optional on-demand "Read Aloud" button on Feishu and Telegram. Requires `ffmpeg` and `[tts]` config.
 - **Image Messages**: Send images to Claude Code for multimodal analysis
 - **API Provider Management**: Runtime switching between API providers via `/provider` command or CLI
 - **CLI Send**: `cc-connect send` to inject messages into active sessions from external processes

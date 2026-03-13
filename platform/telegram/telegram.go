@@ -333,6 +333,30 @@ func (p *Platform) handleCallbackQuery(cb *tgbotapi.CallbackQuery) {
 		return
 	}
 
+	if data == "tts:read_last" {
+		origText := cb.Message.Text
+		if origText == "" {
+			origText = "(read aloud)"
+		}
+		edit := tgbotapi.NewEditMessageText(chatID, msgID, origText+"\n\n🔊 Requested")
+		emptyMarkup := tgbotapi.NewInlineKeyboardMarkup()
+		edit.ReplyMarkup = &emptyMarkup
+		if _, err := p.bot.Send(edit); err != nil {
+			slog.Debug("telegram: edit read aloud message failed", "error", err)
+		}
+
+		p.handler(p, &core.Message{
+			SessionKey: sessionKey,
+			Platform:   "telegram",
+			UserID:     userID,
+			UserName:   userName,
+			Content:    "tts read last",
+			MessageID:  strconv.Itoa(msgID),
+			ReplyCtx:   rctx,
+		})
+		return
+	}
+
 	// Voice confirmation callbacks (voice:confirm, voice:modify)
 	var responseText string
 	var choiceLabel string
@@ -551,6 +575,39 @@ func (p *Platform) SendWithButtons(ctx context.Context, rctx any, content string
 		if err != nil {
 			return fmt.Errorf("telegram: sendWithButtons: %w", err)
 		}
+	}
+	return nil
+}
+
+// SendAudio sends synthesized audio back to Telegram.
+func (p *Platform) SendAudio(ctx context.Context, rctx any, audio []byte, format string) error {
+	rc, ok := rctx.(replyContext)
+	if !ok {
+		return fmt.Errorf("telegram: invalid reply context type %T", rctx)
+	}
+
+	format = strings.ToLower(strings.TrimSpace(format))
+	filename := "reply"
+	if format != "" {
+		filename += "." + format
+	}
+
+	var (
+		chattable tgbotapi.Chattable
+	)
+	switch format {
+	case "ogg", "opus":
+		voice := tgbotapi.NewVoice(rc.chatID, tgbotapi.FileBytes{Name: filename, Bytes: audio})
+		voice.ReplyToMessageID = rc.messageID
+		chattable = voice
+	default:
+		audioMsg := tgbotapi.NewAudio(rc.chatID, tgbotapi.FileBytes{Name: filename, Bytes: audio})
+		audioMsg.ReplyToMessageID = rc.messageID
+		chattable = audioMsg
+	}
+
+	if _, err := p.bot.Send(chattable); err != nil {
+		return fmt.Errorf("telegram: send audio: %w", err)
 	}
 	return nil
 }

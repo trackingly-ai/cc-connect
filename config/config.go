@@ -93,6 +93,7 @@ type TTSConfig struct {
 	Provider   string `toml:"provider"`     // "qwen" | "openai"
 	Voice      string `toml:"voice"`        // default voice name
 	TTSMode    string `toml:"tts_mode"`     // "voice_only" (default) | "always"
+	OfferReadButton *bool `toml:"offer_read_button,omitempty"` // nil = default false
 	MaxTextLen int    `toml:"max_text_len"` // max rune count before skipping TTS; 0 = no limit
 	OpenAI     struct {
 		APIKey  string `toml:"api_key"`

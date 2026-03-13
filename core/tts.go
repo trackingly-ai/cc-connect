@@ -26,11 +26,12 @@ type TTSSynthesisOpts struct {
 
 // TTSCfg holds TTS configuration for the engine (mirrors SpeechCfg).
 type TTSCfg struct {
-	Enabled    bool
-	Provider   string
-	Voice      string // default voice used when TTSSynthesisOpts.Voice is empty
-	TTS        TextToSpeech
-	MaxTextLen int // max rune count before skipping TTS; 0 = no limit
+	Enabled         bool
+	Provider        string
+	Voice           string // default voice used when TTSSynthesisOpts.Voice is empty
+	TTS             TextToSpeech
+	MaxTextLen      int  // max rune count before skipping TTS; 0 = no limit
+	OfferReadButton bool // show a button after final replies so users can request TTS on demand
 
 	mu      sync.RWMutex
 	ttsMode string // "voice_only" (default) | "always"

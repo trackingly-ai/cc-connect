@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -67,6 +68,24 @@ func (s *Session) GetHistory(n int) []HistoryEntry {
 	out := make([]HistoryEntry, n)
 	copy(out, s.History[total-n:])
 	return out
+}
+
+// LatestAssistantMessage returns the latest non-empty assistant message.
+func (s *Session) LatestAssistantMessage() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i := len(s.History) - 1; i >= 0; i-- {
+		entry := s.History[i]
+		if entry.Role != "assistant" {
+			continue
+		}
+		content := strings.TrimSpace(entry.Content)
+		if content != "" {
+			return content
+		}
+	}
+	return ""
 }
 
 // sessionSnapshot is the JSON-serializable state of the SessionManager.

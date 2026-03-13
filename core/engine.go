@@ -607,6 +607,10 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 		return
 	}
 
+	if e.handleReadAloudRequest(p, msg, content) {
+		return
+	}
+
 	// Resolve aliases: check if the first word (or whole content) matches an alias
 	content = e.resolveAlias(content)
 	msg.Content = content
@@ -1501,6 +1505,8 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				}
 				e.replyWithInteraction(sessionKey, p, replyCtx, followUp, prompt.Choices, false)
 			}
+
+			e.offerReadAloudButton(p, replyCtx, fullResponse)
 
 			// TTS: async voice reply if enabled
 			if e.tts != nil && e.tts.Enabled && e.tts.TTS != nil {
@@ -4166,27 +4172,77 @@ func splitMessage(text string, maxLen int) []string {
 // sendTTSReply synthesizes fullResponse text and sends audio to the platform.
 // Called asynchronously after EventResult; text reply is always sent first.
 func (e *Engine) sendTTSReply(p Platform, replyCtx any, text string) {
-	if e.tts == nil {
+	if err := e.synthesizeAndSendTTSReply(p, replyCtx, text); err != nil {
+		slog.Error("tts: send reply failed", "platform", p.Name(), "error", err)
+	}
+}
+
+func (e *Engine) offerReadAloudButton(p Platform, replyCtx any, text string) {
+	if e.tts == nil || !e.tts.Enabled || e.tts.TTS == nil || !e.tts.OfferReadButton {
 		return
 	}
-	if e.tts.MaxTextLen > 0 && utf8.RuneCountInString(text) > e.tts.MaxTextLen {
-		slog.Warn("tts: text exceeds max_text_len, skipping synthesis", "len", utf8.RuneCountInString(text), "max", e.tts.MaxTextLen)
+	if strings.TrimSpace(text) == "" {
 		return
+	}
+	if _, ok := p.(AudioSender); !ok {
+		return
+	}
+	buttons := [][]ButtonOption{{
+		{Text: e.i18n.T(MsgTTSReadButton), Data: "tts:read_last"},
+	}}
+	e.replyWithButtons(p, replyCtx, e.i18n.T(MsgTTSReadPrompt), buttons)
+}
+
+func (e *Engine) handleReadAloudRequest(p Platform, msg *Message, content string) bool {
+	if strings.TrimSpace(strings.ToLower(content)) != "tts read last" {
+		return false
+	}
+	if e.tts == nil || !e.tts.Enabled || e.tts.TTS == nil {
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgTTSNotEnabled))
+		return true
+	}
+	if _, ok := p.(AudioSender); !ok {
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgTTSNotEnabled))
+		return true
+	}
+
+	session := e.sessions.GetOrCreateActive(msg.SessionKey)
+	text := session.LatestAssistantMessage()
+	if text == "" {
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgTTSNoContent))
+		return true
+	}
+
+	e.reply(p, msg.ReplyCtx, e.i18n.T(MsgTTSGenerating))
+	go func() {
+		if err := e.synthesizeAndSendTTSReply(p, msg.ReplyCtx, text); err != nil {
+			slog.Error("tts: on-demand synthesis failed", "platform", p.Name(), "session", msg.SessionKey, "error", err)
+			e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgError), err))
+		}
+	}()
+	return true
+}
+
+func (e *Engine) synthesizeAndSendTTSReply(p Platform, replyCtx any, text string) error {
+	if e.tts == nil || e.tts.TTS == nil {
+		return fmt.Errorf("tts is not enabled")
+	}
+	if e.tts.MaxTextLen > 0 && utf8.RuneCountInString(text) > e.tts.MaxTextLen {
+		return fmt.Errorf("tts text exceeds max_text_len (%d > %d)", utf8.RuneCountInString(text), e.tts.MaxTextLen)
 	}
 	opts := TTSSynthesisOpts{Voice: e.tts.Voice}
 	audioData, format, err := e.tts.TTS.Synthesize(e.ctx, text, opts)
 	if err != nil {
-		slog.Error("tts: synthesis failed", "error", err)
-		return
+		return err
 	}
 	as, ok := p.(AudioSender)
 	if !ok {
-		slog.Debug("tts: platform does not support audio sending", "platform", p.Name())
-		return
+		return fmt.Errorf("platform %s does not support audio sending", p.Name())
 	}
 	if err := as.SendAudio(e.ctx, replyCtx, audioData, format); err != nil {
-		slog.Error("tts: platform audio send failed", "platform", p.Name(), "error", err)
+		return err
 	}
+	return nil
 }
 
 // ──────────────────────────────────────────────────────────────

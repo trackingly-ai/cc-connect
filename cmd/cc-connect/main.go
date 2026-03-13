@@ -366,9 +366,10 @@ func main() {
 		// Wire text-to-speech if enabled
 		if cfg.TTS.Enabled {
 			ttsCfg := &core.TTSCfg{
-				Enabled:    true,
-				Voice:      cfg.TTS.Voice,
-				MaxTextLen: cfg.TTS.MaxTextLen,
+				Enabled:         true,
+				Voice:           cfg.TTS.Voice,
+				MaxTextLen:      cfg.TTS.MaxTextLen,
+				OfferReadButton: cfg.TTS.OfferReadButton != nil && *cfg.TTS.OfferReadButton,
 			}
 			initMode := cfg.TTS.TTSMode
 			switch initMode {

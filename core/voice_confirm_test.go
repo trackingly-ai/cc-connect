@@ -19,6 +19,8 @@ type stubButtonPlatform struct {
 	sent        []string
 	buttonTexts []string
 	buttonData  []string
+	audio       [][]byte
+	audioFormat []string
 }
 
 func (p *stubButtonPlatform) Name() string               { return p.n }
@@ -40,6 +42,11 @@ func (p *stubButtonPlatform) SendWithButtons(_ context.Context, _ any, content s
 			p.buttonData = append(p.buttonData, btn.Data)
 		}
 	}
+	return nil
+}
+func (p *stubButtonPlatform) SendAudio(_ context.Context, _ any, audio []byte, format string) error {
+	p.audio = append(p.audio, audio)
+	p.audioFormat = append(p.audioFormat, format)
 	return nil
 }
 

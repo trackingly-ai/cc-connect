@@ -581,8 +581,9 @@ apk add ffmpeg
 ## Voice Reply (Text-to-Speech)
 
 cc-connect can synthesize AI text replies into voice messages and send them back to users via supported platforms.
+It can also attach a follow-up "Read Aloud" button after a final reply, so audio is generated only when the user requests it.
 
-**Supported platforms:** Feishu (Lark)
+**Supported platforms:** Feishu (Lark), Telegram
 
 **Prerequisites:**
 - An API key for Qwen (DashScope) or OpenAI TTS
@@ -596,6 +597,7 @@ enabled  = true
 provider = "qwen"        # "qwen" or "openai"
 voice    = "Cherry"      # default voice name
 tts_mode = "voice_only"  # "voice_only" (default) | "always"
+offer_read_button = true # show a Read Aloud button after final replies
 max_text_len = 0         # max rune count before skipping TTS; 0 = no limit
 
 [tts.qwen]
@@ -624,6 +626,7 @@ Switch mode at runtime: `/tts always` or `/tts voice_only`
 2. cc-connect calls the TTS API to synthesize audio
 3. For Feishu: WAV audio is converted to Opus via `ffmpeg`
 4. Voice message is sent back to the user alongside the text reply
+5. If `offer_read_button = true`, cc-connect sends a follow-up button so the user can request audio for the latest reply on demand
 
 ## Scheduled Tasks (Cron)
 

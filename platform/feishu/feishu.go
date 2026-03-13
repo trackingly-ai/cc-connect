@@ -1000,6 +1000,18 @@ func (p *Platform) onCardAction(event *callback.CardActionTriggerEvent) (*callba
 		return p.buildCardActionResponseWithLabel(event, "✅ Selected"), nil
 	}
 
+	if data == "tts:read_last" {
+		p.handler(p, &core.Message{
+			SessionKey: sessionKey,
+			Platform:   "feishu",
+			UserID:     userID,
+			Content:    "tts read last",
+			MessageID:  messageID,
+			ReplyCtx:   rctx,
+		})
+		return p.buildCardActionResponseWithLabel(event, "🔊 Requested"), nil
+	}
+
 	// Handle voice confirmation callbacks (voice:confirm, voice:modify)
 	switch data {
 	case "voice:confirm":

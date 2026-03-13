@@ -194,6 +194,10 @@ const (
 	MsgTTSStatus     MsgKey = "tts_status"
 	MsgTTSSwitched   MsgKey = "tts_switched"
 	MsgTTSUsage      MsgKey = "tts_usage"
+	MsgTTSReadButton MsgKey = "tts_read_button"
+	MsgTTSReadPrompt MsgKey = "tts_read_prompt"
+	MsgTTSGenerating MsgKey = "tts_generating"
+	MsgTTSNoContent  MsgKey = "tts_no_content"
 
 	MsgCronNotAvailable MsgKey = "cron_not_available"
 	MsgCronUsage        MsgKey = "cron_usage"
@@ -1067,6 +1071,34 @@ var messages = map[MsgKey]map[Language]string{
 		LangTraditionalChinese: "用法：/tts [always|voice_only]",
 		LangJapanese:           "使い方: /tts [always|voice_only]",
 		LangSpanish:            "Uso: /tts [always|voice_only]",
+	},
+	MsgTTSReadButton: {
+		LangEnglish:            "Read Aloud",
+		LangChinese:            "朗读总结",
+		LangTraditionalChinese: "朗讀總結",
+		LangJapanese:           "読み上げる",
+		LangSpanish:            "Leer en voz alta",
+	},
+	MsgTTSReadPrompt: {
+		LangEnglish:            "Want an audio version of the last reply?",
+		LangChinese:            "需要把上一条总结回复读出来吗？",
+		LangTraditionalChinese: "需要把上一條總結回覆讀出來嗎？",
+		LangJapanese:           "直前の返信を音声で読み上げますか？",
+		LangSpanish:            "Desea una versión en audio de la última respuesta?",
+	},
+	MsgTTSGenerating: {
+		LangEnglish:            "Generating audio...",
+		LangChinese:            "正在生成音频...",
+		LangTraditionalChinese: "正在產生音訊...",
+		LangJapanese:           "音声を生成中...",
+		LangSpanish:            "Generando audio...",
+	},
+	MsgTTSNoContent: {
+		LangEnglish:            "There is no recent assistant reply to read aloud yet.",
+		LangChinese:            "当前还没有可朗读的最近回复。",
+		LangTraditionalChinese: "目前還沒有可朗讀的最近回覆。",
+		LangJapanese:           "読み上げ可能な直近の返信がまだありません。",
+		LangSpanish:            "Todavía no hay una respuesta reciente para leer en voz alta.",
 	},
 	MsgCronNotAvailable: {
 		LangEnglish:            "Cron scheduler is not available.",
