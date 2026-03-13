@@ -1949,6 +1949,8 @@ func (e *Engine) cmdName(p Platform, msg *Message, args []string) {
 		return
 	}
 
+	current := e.sessions.GetOrCreateActive(msg.SessionKey)
+
 	// Check if first arg is a number → naming a specific session by list index
 	var targetID string
 	var name string
@@ -1971,13 +1973,8 @@ func (e *Engine) cmdName(p Platform, msg *Message, args []string) {
 		targetID = agentSessions[idx-1].ID
 		name = strings.Join(args[1:], " ")
 	} else {
-		// /name <name...> → current session
-		session := e.sessions.GetOrCreateActive(msg.SessionKey)
-		targetID = session.AgentSessionID
-		if targetID == "" {
-			e.reply(p, msg.ReplyCtx, e.i18n.T(MsgNameNoSession))
-			return
-		}
+		// /name <name...> → current local session (and linked agent session if present)
+		targetID = current.AgentSessionID
 		name = strings.Join(args, " ")
 	}
 
@@ -1987,9 +1984,23 @@ func (e *Engine) cmdName(p Platform, msg *Message, args []string) {
 		return
 	}
 
-	e.sessions.SetSessionName(targetID, name)
+	if idx, err := strconv.Atoi(args[0]); err == nil && idx >= 1 {
+		e.sessions.RenameByAgentSessionID(targetID, name)
+		if targetID != "" {
+			e.sessions.SetSessionName(targetID, name)
+		}
+	} else {
+		e.sessions.RenameActiveSession(msg.SessionKey, name)
+		if targetID != "" {
+			e.sessions.SetSessionName(targetID, name)
+		}
+	}
 
 	shortID := targetID
+	if shortID == "" {
+		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgNameSet), name, "local"))
+		return
+	}
 	if len(shortID) > 12 {
 		shortID = shortID[:12]
 	}

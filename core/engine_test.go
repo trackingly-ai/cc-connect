@@ -9,32 +9,38 @@ import (
 
 type stubAgent struct{}
 
-func (a *stubAgent) Name() string                                                { return "stub" }
+func (a *stubAgent) Name() string { return "stub" }
 func (a *stubAgent) StartSession(_ context.Context, _ string) (AgentSession, error) {
 	return &stubAgentSession{}, nil
 }
 func (a *stubAgent) ListSessions(_ context.Context) ([]AgentSessionInfo, error) { return nil, nil }
-func (a *stubAgent) Stop() error                                                 { return nil }
+func (a *stubAgent) Stop() error                                                { return nil }
 
 type stubAgentSession struct{}
 
-func (s *stubAgentSession) Send(_ string, _ []ImageAttachment) error          { return nil }
+func (s *stubAgentSession) Send(_ string, _ []ImageAttachment) error             { return nil }
 func (s *stubAgentSession) RespondPermission(_ string, _ PermissionResult) error { return nil }
-func (s *stubAgentSession) Events() <-chan Event                               { return make(chan Event) }
-func (s *stubAgentSession) CurrentSessionID() string                           { return "stub-session" }
-func (s *stubAgentSession) Alive() bool                                        { return true }
-func (s *stubAgentSession) Close() error                                       { return nil }
+func (s *stubAgentSession) Events() <-chan Event                                 { return make(chan Event) }
+func (s *stubAgentSession) CurrentSessionID() string                             { return "stub-session" }
+func (s *stubAgentSession) Alive() bool                                          { return true }
+func (s *stubAgentSession) Close() error                                         { return nil }
 
 type stubPlatformEngine struct {
 	n    string
 	sent []string
 }
 
-func (p *stubPlatformEngine) Name() string                                           { return p.n }
-func (p *stubPlatformEngine) Start(MessageHandler) error                             { return nil }
-func (p *stubPlatformEngine) Reply(_ context.Context, _ any, content string) error   { p.sent = append(p.sent, content); return nil }
-func (p *stubPlatformEngine) Send(_ context.Context, _ any, content string) error    { p.sent = append(p.sent, content); return nil }
-func (p *stubPlatformEngine) Stop() error                                            { return nil }
+func (p *stubPlatformEngine) Name() string               { return p.n }
+func (p *stubPlatformEngine) Start(MessageHandler) error { return nil }
+func (p *stubPlatformEngine) Reply(_ context.Context, _ any, content string) error {
+	p.sent = append(p.sent, content)
+	return nil
+}
+func (p *stubPlatformEngine) Send(_ context.Context, _ any, content string) error {
+	p.sent = append(p.sent, content)
+	return nil
+}
+func (p *stubPlatformEngine) Stop() error { return nil }
 
 func newTestEngine() *Engine {
 	return NewEngine("test", &stubAgent{}, []Platform{&stubPlatformEngine{n: "test"}}, "", LangEnglish)
@@ -276,5 +282,23 @@ func TestQuietGlobalAndSessionCombined(t *testing.T) {
 	state.mu.Unlock()
 	if !sq {
 		t.Fatal("expected session quiet on")
+	}
+}
+
+func TestCmdNameRenamesCurrentSessionBeforeAgentStarts(t *testing.T) {
+	e := newTestEngine()
+	p := &stubPlatformEngine{n: "test"}
+	msg := &Message{SessionKey: "test:user1", ReplyCtx: "ctx"}
+
+	s := e.sessions.NewSession(msg.SessionKey, "draft")
+	if s.AgentSessionID != "" {
+		t.Fatal("expected no agent session id yet")
+	}
+
+	e.cmdName(p, msg, []string{"renamed"})
+
+	current := e.sessions.GetOrCreateActive(msg.SessionKey)
+	if current.Name != "renamed" {
+		t.Fatalf("expected current session to be renamed, got %q", current.Name)
 	}
 }

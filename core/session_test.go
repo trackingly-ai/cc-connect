@@ -138,6 +138,32 @@ func TestSessionManager_Persistence(t *testing.T) {
 	}
 }
 
+func TestSessionManagerRenameActiveSession(t *testing.T) {
+	sm := NewSessionManager("")
+	s := sm.NewSession("user1", "draft")
+	if s.Name != "draft" {
+		t.Fatalf("expected initial name, got %q", s.Name)
+	}
+
+	renamed := sm.RenameActiveSession("user1", "renamed")
+	if renamed == nil || renamed.Name != "renamed" {
+		t.Fatalf("expected renamed session, got %#v", renamed)
+	}
+}
+
+func TestSessionManagerRenameByAgentSessionID(t *testing.T) {
+	sm := NewSessionManager("")
+	s := sm.NewSession("user1", "draft")
+	s.AgentSessionID = "agent-123"
+
+	sm.RenameByAgentSessionID("agent-123", "renamed")
+
+	current := sm.GetOrCreateActive("user1")
+	if current.Name != "renamed" {
+		t.Fatalf("expected session to be renamed by agent session id, got %q", current.Name)
+	}
+}
+
 func TestSession_TryLockUnlock(t *testing.T) {
 	s := &Session{}
 	if !s.TryLock() {

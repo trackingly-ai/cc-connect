@@ -179,6 +179,39 @@ func (sm *SessionManager) ActiveSessionID(userKey string) string {
 	return sm.activeSession[userKey]
 }
 
+// RenameActiveSession renames the current local session for the given user key.
+func (sm *SessionManager) RenameActiveSession(userKey, name string) *Session {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	sid := sm.activeSession[userKey]
+	if sid == "" {
+		return nil
+	}
+	s := sm.sessions[sid]
+	if s == nil {
+		return nil
+	}
+	s.Name = name
+	s.UpdatedAt = time.Now()
+	sm.saveLocked()
+	return s
+}
+
+// RenameByAgentSessionID renames any local sessions linked to the given agent session ID.
+func (sm *SessionManager) RenameByAgentSessionID(agentSessionID, name string) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	for _, s := range sm.sessions {
+		if s != nil && s.AgentSessionID == agentSessionID {
+			s.Name = name
+			s.UpdatedAt = time.Now()
+		}
+	}
+	sm.saveLocked()
+}
+
 // SetSessionName sets a custom display name for an agent session.
 func (sm *SessionManager) SetSessionName(agentSessionID, name string) {
 	sm.mu.Lock()
