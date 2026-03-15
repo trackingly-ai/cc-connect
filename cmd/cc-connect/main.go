@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"flag"
@@ -480,16 +481,19 @@ func main() {
 		}
 	}
 
+	jobMgr, err := buildJobManager(cfg.DataDir, cfg.Projects, engines)
+	if err != nil {
+		slog.Warn("job manager unavailable", "error", err)
+		jobMgr = nil
+	}
+
 	// Start internal API server for CLI send
 	apiSrv, err := core.NewAPIServer(cfg.DataDir)
 	if err != nil {
 		slog.Warn("api server unavailable", "error", err)
 	} else {
 		relayMgr := core.NewRelayManager(cfg.DataDir)
-		jobMgr, jobErr := core.NewJobManager(cfg.DataDir)
-		if jobErr != nil {
-			slog.Warn("job manager unavailable", "error", jobErr)
-		} else {
+		if jobMgr != nil {
 			apiSrv.SetJobManager(jobMgr)
 		}
 		apiSrv.SetRelayManager(relayMgr)
@@ -501,6 +505,19 @@ func main() {
 			apiSrv.SetCronScheduler(cronSched)
 		}
 		apiSrv.Start()
+	}
+
+	var mcpSrv *core.MCPServer
+	if cfg.MCP.Enabled {
+		if jobMgr == nil {
+			slog.Warn("mcp server skipped because job manager is unavailable")
+		} else {
+			mcpSrv = core.NewMCPServer(jobMgr, cfg.MCP.AuthToken)
+			if err := mcpSrv.Start(cfg.MCP.Listen); err != nil {
+				slog.Warn("mcp server unavailable", "error", err)
+				mcpSrv = nil
+			}
+		}
 	}
 
 	slog.Info("cc-connect is running", "projects", len(engines))
@@ -530,6 +547,11 @@ func main() {
 	}
 	if apiSrv != nil {
 		apiSrv.Stop()
+	}
+	if mcpSrv != nil {
+		if err := mcpSrv.Stop(context.Background()); err != nil {
+			slog.Warn("mcp shutdown error", "error", err)
+		}
 	}
 	for _, e := range engines {
 		if err := e.Stop(); err != nil {
@@ -565,6 +587,24 @@ func main() {
 	}
 
 	slog.Info("bye")
+}
+
+func buildJobManager(
+	dataDir string,
+	projects []config.ProjectConfig,
+	engines []*core.Engine,
+) (*core.JobManager, error) {
+	jobMgr, err := core.NewJobManager(dataDir)
+	if err != nil {
+		return nil, err
+	}
+	for i, engine := range engines {
+		if i >= len(projects) {
+			break
+		}
+		jobMgr.RegisterRunner(projects[i].Name, engine.JobRunner())
+	}
+	return jobMgr, nil
 }
 
 // sessionStorePath builds a unique filename from project name + work_dir.

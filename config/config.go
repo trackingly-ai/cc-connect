@@ -22,6 +22,7 @@ type Config struct {
 	Aliases         []AliasConfig       `toml:"aliases"`      // global command aliases
 	BannedWords     []string            `toml:"banned_words"` // messages containing any of these words are blocked
 	Log             LogConfig           `toml:"log"`
+	MCP             MCPConfig           `toml:"mcp"`
 	Language        string              `toml:"language"` // "en" or "zh", default is "en"
 	Speech          SpeechConfig        `toml:"speech"`
 	TTS             TTSConfig           `toml:"tts"`
@@ -36,6 +37,13 @@ type Config struct {
 // CronConfig controls cron job behavior.
 type CronConfig struct {
 	Silent *bool `toml:"silent"` // suppress cron start notification; default false
+}
+
+// MCPConfig controls the optional MCP HTTP server used by external orchestrators.
+type MCPConfig struct {
+	Enabled   bool   `toml:"enabled"`
+	Listen    string `toml:"listen"`
+	AuthToken string `toml:"auth_token"`
 }
 
 // DisplayConfig controls how intermediate messages (thinking, tool output) are shown.
@@ -89,13 +97,13 @@ type SpeechConfig struct {
 
 // TTSConfig configures text-to-speech output (mirrors SpeechConfig style).
 type TTSConfig struct {
-	Enabled    bool   `toml:"enabled"`
-	Provider   string `toml:"provider"`     // "qwen" | "openai"
-	Voice      string `toml:"voice"`        // default voice name
-	TTSMode    string `toml:"tts_mode"`     // "voice_only" (default) | "always"
-	OfferReadButton *bool `toml:"offer_read_button,omitempty"` // nil = default false
-	MaxTextLen int    `toml:"max_text_len"` // max rune count before skipping TTS; 0 = no limit
-	OpenAI     struct {
+	Enabled         bool   `toml:"enabled"`
+	Provider        string `toml:"provider"`                    // "qwen" | "openai"
+	Voice           string `toml:"voice"`                       // default voice name
+	TTSMode         string `toml:"tts_mode"`                    // "voice_only" (default) | "always"
+	OfferReadButton *bool  `toml:"offer_read_button,omitempty"` // nil = default false
+	MaxTextLen      int    `toml:"max_text_len"`                // max rune count before skipping TTS; 0 = no limit
+	OpenAI          struct {
 		APIKey  string `toml:"api_key"`
 		BaseURL string `toml:"base_url"`
 		Model   string `toml:"model"`
@@ -163,6 +171,7 @@ func Load(path string) (*Config, error) {
 
 	cfg := &Config{
 		Log: LogConfig{Level: "info"},
+		MCP: MCPConfig{Listen: "127.0.0.1:9820"},
 	}
 	if err := toml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
