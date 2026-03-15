@@ -36,6 +36,19 @@ func NewMCPServer(jm *JobManager, authToken string) *MCPServer {
 		mcpserver.WithToolCapabilities(true),
 	)
 
+	listAgentsTool := mcp.NewTool("list_agents",
+		mcp.WithDescription("List registered cc-connect projects and their current job availability."),
+	)
+	mcpSrv.AddTool(listAgentsTool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		_ = ctx
+		_ = req
+		agents := jm.ListAgents()
+		return mcp.NewToolResultStructured(
+			map[string]any{"agents": agents},
+			fmt.Sprintf("listed %d agents", len(agents)),
+		), nil
+	})
+
 	startTool := mcp.NewTool("start_task_run",
 		mcp.WithDescription("Start an asynchronous task run in a named cc-connect project."),
 		mcp.WithString("project", mcp.Description("Registered cc-connect project name."), mcp.Required()),

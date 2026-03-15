@@ -42,6 +42,10 @@ type workspacePayload struct {
 	WorktreePath string `json:"worktree_path"`
 }
 
+type listAgentsPayload struct {
+	Agents []RegisteredProject `json:"agents"`
+}
+
 func TestMCPServerTaskRunLifecycle(t *testing.T) {
 	jm, err := NewJobManager(t.TempDir())
 	if err != nil {
@@ -307,6 +311,78 @@ func TestMCPServerWorkspaceLifecycle(t *testing.T) {
 	}
 	if cleanupPayload.Status != "cleaned" || cleanupPayload.WorktreePath != worktreePath {
 		t.Fatalf("unexpected cleanup payload: %+v", cleanupPayload)
+	}
+}
+
+func TestMCPServerListAgents(t *testing.T) {
+	jm, err := NewJobManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewJobManager: %v", err)
+	}
+
+	blocked := make(chan struct{})
+	release := make(chan struct{})
+	jm.RegisterProject("alpha", "codex", mcpTestJobRunner{
+		run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+			_ = req
+			_ = jobID
+			close(blocked)
+			<-release
+			return &JobResult{Summary: "done"}, ctx.Err()
+		},
+	})
+	jm.RegisterProject("beta", "claudecode", mcpTestJobRunner{
+		run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+			_ = ctx
+			_ = req
+			_ = jobID
+			return &JobResult{Summary: "ok"}, nil
+		},
+	})
+
+	if _, err := jm.Start(JobRequest{Project: "alpha", Prompt: "busy"}); err != nil {
+		t.Fatalf("Start alpha: %v", err)
+	}
+	select {
+	case <-blocked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("alpha job did not start")
+	}
+
+	httpServer := httptest.NewServer(NewMCPServer(jm, "").Handler())
+	defer httpServer.Close()
+	mcpClient := startMCPClient(t, httpServer.URL+"/mcp")
+	defer func() {
+		close(release)
+		_ = mcpClient.Close()
+		time.Sleep(25 * time.Millisecond)
+	}()
+
+	var req mcp.CallToolRequest
+	req.Params.Name = "list_agents"
+	result, err := mcpClient.CallTool(context.Background(), req)
+	if err != nil {
+		t.Fatalf("list_agents: %v", err)
+	}
+
+	var payload listAgentsPayload
+	if err := decodeStructuredResult(result, &payload); err != nil {
+		t.Fatalf("decode list_agents result: %v", err)
+	}
+	if len(payload.Agents) != 2 {
+		t.Fatalf("agent count = %d, want 2", len(payload.Agents))
+	}
+	if payload.Agents[0].Project != "alpha" || payload.Agents[0].Status != "busy" {
+		t.Fatalf("unexpected alpha payload: %+v", payload.Agents[0])
+	}
+	if payload.Agents[0].AgentType != "codex" || payload.Agents[0].ActiveJobs != 1 {
+		t.Fatalf("unexpected alpha job counts: %+v", payload.Agents[0])
+	}
+	if payload.Agents[1].Project != "beta" || payload.Agents[1].Status != "idle" {
+		t.Fatalf("unexpected beta payload: %+v", payload.Agents[1])
+	}
+	if payload.Agents[1].AgentType != "claudecode" {
+		t.Fatalf("unexpected beta agent type: %+v", payload.Agents[1])
 	}
 }
 

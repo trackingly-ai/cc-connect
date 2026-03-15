@@ -85,12 +85,22 @@ type managedJob struct {
 	cancel context.CancelFunc
 }
 
+type RegisteredProject struct {
+	Project     string `json:"project"`
+	AgentType   string `json:"agent_type"`
+	Status      string `json:"status"`
+	ActiveJobs  int    `json:"active_jobs"`
+	RunningJobs int    `json:"running_jobs"`
+	QueuedJobs  int    `json:"queued_jobs"`
+}
+
 type JobManager struct {
 	baseDir string
 
 	mu      sync.RWMutex
 	jobs    map[string]*managedJob
 	runners map[string]JobRunner
+	agents  map[string]string
 }
 
 func NewJobManager(dataDir string) (*JobManager, error) {
@@ -103,6 +113,7 @@ func NewJobManager(dataDir string) (*JobManager, error) {
 		baseDir: jobsDir,
 		jobs:    make(map[string]*managedJob),
 		runners: make(map[string]JobRunner),
+		agents:  make(map[string]string),
 	}
 	if err := jm.load(); err != nil {
 		return nil, err
@@ -111,9 +122,18 @@ func NewJobManager(dataDir string) (*JobManager, error) {
 }
 
 func (jm *JobManager) RegisterRunner(project string, runner JobRunner) {
+	jm.RegisterProject(project, "", runner)
+}
+
+func (jm *JobManager) RegisterProject(
+	project string,
+	agentType string,
+	runner JobRunner,
+) {
 	jm.mu.Lock()
 	defer jm.mu.Unlock()
 	jm.runners[project] = runner
+	jm.agents[project] = agentType
 }
 
 func (jm *JobManager) Start(req JobRequest) (*Job, error) {
@@ -193,6 +213,45 @@ func (jm *JobManager) List() []*Job {
 		return jobs[i].CreatedAt.Before(jobs[j].CreatedAt)
 	})
 	return jobs
+}
+
+func (jm *JobManager) ListAgents() []RegisteredProject {
+	jm.mu.RLock()
+	defer jm.mu.RUnlock()
+
+	projects := make([]RegisteredProject, 0, len(jm.runners))
+	for project := range jm.runners {
+		registered := RegisteredProject{
+			Project:   project,
+			AgentType: jm.agents[project],
+			Status:    "idle",
+		}
+		for _, managed := range jm.jobs {
+			if managed.job.Project != project {
+				continue
+			}
+			switch managed.job.Status {
+			case JobStatusQueued:
+				registered.ActiveJobs++
+				registered.QueuedJobs++
+			case JobStatusRunning:
+				registered.ActiveJobs++
+				registered.RunningJobs++
+			}
+		}
+		if registered.ActiveJobs > 0 {
+			registered.Status = "busy"
+		}
+		if registered.AgentType == "" {
+			registered.AgentType = "unknown"
+		}
+		projects = append(projects, registered)
+	}
+
+	sort.Slice(projects, func(i, j int) bool {
+		return projects[i].Project < projects[j].Project
+	})
+	return projects
 }
 
 func (jm *JobManager) Cancel(jobID string) (*Job, error) {

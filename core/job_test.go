@@ -279,3 +279,52 @@ func TestJobManagerStartRetriesJobIDCollision(t *testing.T) {
 		t.Fatalf("job ID = %q, want job_unique", job.ID)
 	}
 }
+
+func TestJobManagerListAgents(t *testing.T) {
+	dataDir := t.TempDir()
+	jm, err := NewJobManager(dataDir)
+	if err != nil {
+		t.Fatalf("NewJobManager: %v", err)
+	}
+
+	blocked := make(chan struct{})
+	release := make(chan struct{})
+	jm.RegisterProject("alpha", "codex", stubJobRunner{
+		run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+			_ = req
+			_ = jobID
+			close(blocked)
+			<-release
+			return &JobResult{Summary: "done"}, nil
+		},
+	})
+	jm.RegisterProject("beta", "claudecode", stubJobRunner{
+		run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+			_ = ctx
+			_ = req
+			_ = jobID
+			return &JobResult{Summary: "done"}, nil
+		},
+	})
+
+	if _, err := jm.Start(JobRequest{Project: "alpha", Prompt: "busy"}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	<-blocked
+
+	agents := jm.ListAgents()
+	close(release)
+
+	if len(agents) != 2 {
+		t.Fatalf("agent count = %d, want 2", len(agents))
+	}
+	if agents[0].Project != "alpha" || agents[0].Status != "busy" {
+		t.Fatalf("unexpected alpha status: %+v", agents[0])
+	}
+	if agents[0].AgentType != "codex" || agents[0].ActiveJobs != 1 {
+		t.Fatalf("unexpected alpha payload: %+v", agents[0])
+	}
+	if agents[1].Project != "beta" || agents[1].Status != "idle" {
+		t.Fatalf("unexpected beta status: %+v", agents[1])
+	}
+}

@@ -86,7 +86,7 @@ func (s *APIServer) RegisterEngine(name string, e *Engine) {
 		s.relay.RegisterEngine(name, e)
 	}
 	if s.jobs != nil {
-		s.jobs.RegisterRunner(name, e.JobRunner())
+		s.jobs.RegisterProject(name, e.AgentName(), e.JobRunner())
 	}
 }
 
@@ -110,7 +110,7 @@ func (s *APIServer) SetJobManager(jm *JobManager) {
 		return
 	}
 	for name, engine := range s.engines {
-		jm.RegisterRunner(name, engine.JobRunner())
+		jm.RegisterProject(name, engine.AgentName(), engine.JobRunner())
 	}
 }
 

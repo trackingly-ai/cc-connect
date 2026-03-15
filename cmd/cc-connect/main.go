@@ -602,7 +602,11 @@ func buildJobManager(
 		if i >= len(projects) {
 			break
 		}
-		jobMgr.RegisterRunner(projects[i].Name, engine.JobRunner())
+		jobMgr.RegisterProject(
+			projects[i].Name,
+			engine.AgentName(),
+			engine.JobRunner(),
+		)
 	}
 	return jobMgr, nil
 }
