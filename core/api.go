@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -22,6 +23,7 @@ type APIServer struct {
 	engines    map[string]*Engine // project name → engine
 	cron       *CronScheduler
 	relay      *RelayManager
+	jobs       *JobManager
 	mu         sync.RWMutex
 }
 
@@ -63,6 +65,8 @@ func NewAPIServer(dataDir string) (*APIServer, error) {
 	s.mux.HandleFunc("/cron/add", s.handleCronAdd)
 	s.mux.HandleFunc("/cron/list", s.handleCronList)
 	s.mux.HandleFunc("/cron/del", s.handleCronDel)
+	s.mux.HandleFunc("/jobs", s.handleJobs)
+	s.mux.HandleFunc("/jobs/", s.handleJobByID)
 	s.mux.HandleFunc("/relay/send", s.handleRelaySend)
 	s.mux.HandleFunc("/relay/bind", s.handleRelayBind)
 	s.mux.HandleFunc("/relay/binding", s.handleRelayBinding)
@@ -81,6 +85,9 @@ func (s *APIServer) RegisterEngine(name string, e *Engine) {
 	if s.relay != nil {
 		s.relay.RegisterEngine(name, e)
 	}
+	if s.jobs != nil {
+		s.jobs.RegisterRunner(name, e.JobRunner())
+	}
 }
 
 func (s *APIServer) SetRelayManager(rm *RelayManager) {
@@ -93,6 +100,18 @@ func (s *APIServer) RelayManager() *RelayManager {
 
 func (s *APIServer) SetCronScheduler(cs *CronScheduler) {
 	s.cron = cs
+}
+
+func (s *APIServer) SetJobManager(jm *JobManager) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.jobs = jm
+	if jm == nil {
+		return
+	}
+	for name, engine := range s.engines {
+		jm.RegisterRunner(name, engine.JobRunner())
+	}
 }
 
 func (s *APIServer) Start() {
@@ -199,6 +218,91 @@ type CronAddRequest struct {
 	Prompt      string `json:"prompt"`
 	Description string `json:"description"`
 	Silent      *bool  `json:"silent,omitempty"`
+}
+
+type StartJobRequest struct {
+	Project      string          `json:"project"`
+	TaskID       string          `json:"task_id,omitempty"`
+	Prompt       string          `json:"prompt"`
+	TimeoutSec   int             `json:"timeout_sec,omitempty"`
+	WorkspaceRef JobWorkspaceRef `json:"workspace_ref,omitempty"`
+}
+
+func (s *APIServer) handleJobs(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	jobs := s.jobs
+	s.mu.RUnlock()
+	if jobs == nil {
+		http.Error(w, "job manager not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(jobs.List()); err != nil {
+			slog.Warn("api: encode /jobs response failed", "error", err)
+		}
+	case http.MethodPost:
+		var req StartJobRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		job, err := jobs.Start(JobRequest{
+			Project:      req.Project,
+			TaskID:       req.TaskID,
+			Prompt:       req.Prompt,
+			Timeout:      time.Duration(req.TimeoutSec) * time.Second,
+			WorkspaceRef: req.WorkspaceRef,
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		if err := json.NewEncoder(w).Encode(job); err != nil {
+			slog.Warn("api: encode /jobs start response failed", "error", err)
+		}
+	default:
+		http.Error(w, "GET or POST only", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *APIServer) handleJobByID(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+	s.mu.RLock()
+	jobs := s.jobs
+	s.mu.RUnlock()
+	if jobs == nil {
+		http.Error(w, "job manager not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	if !strings.HasPrefix(r.URL.Path, "/jobs/") {
+		http.Error(w, "job id is required", http.StatusBadRequest)
+		return
+	}
+	jobID := strings.Trim(strings.TrimPrefix(r.URL.Path, "/jobs/"), "/")
+	if jobID == "" {
+		http.Error(w, "job id is required", http.StatusBadRequest)
+		return
+	}
+
+	job, ok := jobs.Get(jobID)
+	if !ok {
+		http.Error(w, fmt.Sprintf("job %q not found", jobID), http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(job); err != nil {
+		slog.Warn("api: encode /jobs/{id} response failed", "error", err)
+	}
 }
 
 func (s *APIServer) handleCronAdd(w http.ResponseWriter, r *http.Request) {

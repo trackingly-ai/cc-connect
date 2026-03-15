@@ -174,6 +174,8 @@ type Engine struct {
 
 	quietMu sync.RWMutex
 	quiet   bool // when true, suppress thinking and tool progress messages globally
+
+	agentStartMu sync.Mutex
 }
 
 // interactiveState tracks a running interactive agent session and its permission state.
@@ -1198,22 +1200,7 @@ func (e *Engine) getOrCreateInteractiveState(sessionKey string, p Platform, repl
 		state.mu.Unlock()
 	}
 
-	// Inject per-session env vars so the agent subprocess can call `cc-connect cron add` etc.
-	if inj, ok := e.agent.(SessionEnvInjector); ok {
-		envVars := []string{
-			"CC_PROJECT=" + e.name,
-			"CC_SESSION_KEY=" + sessionKey,
-		}
-		if exePath, err := os.Executable(); err == nil {
-			binDir := filepath.Dir(exePath)
-			if curPath := os.Getenv("PATH"); curPath != "" {
-				envVars = append(envVars, "PATH="+binDir+string(filepath.ListSeparator)+curPath)
-			} else {
-				envVars = append(envVars, "PATH="+binDir)
-			}
-		}
-		inj.SetSessionEnv(envVars)
-	}
+	envVars := e.sessionEnv(sessionKey)
 
 	// Check if context is already canceled (e.g. during shutdown/restart)
 	if e.ctx.Err() != nil {
@@ -1224,7 +1211,11 @@ func (e *Engine) getOrCreateInteractiveState(sessionKey string, p Platform, repl
 	}
 
 	startAt := time.Now()
-	agentSession, err := e.agent.StartSession(e.ctx, session.AgentSessionID)
+	agentSession, err := e.startAgentSession(
+		e.ctx,
+		session.AgentSessionID,
+		envVars,
+	)
 	startElapsed := time.Since(startAt)
 	if err != nil {
 		slog.Error("failed to start interactive session", "error", err, "elapsed", startElapsed)
@@ -4258,21 +4249,9 @@ func (e *Engine) HandleRelay(ctx context.Context, fromProject, chatID, message s
 	relaySessionKey := "relay:" + fromProject + ":" + chatID
 	session := e.sessions.GetOrCreateActive(relaySessionKey)
 
-	if inj, ok := e.agent.(SessionEnvInjector); ok {
-		envVars := []string{
-			"CC_PROJECT=" + e.name,
-			"CC_SESSION_KEY=" + relaySessionKey,
-		}
-		if exePath, err := os.Executable(); err == nil {
-			binDir := filepath.Dir(exePath)
-			if curPath := os.Getenv("PATH"); curPath != "" {
-				envVars = append(envVars, "PATH="+binDir+string(filepath.ListSeparator)+curPath)
-			}
-		}
-		inj.SetSessionEnv(envVars)
-	}
+	envVars := e.sessionEnv(relaySessionKey)
 
-	agentSession, err := e.agent.StartSession(ctx, session.AgentSessionID)
+	agentSession, err := e.startAgentSession(ctx, session.AgentSessionID, envVars)
 	if err != nil {
 		return "", fmt.Errorf("start relay session: %w", err)
 	}

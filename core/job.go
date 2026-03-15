@@ -208,6 +208,14 @@ func (jm *JobManager) Cancel(jobID string) (*Job, error) {
 	if isTerminalJobStatus(managed.job.Status) {
 		return managed.job.clone(), nil
 	}
+	now := time.Now().UTC()
+	managed.job.Status = JobStatusCancelled
+	managed.job.Error = context.Canceled.Error()
+	managed.job.FinishedAt = &now
+	if err := jm.saveJob(managed.job); err != nil {
+		managed.job.Status = JobStatusFailed
+		managed.job.Error = fmt.Sprintf("persist cancelled job: %v", err)
+	}
 	managed.cancel()
 	return managed.job.clone(), nil
 }
@@ -243,12 +251,12 @@ func (jm *JobManager) runJob(
 	jm.finishJob(jobID, func(job *Job) {
 		now := time.Now().UTC()
 		job.FinishedAt = &now
+		if ctx.Err() != nil {
+			job.Status = JobStatusCancelled
+			job.Error = ctx.Err().Error()
+			return
+		}
 		if err != nil {
-			if ctx.Err() != nil {
-				job.Status = JobStatusCancelled
-				job.Error = ctx.Err().Error()
-				return
-			}
 			job.Status = JobStatusFailed
 			job.Error = err.Error()
 			return

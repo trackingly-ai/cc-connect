@@ -141,6 +141,13 @@ func TestJobManagerCancelRunningJob(t *testing.T) {
 	if _, err := jm.Cancel(job.ID); err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
+	current, ok := jm.Get(job.ID)
+	if !ok {
+		t.Fatalf("job %s not found after cancel", job.ID)
+	}
+	if current.Status != JobStatusCancelled {
+		t.Fatalf("status after cancel = %s, want %s", current.Status, JobStatusCancelled)
+	}
 
 	cancelled := waitForJobStatus(t, jm, job.ID, JobStatusCancelled)
 	if cancelled.Error == "" {
