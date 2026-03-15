@@ -9,13 +9,15 @@ import (
 )
 
 type jobTestAgent struct {
-	session *jobTestSession
-	env     []string
+	session           *jobTestSession
+	env               []string
+	capturedSessionID string
 }
 
 func (a *jobTestAgent) Name() string { return "job-test" }
 
-func (a *jobTestAgent) StartSession(_ context.Context, _ string) (AgentSession, error) {
+func (a *jobTestAgent) StartSession(_ context.Context, sessionID string) (AgentSession, error) {
+	a.capturedSessionID = sessionID
 	return a.session, nil
 }
 
@@ -71,10 +73,10 @@ func TestEngineJobRunnerCompletes(t *testing.T) {
 		Prompt:  "implement feature",
 		WorkspaceRef: JobWorkspaceRef{
 			RepoPath:     "/repo",
-			WorktreePath: "/repo/.echo/task-7",
+			WorktreePath: t.TempDir(),
 			Branch:       "echo/task-7",
 		},
-	})
+	}, "job-123")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -91,14 +93,20 @@ func TestEngineJobRunnerCompletes(t *testing.T) {
 	env := strings.Join(agent.env, "\n")
 	for _, want := range []string{
 		"CC_PROJECT=proj-a",
+		"CC_SESSION_KEY=echo-job-job-123",
 		"CC_TASK_ID=task-7",
+		"ECHO_TASK_ID=task-7",
+		"ECHO_JOB_ID=job-123",
 		"CC_REPO_PATH=/repo",
-		"CC_WORKTREE_PATH=/repo/.echo/task-7",
+		"CC_WORKTREE_PATH=",
 		"CC_BRANCH=echo/task-7",
 	} {
 		if !strings.Contains(env, want) {
 			t.Fatalf("env missing %q: %s", want, env)
 		}
+	}
+	if agent.capturedSessionID != "echo-job-job-123" {
+		t.Fatalf("sessionID = %q, want echo-job-job-123", agent.capturedSessionID)
 	}
 }
 
@@ -117,7 +125,7 @@ func TestEngineJobRunnerRejectsPermissionRequest(t *testing.T) {
 	_, err := engine.JobRunner().Run(context.Background(), JobRequest{
 		Project: "proj-b",
 		Prompt:  "run dangerous command",
-	})
+	}, "job-perm")
 	if err == nil {
 		t.Fatal("expected permission request error")
 	}
@@ -153,7 +161,7 @@ func TestEngineJobRunnerReturnsAgentError(t *testing.T) {
 	_, err := engine.JobRunner().Run(context.Background(), JobRequest{
 		Project: "proj-c",
 		Prompt:  "fail",
-	})
+	}, "job-fail")
 	if err == nil || err.Error() != "agent failed" {
 		t.Fatalf("err = %v, want agent failed", err)
 	}
@@ -219,7 +227,7 @@ func TestEngineJobRunnerSerializesSessionEnvInjection(t *testing.T) {
 			Project: "proj-serial",
 			TaskID:  "task-a",
 			Prompt:  "first",
-		})
+		}, "job-a")
 		errCh <- err
 	}()
 
@@ -230,7 +238,7 @@ func TestEngineJobRunnerSerializesSessionEnvInjection(t *testing.T) {
 			Project: "proj-serial",
 			TaskID:  "task-b",
 			Prompt:  "second",
-		})
+		}, "job-b")
 		errCh <- err
 	}()
 
@@ -255,5 +263,21 @@ func TestEngineJobRunnerSerializesSessionEnvInjection(t *testing.T) {
 	}
 	if !strings.Contains(second, "CC_TASK_ID=task-b") {
 		t.Fatalf("second env missing task-b: %s", second)
+	}
+}
+
+func TestEngineStartJobSessionRejectsMissingWorktree(t *testing.T) {
+	session := &jobTestSession{events: make(chan Event, 1)}
+	engine := NewEngine("proj-d", &jobTestAgent{session: session}, nil, "", LangEnglish)
+
+	_, err := engine.StartJobSession(context.Background(), JobRequest{
+		Project: "proj-d",
+		Prompt:  "run",
+		WorkspaceRef: JobWorkspaceRef{
+			WorktreePath: "/definitely/missing/worktree",
+		},
+	}, "job-missing")
+	if err == nil || !strings.Contains(err.Error(), "stat worktree_path") {
+		t.Fatalf("err = %v, want missing worktree error", err)
 	}
 }

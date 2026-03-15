@@ -10,11 +10,15 @@ import (
 )
 
 type stubJobRunner struct {
-	run func(ctx context.Context, req JobRequest) (*JobResult, error)
+	run func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error)
 }
 
-func (s stubJobRunner) Run(ctx context.Context, req JobRequest) (*JobResult, error) {
-	return s.run(ctx, req)
+func (s stubJobRunner) Run(
+	ctx context.Context,
+	req JobRequest,
+	jobID string,
+) (*JobResult, error) {
+	return s.run(ctx, req, jobID)
 }
 
 func waitForJobStatus(t *testing.T, jm *JobManager, jobID string, want string) *Job {
@@ -44,7 +48,8 @@ func TestJobManagerStartAndPersistCompletedJob(t *testing.T) {
 	}
 
 	jm.RegisterRunner("echo", stubJobRunner{
-		run: func(ctx context.Context, req JobRequest) (*JobResult, error) {
+		run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+			_ = jobID
 			if req.TaskID != "task-1" {
 				t.Fatalf("TaskID = %q, want task-1", req.TaskID)
 			}
@@ -122,7 +127,8 @@ func TestJobManagerCancelRunningJob(t *testing.T) {
 
 	started := make(chan struct{})
 	jm.RegisterRunner("echo", stubJobRunner{
-		run: func(ctx context.Context, req JobRequest) (*JobResult, error) {
+		run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+			_ = jobID
 			if req.Project != "echo" {
 				t.Fatalf("Project = %q, want echo", req.Project)
 			}
@@ -163,7 +169,8 @@ func TestJobManagerMarksFailedJob(t *testing.T) {
 	}
 
 	jm.RegisterRunner("echo", stubJobRunner{
-		run: func(ctx context.Context, req JobRequest) (*JobResult, error) {
+		run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+			_ = jobID
 			return nil, errors.New("runner failed")
 		},
 	})
@@ -198,7 +205,8 @@ func TestJobManagerReloadMarksNonTerminalJobsFailed(t *testing.T) {
 	}
 
 	jm.RegisterRunner("echo", stubJobRunner{
-		run: func(ctx context.Context, req JobRequest) (*JobResult, error) {
+		run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+			_ = jobID
 			<-ctx.Done()
 			return nil, ctx.Err()
 		},
@@ -241,7 +249,8 @@ func TestJobManagerStartRetriesJobIDCollision(t *testing.T) {
 	}
 
 	jm.RegisterRunner("echo", stubJobRunner{
-		run: func(ctx context.Context, req JobRequest) (*JobResult, error) {
+		run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+			_ = jobID
 			return &JobResult{Summary: "done"}, nil
 		},
 	})

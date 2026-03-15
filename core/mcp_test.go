@@ -13,11 +13,15 @@ import (
 )
 
 type mcpTestJobRunner struct {
-	run func(ctx context.Context, req JobRequest) (*JobResult, error)
+	run func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error)
 }
 
-func (r mcpTestJobRunner) Run(ctx context.Context, req JobRequest) (*JobResult, error) {
-	return r.run(ctx, req)
+func (r mcpTestJobRunner) Run(
+	ctx context.Context,
+	req JobRequest,
+	jobID string,
+) (*JobResult, error) {
+	return r.run(ctx, req, jobID)
 }
 
 type jobPayload struct {
@@ -45,7 +49,10 @@ func TestMCPServerTaskRunLifecycle(t *testing.T) {
 	}
 
 	done := make(chan struct{})
-	jm.RegisterRunner("demo", mcpTestJobRunner{run: func(ctx context.Context, req JobRequest) (*JobResult, error) {
+	jm.RegisterRunner("demo", mcpTestJobRunner{run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+		_ = ctx
+		_ = req
+		_ = jobID
 		close(done)
 		return &JobResult{
 			Output:    "raw output",
@@ -125,7 +132,9 @@ func TestMCPServerCancelTaskRun(t *testing.T) {
 
 	blocked := make(chan struct{})
 	release := make(chan struct{})
-	jm.RegisterRunner("demo", mcpTestJobRunner{run: func(ctx context.Context, req JobRequest) (*JobResult, error) {
+	jm.RegisterRunner("demo", mcpTestJobRunner{run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+		_ = req
+		_ = jobID
 		close(blocked)
 		select {
 		case <-ctx.Done():
@@ -190,7 +199,10 @@ func TestMCPServerRequiresBearerToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewJobManager: %v", err)
 	}
-	jm.RegisterRunner("demo", mcpTestJobRunner{run: func(ctx context.Context, req JobRequest) (*JobResult, error) {
+	jm.RegisterRunner("demo", mcpTestJobRunner{run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+		_ = ctx
+		_ = req
+		_ = jobID
 		return &JobResult{Summary: "ok"}, nil
 	}})
 

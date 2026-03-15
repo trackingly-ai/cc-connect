@@ -18,8 +18,12 @@ func (e *Engine) JobRunner() JobRunner {
 	return engineJobRunner{engine: e}
 }
 
-func (r engineJobRunner) Run(ctx context.Context, req JobRequest) (*JobResult, error) {
-	agentSession, err := r.engine.startAgentSession(ctx, "", r.engine.jobEnv(req))
+func (r engineJobRunner) Run(
+	ctx context.Context,
+	req JobRequest,
+	jobID string,
+) (*JobResult, error) {
+	agentSession, err := r.engine.StartJobSession(ctx, req, jobID)
 	if err != nil {
 		return nil, fmt.Errorf("start job session: %w", err)
 	}
@@ -97,6 +101,21 @@ func (e *Engine) startAgentSession(
 	return e.agent.StartSession(ctx, sessionID)
 }
 
+func (e *Engine) StartJobSession(
+	ctx context.Context,
+	req JobRequest,
+	jobID string,
+) (AgentSession, error) {
+	sessionID := "echo-job-" + strings.TrimSpace(jobID)
+	if sessionID == "echo-job-" {
+		sessionID = "echo-job-anonymous"
+	}
+	if err := validateJobWorkspace(req.WorkspaceRef); err != nil {
+		return nil, err
+	}
+	return e.startAgentSession(ctx, sessionID, e.jobEnv(req, jobID, sessionID))
+}
+
 func (e *Engine) sessionEnv(sessionKey string) []string {
 	envVars := []string{
 		"CC_PROJECT=" + e.name,
@@ -116,10 +135,14 @@ func (e *Engine) sessionEnv(sessionKey string) []string {
 	return envVars
 }
 
-func (e *Engine) jobEnv(req JobRequest) []string {
-	envVars := e.sessionEnv("job:" + req.TaskID)
+func (e *Engine) jobEnv(req JobRequest, jobID string, sessionID string) []string {
+	envVars := e.sessionEnv(sessionID)
 	if req.TaskID != "" {
 		envVars = append(envVars, "CC_TASK_ID="+req.TaskID)
+		envVars = append(envVars, "ECHO_TASK_ID="+req.TaskID)
+	}
+	if strings.TrimSpace(jobID) != "" {
+		envVars = append(envVars, "ECHO_JOB_ID="+strings.TrimSpace(jobID))
 	}
 	if req.WorkspaceRef.RepoPath != "" {
 		envVars = append(envVars, "CC_REPO_PATH="+req.WorkspaceRef.RepoPath)
@@ -131,6 +154,21 @@ func (e *Engine) jobEnv(req JobRequest) []string {
 		envVars = append(envVars, "CC_BRANCH="+req.WorkspaceRef.Branch)
 	}
 	return envVars
+}
+
+func validateJobWorkspace(workspaceRef JobWorkspaceRef) error {
+	worktreePath := strings.TrimSpace(workspaceRef.WorktreePath)
+	if worktreePath == "" {
+		return nil
+	}
+	info, err := os.Stat(worktreePath)
+	if err != nil {
+		return fmt.Errorf("stat worktree_path: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("worktree_path is not a directory: %s", worktreePath)
+	}
+	return nil
 }
 
 func summarizeJobOutput(output string) string {

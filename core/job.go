@@ -77,7 +77,7 @@ func (j *Job) clone() *Job {
 }
 
 type JobRunner interface {
-	Run(ctx context.Context, req JobRequest) (*JobResult, error)
+	Run(ctx context.Context, req JobRequest, jobID string) (*JobResult, error)
 }
 
 type managedJob struct {
@@ -247,7 +247,7 @@ func (jm *JobManager) runJob(
 		return
 	}
 
-	result, err := runner.Run(ctx, req)
+	result, err := runner.Run(ctx, req, jobID)
 	jm.finishJob(jobID, func(job *Job) {
 		now := time.Now().UTC()
 		job.FinishedAt = &now

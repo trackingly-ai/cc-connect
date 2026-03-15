@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -12,7 +13,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"encoding/json"
 	"unicode/utf8"
 
 	"github.com/chenhg5/cc-connect/core"
@@ -117,6 +117,7 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 	cmd := a.cmd
 	extraEnv := a.providerEnvLocked()
 	extraEnv = append(extraEnv, a.sessionEnv...)
+	workDir := core.SessionWorkDirFromEnv(extraEnv, a.workDir)
 	if a.activeIdx >= 0 && a.activeIdx < len(a.providers) {
 		if m := a.providers[a.activeIdx].Model; m != "" {
 			model = m
@@ -124,7 +125,7 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 	}
 	a.mu.Unlock()
 
-	return newCursorSession(ctx, cmd, a.workDir, model, mode, sessionID, extraEnv)
+	return newCursorSession(ctx, cmd, workDir, model, mode, sessionID, extraEnv)
 }
 
 // ListSessions reads sessions from ~/.cursor/chats/<workspace_hash>/.
