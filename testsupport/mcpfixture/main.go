@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -52,15 +53,24 @@ func main() {
 	<-sigCh
 }
 
-type fixtureAgent struct{}
+type fixtureAgent struct {
+	env []string
+}
 
 func (a *fixtureAgent) Name() string { return "fixture-agent" }
+
+func (a *fixtureAgent) SetSessionEnv(env []string) {
+	a.env = append([]string(nil), env...)
+}
 
 func (a *fixtureAgent) StartSession(
 	_ context.Context,
 	_ string,
 ) (core.AgentSession, error) {
-	return &fixtureSession{events: make(chan core.Event, 2)}, nil
+	return &fixtureSession{
+		events: make(chan core.Event, 2),
+		env:    append([]string(nil), a.env...),
+	}, nil
 }
 
 func (a *fixtureAgent) ListSessions(
@@ -73,6 +83,7 @@ func (a *fixtureAgent) Stop() error { return nil }
 
 type fixtureSession struct {
 	events chan core.Event
+	env    []string
 }
 
 func (s *fixtureSession) Send(prompt string, _ []core.ImageAttachment) error {
@@ -80,7 +91,7 @@ func (s *fixtureSession) Send(prompt string, _ []core.ImageAttachment) error {
 		time.Sleep(25 * time.Millisecond)
 		s.events <- core.Event{
 			Type:    core.EventResult,
-			Content: renderEchoResult(prompt),
+			Content: renderEchoResult(prompt, s.env),
 		}
 		close(s.events)
 	}()
@@ -102,15 +113,52 @@ func (s *fixtureSession) Alive() bool { return true }
 
 func (s *fixtureSession) Close() error { return nil }
 
-func renderEchoResult(prompt string) string {
+func renderEchoResult(prompt string, env []string) string {
+	workspaceSummary := renderWorkspaceSummary(env)
 	if strings.Contains(prompt, "- Type: review") {
-		return "```echo-result\n" +
-			"{\"status\":\"approved\",\"summary\":\"fixture approved review\"," +
-			"\"source_branch\":\"fixture/review-branch\"," +
-			"\"source_workspace_id\":\"fixture-workspace-1\"}\n```"
+		payload, err := json.Marshal(map[string]string{
+			"status":              "approved",
+			"summary":             "fixture approved review" + workspaceSummary,
+			"source_branch":       "fixture/review-branch",
+			"source_workspace_id": "fixture-workspace-1",
+		})
+		if err != nil {
+			panic(fmt.Sprintf("marshal review echo result: %v", err))
+		}
+		return "```echo-result\n" + string(payload) + "\n```"
+	}
+	payload, err := json.Marshal(map[string]string{
+		"status":  "completed",
+		"summary": "fixture completed: " + prompt + workspaceSummary,
+	})
+	if err != nil {
+		panic(fmt.Sprintf("marshal completed echo result: %v", err))
+	}
+	return "```echo-result\n" + string(payload) + "\n```"
+}
+
+func renderWorkspaceSummary(env []string) string {
+	repoPath := lookupEnv(env, "CC_REPO_PATH")
+	worktreePath := lookupEnv(env, "CC_WORKTREE_PATH")
+	branch := lookupEnv(env, "CC_BRANCH")
+	if repoPath == "" && worktreePath == "" && branch == "" {
+		return ""
 	}
 	return fmt.Sprintf(
-		"```echo-result\n{\"status\":\"completed\",\"summary\":%q}\n```",
-		"fixture completed: "+prompt,
+		" [repo=%s worktree=%s branch=%s]",
+		repoPath,
+		worktreePath,
+		branch,
 	)
+}
+
+func lookupEnv(env []string, key string) string {
+	prefix := key + "="
+	for i := len(env) - 1; i >= 0; i-- {
+		entry := env[i]
+		if strings.HasPrefix(entry, prefix) {
+			return strings.TrimPrefix(entry, prefix)
+		}
+	}
+	return ""
 }
