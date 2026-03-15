@@ -115,26 +115,47 @@ func (s *fixtureSession) Close() error { return nil }
 
 func renderEchoResult(prompt string, env []string) string {
 	workspaceSummary := renderWorkspaceSummary(env)
+	if strings.Contains(prompt, "human-resolution-smoke") {
+		switch {
+		case strings.Contains(prompt, "continuation_of_task_id"):
+			return mustRenderEchoResult(map[string]string{
+				"status":  "completed",
+				"summary": "fixture manager continuation completed" + workspaceSummary,
+			})
+		case strings.Contains(prompt, "continuation_context"), strings.Contains(prompt, "human_resolution"):
+			return mustRenderEchoResult(map[string]string{
+				"status":  "completed",
+				"summary": "fixture resumed after human resolution" + workspaceSummary,
+			})
+		default:
+			return mustRenderEchoResult(map[string]string{
+				"status":            "needs_human_input",
+				"summary":           "fixture requires human input" + workspaceSummary,
+				"blocked_reason":    "Need operator approval for rollout",
+				"continuation_hint": "Approve the Friday rollout window",
+			})
+		}
+	}
 	if strings.Contains(prompt, "- Type: review") {
-		payload, err := json.Marshal(map[string]string{
+		return mustRenderEchoResult(map[string]string{
 			"status":              "approved",
 			"summary":             "fixture approved review" + workspaceSummary,
 			"source_branch":       "fixture/review-branch",
 			"source_workspace_id": "fixture-workspace-1",
 		})
-		if err != nil {
-			panic(fmt.Sprintf("marshal review echo result: %v", err))
-		}
-		return "```echo-result\n" + string(payload) + "\n```"
 	}
-	payload, err := json.Marshal(map[string]string{
+	return mustRenderEchoResult(map[string]string{
 		"status":  "completed",
 		"summary": "fixture completed: " + prompt + workspaceSummary,
 	})
+}
+
+func mustRenderEchoResult(payload map[string]string) string {
+	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
-		panic(fmt.Sprintf("marshal completed echo result: %v", err))
+		panic(fmt.Sprintf("marshal echo result: %v", err))
 	}
-	return "```echo-result\n" + string(payload) + "\n```"
+	return "```echo-result\n" + string(payloadBytes) + "\n```"
 }
 
 func renderWorkspaceSummary(env []string) string {
