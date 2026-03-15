@@ -31,6 +31,13 @@ type jobPayload struct {
 	Error      string `json:"error"`
 }
 
+type workspacePayload struct {
+	Status       string `json:"status"`
+	RepoPath     string `json:"repo_path"`
+	BranchName   string `json:"branch_name"`
+	WorktreePath string `json:"worktree_path"`
+}
+
 func TestMCPServerTaskRunLifecycle(t *testing.T) {
 	jm, err := NewJobManager(t.TempDir())
 	if err != nil {
@@ -233,6 +240,61 @@ func TestMCPServerRequiresBearerToken(t *testing.T) {
 	}
 	if payload.Project != "demo" {
 		t.Fatalf("unexpected payload: %+v", payload)
+	}
+}
+
+func TestMCPServerWorkspaceLifecycle(t *testing.T) {
+	jm, err := NewJobManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewJobManager: %v", err)
+	}
+	repoPath := initGitRepo(t)
+	worktreePath := t.TempDir() + "/task-1"
+
+	httpServer := httptest.NewServer(NewMCPServer(jm, "").Handler())
+	defer httpServer.Close()
+
+	mcpClient := startMCPClient(t, httpServer.URL+"/mcp")
+	defer func() {
+		_ = mcpClient.Close()
+		time.Sleep(25 * time.Millisecond)
+	}()
+
+	var setupReq mcp.CallToolRequest
+	setupReq.Params.Name = "setup_workspace"
+	setupReq.Params.Arguments = map[string]any{
+		"repo_path":     repoPath,
+		"base_branch":   "main",
+		"branch_name":   "echo/task-1",
+		"worktree_path": worktreePath,
+	}
+	setupResult, err := mcpClient.CallTool(context.Background(), setupReq)
+	if err != nil {
+		t.Fatalf("setup_workspace: %v", err)
+	}
+
+	var setupPayload workspacePayload
+	if err := decodeStructuredResult(setupResult, &setupPayload); err != nil {
+		t.Fatalf("decode setup result: %v", err)
+	}
+	if setupPayload.Status != "ready" || setupPayload.WorktreePath != worktreePath {
+		t.Fatalf("unexpected setup payload: %+v", setupPayload)
+	}
+
+	var cleanupReq mcp.CallToolRequest
+	cleanupReq.Params.Name = "cleanup_workspace"
+	cleanupReq.Params.Arguments = map[string]any{"worktree_path": worktreePath}
+	cleanupResult, err := mcpClient.CallTool(context.Background(), cleanupReq)
+	if err != nil {
+		t.Fatalf("cleanup_workspace: %v", err)
+	}
+
+	var cleanupPayload workspacePayload
+	if err := decodeStructuredResult(cleanupResult, &cleanupPayload); err != nil {
+		t.Fatalf("decode cleanup result: %v", err)
+	}
+	if cleanupPayload.Status != "cleaned" || cleanupPayload.WorktreePath != worktreePath {
+		t.Fatalf("unexpected cleanup payload: %+v", cleanupPayload)
 	}
 }
 

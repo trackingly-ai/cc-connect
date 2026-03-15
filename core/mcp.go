@@ -110,6 +110,42 @@ func NewMCPServer(jm *JobManager, authToken string) *MCPServer {
 		return mcp.NewToolResultStructured(jobResponse(job), fmt.Sprintf("cancelled task run %s", job.ID)), nil
 	})
 
+	setupWorkspaceTool := mcp.NewTool("setup_workspace",
+		mcp.WithDescription("Create a git worktree workspace for a task."),
+		mcp.WithString("repo_path", mcp.Description("Repository root path."), mcp.Required()),
+		mcp.WithString("base_branch", mcp.Description("Branch or ref to branch from."), mcp.Required()),
+		mcp.WithString("branch_name", mcp.Description("Workspace branch name."), mcp.Required()),
+		mcp.WithString("worktree_path", mcp.Description("Destination worktree path."), mcp.Required()),
+	)
+	mcpSrv.AddTool(setupWorkspaceTool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		repoPath := strings.TrimSpace(req.GetString("repo_path", ""))
+		baseBranch := strings.TrimSpace(req.GetString("base_branch", ""))
+		branchName := strings.TrimSpace(req.GetString("branch_name", ""))
+		worktreePath := strings.TrimSpace(req.GetString("worktree_path", ""))
+		if err := SetupWorkspace(repoPath, baseBranch, branchName, worktreePath); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return mcp.NewToolResultStructured(
+			workspaceResponse("ready", repoPath, branchName, worktreePath),
+			fmt.Sprintf("prepared workspace %s", worktreePath),
+		), nil
+	})
+
+	cleanupWorkspaceTool := mcp.NewTool("cleanup_workspace",
+		mcp.WithDescription("Remove a git worktree workspace for a task."),
+		mcp.WithString("worktree_path", mcp.Description("Workspace worktree path."), mcp.Required()),
+	)
+	mcpSrv.AddTool(cleanupWorkspaceTool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		worktreePath := strings.TrimSpace(req.GetString("worktree_path", ""))
+		if err := CleanupWorkspace(worktreePath); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return mcp.NewToolResultStructured(
+			workspaceResponse("cleaned", "", "", worktreePath),
+			fmt.Sprintf("cleaned workspace %s", worktreePath),
+		), nil
+	})
+
 	handler := mcpserver.NewStreamableHTTPServer(mcpSrv)
 	return &MCPServer{
 		authToken: authToken,
@@ -226,4 +262,23 @@ func resultToText(result *mcp.CallToolResult) string {
 		text.WriteString(textContent.Text)
 	}
 	return text.String()
+}
+
+func workspaceResponse(
+	status string,
+	repoPath string,
+	branchName string,
+	worktreePath string,
+) map[string]any {
+	payload := map[string]any{
+		"status":        status,
+		"worktree_path": worktreePath,
+	}
+	if repoPath != "" {
+		payload["repo_path"] = repoPath
+	}
+	if branchName != "" {
+		payload["branch_name"] = branchName
+	}
+	return payload
 }
