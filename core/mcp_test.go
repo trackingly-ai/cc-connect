@@ -354,6 +354,11 @@ func TestMCPServerListAgents(t *testing.T) {
 	mcpClient := startMCPClient(t, httpServer.URL+"/mcp")
 	defer func() {
 		close(release)
+		for _, job := range jm.List() {
+			if job.Project == "alpha" {
+				waitForJobStatus(t, jm, job.ID, JobStatusCompleted)
+			}
+		}
 		_ = mcpClient.Close()
 		time.Sleep(25 * time.Millisecond)
 	}()
@@ -383,6 +388,146 @@ func TestMCPServerListAgents(t *testing.T) {
 	}
 	if payload.Agents[1].AgentType != "claudecode" {
 		t.Fatalf("unexpected beta agent type: %+v", payload.Agents[1])
+	}
+}
+
+func TestMCPServerConcurrentJobsAcrossProjects(t *testing.T) {
+	jm, err := NewJobManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewJobManager: %v", err)
+	}
+
+	alphaStarted := make(chan struct{})
+	betaStarted := make(chan struct{})
+	alphaRelease := make(chan struct{})
+	betaRelease := make(chan struct{})
+
+	jm.RegisterProject("alpha", "codex", mcpTestJobRunner{
+		run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+			if req.Project != "alpha" {
+				t.Fatalf("alpha req.Project = %q", req.Project)
+			}
+			if jobID == "" {
+				t.Fatal("expected alpha jobID")
+			}
+			close(alphaStarted)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-alphaRelease:
+				return &JobResult{Summary: "alpha done", SessionID: "alpha-session"}, nil
+			}
+		},
+	})
+	jm.RegisterProject("beta", "claudecode", mcpTestJobRunner{
+		run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+			if req.Project != "beta" {
+				t.Fatalf("beta req.Project = %q", req.Project)
+			}
+			if jobID == "" {
+				t.Fatal("expected beta jobID")
+			}
+			close(betaStarted)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-betaRelease:
+				return &JobResult{Summary: "beta done", SessionID: "beta-session"}, nil
+			}
+		},
+	})
+
+	httpServer := httptest.NewServer(NewMCPServer(jm, "").Handler())
+	defer httpServer.Close()
+
+	mcpClient := startMCPClient(t, httpServer.URL+"/mcp")
+	defer func() {
+		_ = mcpClient.Close()
+		time.Sleep(25 * time.Millisecond)
+	}()
+
+	startJob := func(project string, taskID string) jobPayload {
+		t.Helper()
+		var req mcp.CallToolRequest
+		req.Params.Name = "start_task_run"
+		req.Params.Arguments = map[string]any{
+			"project": project,
+			"task_id": taskID,
+			"prompt":  "run concurrently",
+		}
+		result, err := mcpClient.CallTool(context.Background(), req)
+		if err != nil {
+			t.Fatalf("start_task_run(%s): %v", project, err)
+		}
+		var payload jobPayload
+		if err := decodeStructuredResult(result, &payload); err != nil {
+			t.Fatalf("decode start payload: %v", err)
+		}
+		return payload
+	}
+
+	alphaJob := startJob("alpha", "task-alpha")
+	betaJob := startJob("beta", "task-beta")
+
+	select {
+	case <-alphaStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("alpha job did not start")
+	}
+	select {
+	case <-betaStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("beta job did not start")
+	}
+
+	var listReq mcp.CallToolRequest
+	listReq.Params.Name = "list_agents"
+	listResult, err := mcpClient.CallTool(context.Background(), listReq)
+	if err != nil {
+		t.Fatalf("list_agents: %v", err)
+	}
+	var listPayload listAgentsPayload
+	if err := decodeStructuredResult(listResult, &listPayload); err != nil {
+		t.Fatalf("decode list_agents: %v", err)
+	}
+	if len(listPayload.Agents) != 2 {
+		t.Fatalf("agent count = %d, want 2", len(listPayload.Agents))
+	}
+	for _, agent := range listPayload.Agents {
+		if agent.Status != "busy" || agent.ActiveJobs != 1 {
+			t.Fatalf("expected busy agent with 1 active job, got %+v", agent)
+		}
+	}
+
+	close(alphaRelease)
+	close(betaRelease)
+
+	waitForJobStatus(t, jm, alphaJob.ID, JobStatusCompleted)
+	waitForJobStatus(t, jm, betaJob.ID, JobStatusCompleted)
+
+	getJob := func(jobID string) jobPayload {
+		t.Helper()
+		var req mcp.CallToolRequest
+		req.Params.Name = "get_task_run"
+		req.Params.Arguments = map[string]any{"job_id": jobID}
+		result, err := mcpClient.CallTool(context.Background(), req)
+		if err != nil {
+			t.Fatalf("get_task_run(%s): %v", jobID, err)
+		}
+		var payload jobPayload
+		if err := decodeStructuredResult(result, &payload); err != nil {
+			t.Fatalf("decode get payload: %v", err)
+		}
+		return payload
+	}
+
+	fetchedAlpha := getJob(alphaJob.ID)
+	fetchedBeta := getJob(betaJob.ID)
+	if fetchedAlpha.Project != "alpha" || fetchedAlpha.Summary != "alpha done" {
+		t.Fatalf("unexpected alpha payload: %+v", fetchedAlpha)
+	}
+	if fetchedBeta.Project != "beta" || fetchedBeta.Summary != "beta done" {
+		t.Fatalf("unexpected beta payload: %+v", fetchedBeta)
 	}
 }
 

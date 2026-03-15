@@ -307,13 +307,15 @@ func TestJobManagerListAgents(t *testing.T) {
 		},
 	})
 
-	if _, err := jm.Start(JobRequest{Project: "alpha", Prompt: "busy"}); err != nil {
+	job, err := jm.Start(JobRequest{Project: "alpha", Prompt: "busy"})
+	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	<-blocked
 
 	agents := jm.ListAgents()
 	close(release)
+	waitForJobStatus(t, jm, job.ID, JobStatusCompleted)
 
 	if len(agents) != 2 {
 		t.Fatalf("agent count = %d, want 2", len(agents))

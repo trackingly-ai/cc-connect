@@ -339,18 +339,13 @@ func (jm *JobManager) finishJob(jobID string, mutate func(job *Job)) {
 	}
 	defer managed.cancel()
 	mutate(managed.job)
-	job := managed.job.clone()
-	jm.mu.Unlock()
-
-	if err := jm.saveJob(job); err != nil {
-		// Fall back to an in-memory failure so callers can still inspect state.
-		jm.mu.Lock()
-		if live := jm.jobs[jobID]; live != nil {
-			live.job.Status = JobStatusFailed
-			live.job.Error = fmt.Sprintf("persist finished job: %v", err)
-		}
-		jm.mu.Unlock()
+	// Persist the terminal state before unlocking so a concurrent restart does not
+	// observe an in-memory completion that was never durably written to disk.
+	if err := jm.saveJob(managed.job); err != nil {
+		managed.job.Status = JobStatusFailed
+		managed.job.Error = fmt.Sprintf("persist finished job: %v", err)
 	}
+	jm.mu.Unlock()
 }
 
 func (jm *JobManager) createUniqueJobIDLocked() (string, error) {
