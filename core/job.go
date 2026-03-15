@@ -19,6 +19,7 @@ const (
 	JobStatusCompleted = "completed"
 	JobStatusFailed    = "failed"
 	JobStatusCancelled = "cancelled"
+	JobStatusOrphaned  = "orphaned"
 )
 
 var newJobIDFunc = newJobID
@@ -392,7 +393,7 @@ func (jm *JobManager) load() error {
 		}
 		if !isTerminalJobStatus(job.Status) {
 			now := time.Now().UTC()
-			job.Status = JobStatusFailed
+			job.Status = JobStatusOrphaned
 			job.Error = "job interrupted by process restart"
 			if job.FinishedAt == nil {
 				job.FinishedAt = &now
@@ -423,7 +424,7 @@ func (jm *JobManager) saveJob(job *Job) error {
 
 func isTerminalJobStatus(status string) bool {
 	switch status {
-	case JobStatusCompleted, JobStatusFailed, JobStatusCancelled:
+	case JobStatusCompleted, JobStatusFailed, JobStatusCancelled, JobStatusOrphaned:
 		return true
 	default:
 		return false

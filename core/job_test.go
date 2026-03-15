@@ -197,7 +197,7 @@ func TestJobManagerRejectsUnknownProject(t *testing.T) {
 	}
 }
 
-func TestJobManagerReloadMarksNonTerminalJobsFailed(t *testing.T) {
+func TestJobManagerReloadMarksNonTerminalJobsOrphaned(t *testing.T) {
 	dataDir := t.TempDir()
 	jm, err := NewJobManager(dataDir)
 	if err != nil {
@@ -226,8 +226,8 @@ func TestJobManagerReloadMarksNonTerminalJobsFailed(t *testing.T) {
 	if !ok {
 		t.Fatalf("reloaded job %s not found", job.ID)
 	}
-	if recovered.Status != JobStatusFailed {
-		t.Fatalf("reloaded status = %s, want %s", recovered.Status, JobStatusFailed)
+	if recovered.Status != JobStatusOrphaned {
+		t.Fatalf("reloaded status = %s, want %s", recovered.Status, JobStatusOrphaned)
 	}
 	if recovered.Error != "job interrupted by process restart" {
 		t.Fatalf("reloaded error = %q", recovered.Error)
