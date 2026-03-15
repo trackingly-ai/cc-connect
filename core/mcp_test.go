@@ -51,6 +51,10 @@ func TestMCPServerTaskRunLifecycle(t *testing.T) {
 	defer httpServer.Close()
 
 	mcpClient := startMCPClient(t, httpServer.URL+"/mcp")
+	defer func() {
+		_ = mcpClient.Close()
+		time.Sleep(25 * time.Millisecond)
+	}()
 
 	var startReq mcp.CallToolRequest
 	startReq.Params.Name = "start_task_run"
@@ -84,6 +88,7 @@ func TestMCPServerTaskRunLifecycle(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("job did not complete")
 	}
+	waitForJobStatus(t, jm, started.ID, JobStatusCompleted)
 
 	var getReq mcp.CallToolRequest
 	getReq.Params.Name = "get_task_run"
@@ -127,6 +132,10 @@ func TestMCPServerCancelTaskRun(t *testing.T) {
 	defer httpServer.Close()
 
 	mcpClient := startMCPClient(t, httpServer.URL+"/mcp")
+	defer func() {
+		_ = mcpClient.Close()
+		time.Sleep(25 * time.Millisecond)
+	}()
 
 	var startReq mcp.CallToolRequest
 	startReq.Params.Name = "start_task_run"
@@ -166,6 +175,7 @@ func TestMCPServerCancelTaskRun(t *testing.T) {
 		t.Fatalf("unexpected cancelled payload: %+v", cancelled)
 	}
 	close(release)
+	waitForJobStatus(t, jm, started.ID, JobStatusCancelled)
 }
 
 func TestMCPServerRequiresBearerToken(t *testing.T) {
@@ -184,7 +194,10 @@ func TestMCPServerRequiresBearerToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStreamableHttpClient: %v", err)
 	}
-	defer unauthorizedClient.Close()
+	defer func() {
+		_ = unauthorizedClient.Close()
+		time.Sleep(25 * time.Millisecond)
+	}()
 	if err := unauthorizedClient.Start(context.Background()); err != nil {
 		t.Fatalf("Start unauthorized client: %v", err)
 	}
@@ -198,6 +211,10 @@ func TestMCPServerRequiresBearerToken(t *testing.T) {
 		httpServer.URL+"/mcp",
 		transport.WithHTTPHeaders(map[string]string{"Authorization": "Bearer secret"}),
 	)
+	defer func() {
+		_ = authorizedClient.Close()
+		time.Sleep(25 * time.Millisecond)
+	}()
 
 	var req mcp.CallToolRequest
 	req.Params.Name = "start_task_run"
@@ -237,9 +254,6 @@ func startMCPClient(
 	if err != nil {
 		t.Fatalf("NewStreamableHttpClient: %v", err)
 	}
-	t.Cleanup(func() {
-		mcpClient.Close()
-	})
 	if err := mcpClient.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}

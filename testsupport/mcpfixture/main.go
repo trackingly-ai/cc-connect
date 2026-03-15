@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -102,6 +103,12 @@ func (s *fixtureSession) Alive() bool { return true }
 func (s *fixtureSession) Close() error { return nil }
 
 func renderEchoResult(prompt string) string {
+	if strings.Contains(prompt, "- Type: review") {
+		return "```echo-result\n" +
+			"{\"status\":\"approved\",\"summary\":\"fixture approved review\"," +
+			"\"source_branch\":\"fixture/review-branch\"," +
+			"\"source_workspace_id\":\"fixture-workspace-1\"}\n```"
+	}
 	return fmt.Sprintf(
 		"```echo-result\n{\"status\":\"completed\",\"summary\":%q}\n```",
 		"fixture completed: "+prompt,
