@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,6 +20,7 @@ const (
 	JobStatusCompleted = "completed"
 	JobStatusFailed    = "failed"
 	JobStatusCancelled = "cancelled"
+	JobStatusTimedOut  = "timed_out"
 	JobStatusOrphaned  = "orphaned"
 )
 
@@ -312,7 +314,11 @@ func (jm *JobManager) runJob(
 		now := time.Now().UTC()
 		job.FinishedAt = &now
 		if ctx.Err() != nil {
-			job.Status = JobStatusCancelled
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				job.Status = JobStatusTimedOut
+			} else {
+				job.Status = JobStatusCancelled
+			}
 			job.Error = ctx.Err().Error()
 			return
 		}
@@ -419,7 +425,7 @@ func (jm *JobManager) saveJob(job *Job) error {
 
 func isTerminalJobStatus(status string) bool {
 	switch status {
-	case JobStatusCompleted, JobStatusFailed, JobStatusCancelled, JobStatusOrphaned:
+	case JobStatusCompleted, JobStatusFailed, JobStatusCancelled, JobStatusTimedOut, JobStatusOrphaned:
 		return true
 	default:
 		return false

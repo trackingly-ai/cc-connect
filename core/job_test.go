@@ -186,6 +186,39 @@ func TestJobManagerMarksFailedJob(t *testing.T) {
 	}
 }
 
+func TestJobManagerMarksTimedOutJob(t *testing.T) {
+	dataDir := t.TempDir()
+	jm, err := NewJobManager(dataDir)
+	if err != nil {
+		t.Fatalf("NewJobManager: %v", err)
+	}
+
+	jm.RegisterRunner("echo", stubJobRunner{
+		run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+			_ = req
+			_ = jobID
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	})
+
+	job, err := jm.Start(
+		JobRequest{
+			Project: "echo",
+			Prompt:  "timeout",
+			Timeout: 20 * time.Millisecond,
+		},
+	)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	timedOut := waitForJobStatus(t, jm, job.ID, JobStatusTimedOut)
+	if timedOut.Error != context.DeadlineExceeded.Error() {
+		t.Fatalf("Error = %q, want %q", timedOut.Error, context.DeadlineExceeded.Error())
+	}
+}
+
 func TestJobManagerRejectsUnknownProject(t *testing.T) {
 	jm, err := NewJobManager(t.TempDir())
 	if err != nil {
