@@ -130,3 +130,55 @@ func TestRenderEchoResultHumanResolutionFlow(t *testing.T) {
 		})
 	}
 }
+
+func TestRenderEchoResultReviewUsesPromptHints(t *testing.T) {
+	t.Parallel()
+
+	got := renderEchoResult(
+		"- Type: review\n- Input: {'source_branch_hint': 'echo/revision-2', 'source_workspace_id_hint': 'workspace-2'}",
+		nil,
+	)
+
+	for _, want := range []string{
+		`"status":"approved"`,
+		`"source_branch":"echo/revision-2"`,
+		`"source_workspace_id":"workspace-2"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("renderEchoResult() missing %q in %q", want, got)
+		}
+	}
+}
+
+func TestRenderEchoResultReviewCanRequestChanges(t *testing.T) {
+	t.Parallel()
+
+	got := renderEchoResult(
+		"- Type: review\n- Input: {'review_outcome_hint': 'changes_requested'}",
+		nil,
+	)
+
+	for _, want := range []string{
+		`"status":"changes_requested"`,
+		`fixture requested changes`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("renderEchoResult() missing %q in %q", want, got)
+		}
+	}
+}
+
+func TestRenderEchoResultLandCanFailBySourceBranch(t *testing.T) {
+	t.Parallel()
+
+	got := renderEchoResult("- Type: land\n- Source Branch: fixture/fail-land/initial", nil)
+
+	for _, want := range []string{
+		`"status":"failed"`,
+		`fixture land failed due to rebase conflict`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("renderEchoResult() missing %q in %q", want, got)
+		}
+	}
+}

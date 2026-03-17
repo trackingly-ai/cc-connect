@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -137,11 +138,39 @@ func renderEchoResult(prompt string, env []string) string {
 		}
 	}
 	if strings.Contains(prompt, "- Type: review") {
+		reviewOutcome := promptHint(prompt, "review_outcome_hint")
+		if reviewOutcome == "changes_requested" {
+			return mustRenderEchoResult(map[string]string{
+				"status":  "changes_requested",
+				"summary": "fixture requested changes" + workspaceSummary,
+			})
+		}
+		sourceBranch := promptHint(prompt, "source_branch_hint")
+		if sourceBranch == "" {
+			sourceBranch = "fixture/review-branch"
+		}
+		sourceWorkspaceID := promptHint(prompt, "source_workspace_id_hint")
+		if sourceWorkspaceID == "" {
+			sourceWorkspaceID = "fixture-workspace-1"
+		}
 		return mustRenderEchoResult(map[string]string{
 			"status":              "approved",
 			"summary":             "fixture approved review" + workspaceSummary,
-			"source_branch":       "fixture/review-branch",
-			"source_workspace_id": "fixture-workspace-1",
+			"source_branch":       sourceBranch,
+			"source_workspace_id": sourceWorkspaceID,
+		})
+	}
+	if strings.Contains(prompt, "- Type: land") {
+		sourceBranch := promptLineValue(prompt, "- Source Branch: ")
+		if strings.Contains(sourceBranch, "fixture/fail-land/") {
+			return mustRenderEchoResult(map[string]string{
+				"status":  "failed",
+				"summary": "fixture land failed due to rebase conflict" + workspaceSummary,
+			})
+		}
+		return mustRenderEchoResult(map[string]string{
+			"status":  "completed",
+			"summary": "fixture landed approved change" + workspaceSummary,
 		})
 	}
 	return mustRenderEchoResult(map[string]string{
@@ -179,6 +208,24 @@ func lookupEnv(env []string, key string) string {
 		entry := env[i]
 		if strings.HasPrefix(entry, prefix) {
 			return strings.TrimPrefix(entry, prefix)
+		}
+	}
+	return ""
+}
+
+func promptHint(prompt string, key string) string {
+	pattern := regexp.MustCompile(fmt.Sprintf(`['"]%s['"]:\s*['"]([^'"]+)['"]`, regexp.QuoteMeta(key)))
+	matches := pattern.FindStringSubmatch(prompt)
+	if len(matches) != 2 {
+		return ""
+	}
+	return matches[1]
+}
+
+func promptLineValue(prompt string, prefix string) string {
+	for _, line := range strings.Split(prompt, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(line, prefix))
 		}
 	}
 	return ""
