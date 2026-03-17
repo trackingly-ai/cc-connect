@@ -36,19 +36,27 @@ type codexSession struct {
 	alive     atomic.Bool
 
 	pendingMsgs []string // buffered agent_message texts awaiting classification
+
+	procMu sync.Mutex
+	cmd    *exec.Cmd
+	pid    int
+	pgid   int
+
+	closeTimeout time.Duration
 }
 
 func newCodexSession(ctx context.Context, workDir, model, mode, resumeID string, extraEnv []string) (*codexSession, error) {
 	sessionCtx, cancel := context.WithCancel(ctx)
 
 	cs := &codexSession{
-		workDir:  workDir,
-		model:    model,
-		mode:     mode,
-		extraEnv: extraEnv,
-		events:   make(chan core.Event, 64),
-		ctx:      sessionCtx,
-		cancel:   cancel,
+		workDir:      workDir,
+		model:        model,
+		mode:         mode,
+		extraEnv:     extraEnv,
+		events:       make(chan core.Event, 64),
+		ctx:          sessionCtx,
+		cancel:       cancel,
+		closeTimeout: 8 * time.Second,
 	}
 	cs.alive.Store(true)
 
@@ -107,6 +115,7 @@ func (cs *codexSession) Send(prompt string, images []core.ImageAttachment, files
 
 	cmd := exec.CommandContext(cs.ctx, "codex", args...)
 	cmd.Dir = cs.workDir
+	prepareCommandForGroupKill(cmd)
 	if len(cs.extraEnv) > 0 {
 		cmd.Env = core.MergeEnv(os.Environ(), cs.extraEnv)
 	}
@@ -122,6 +131,7 @@ func (cs *codexSession) Send(prompt string, images []core.ImageAttachment, files
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("codexSession: start: %w", err)
 	}
+	cs.trackProcess(cmd)
 
 	cs.wg.Add(1)
 	go cs.readLoop(cmd, stdout, &stderrBuf)
@@ -131,6 +141,7 @@ func (cs *codexSession) Send(prompt string, images []core.ImageAttachment, files
 
 func (cs *codexSession) readLoop(cmd *exec.Cmd, stdout io.ReadCloser, stderrBuf *bytes.Buffer) {
 	defer cs.wg.Done()
+	defer cs.clearProcess(cmd)
 	defer func() {
 		if err := cmd.Wait(); err != nil {
 			stderrMsg := strings.TrimSpace(stderrBuf.String())
@@ -461,8 +472,17 @@ func (cs *codexSession) Close() error {
 	}()
 	select {
 	case <-done:
-	case <-time.After(8 * time.Second):
-		slog.Warn("codexSession: close timed out, abandoning wg.Wait")
+	case <-time.After(cs.closeTimeout):
+		pid, pgid := cs.currentProcessInfo()
+		slog.Warn("codexSession: graceful close timed out, killing process group", "pid", pid, "pgid", pgid)
+		if err := cs.killRunningProcessGroup(); err != nil {
+			slog.Error("codexSession: kill process group failed", "pid", pid, "pgid", pgid, "error", err)
+		}
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			slog.Warn("codexSession: process group kill did not finish read loop in time", "pid", pid, "pgid", pgid)
+		}
 	}
 	return nil
 }
@@ -506,4 +526,49 @@ func truncate(s string, maxRunes int) string {
 		return s
 	}
 	return string([]rune(s)[:maxRunes]) + "..."
+}
+
+func (cs *codexSession) trackProcess(cmd *exec.Cmd) {
+	pid := 0
+	if cmd != nil && cmd.Process != nil {
+		pid = cmd.Process.Pid
+	}
+	pgid := processGroupID(cmd)
+
+	cs.procMu.Lock()
+	cs.cmd = cmd
+	cs.pid = pid
+	cs.pgid = pgid
+	cs.procMu.Unlock()
+
+	slog.Info("codexSession: process started", "pid", pid, "pgid", pgid)
+}
+
+func (cs *codexSession) clearProcess(cmd *exec.Cmd) {
+	cs.procMu.Lock()
+	if cs.cmd == cmd {
+		slog.Info("codexSession: process exited", "pid", cs.pid, "pgid", cs.pgid)
+		cs.cmd = nil
+		cs.pid = 0
+		cs.pgid = 0
+	}
+	cs.procMu.Unlock()
+}
+
+func (cs *codexSession) currentProcessInfo() (pid, pgid int) {
+	cs.procMu.Lock()
+	defer cs.procMu.Unlock()
+	return cs.pid, cs.pgid
+}
+
+func (cs *codexSession) killRunningProcessGroup() error {
+	cs.procMu.Lock()
+	cmd := cs.cmd
+	pid := cs.pid
+	pgid := cs.pgid
+	cs.procMu.Unlock()
+	if cmd == nil || pid == 0 {
+		return nil
+	}
+	return killCommandProcessGroup(cmd, pgid)
 }

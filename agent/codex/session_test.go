@@ -83,3 +83,63 @@ func TestSend_HandlesLargeJSONLines(t *testing.T) {
 		t.Fatalf("CurrentSessionID() = %q, want thread-large", got)
 	}
 }
+
+func TestClose_KillsProcessGroupAfterTimeout(t *testing.T) {
+	workDir := t.TempDir()
+	binDir := filepath.Join(workDir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+
+	script := `#!/bin/sh
+echo '{"type":"thread.started","thread_id":"thread-stuck"}'
+sh -c 'trap "" TERM INT; while :; do sleep 1; done' &
+child=$!
+wait $child
+`
+	scriptPath := filepath.Join(binDir, "codex")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake codex: %v", err)
+	}
+
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	cs, err := newCodexSession(context.Background(), workDir, "", "", "", nil)
+	if err != nil {
+		t.Fatalf("newCodexSession: %v", err)
+	}
+	cs.closeTimeout = 200 * time.Millisecond
+
+	if err := cs.Send("hello", nil, nil); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		pid, _ := cs.currentProcessInfo()
+		if pid != 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if pid, _ := cs.currentProcessInfo(); pid == 0 {
+		t.Fatal("expected codex process to start")
+	}
+
+	start := time.Now()
+	if err := cs.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("Close took too long: %v", elapsed)
+	}
+
+	select {
+	case _, ok := <-cs.Events():
+		if ok {
+			t.Fatal("expected events channel to be closed after forced kill")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for events channel to close")
+	}
+}
