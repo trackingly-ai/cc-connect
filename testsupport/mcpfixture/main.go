@@ -137,6 +137,12 @@ func renderEchoResult(prompt string, env []string) string {
 			})
 		}
 	}
+	if strings.Contains(prompt, "startup-recovery-remote-failure-smoke") {
+		return mustRenderEchoResult(map[string]string{
+			"status":  "failed",
+			"summary": "fixture failed during startup recovery" + workspaceSummary,
+		})
+	}
 	if strings.Contains(prompt, "- Type: review") {
 		reviewOutcome := promptHint(prompt, "review_outcome_hint")
 		if reviewOutcome == "changes_requested" {

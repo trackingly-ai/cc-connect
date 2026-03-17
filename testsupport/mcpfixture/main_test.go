@@ -168,6 +168,21 @@ func TestRenderEchoResultReviewCanRequestChanges(t *testing.T) {
 	}
 }
 
+func TestRenderEchoResultStartupRecoveryRemoteFailure(t *testing.T) {
+	t.Parallel()
+
+	got := renderEchoResult("startup-recovery-remote-failure-smoke", nil)
+
+	for _, want := range []string{
+		`"status":"failed"`,
+		`fixture failed during startup recovery`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("renderEchoResult() missing %q in %q", want, got)
+		}
+	}
+}
+
 func TestRenderEchoResultLandCanFailBySourceBranch(t *testing.T) {
 	t.Parallel()
 
