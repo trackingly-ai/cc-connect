@@ -51,7 +51,7 @@ func TestSend_HandlesLargeJSONLines(t *testing.T) {
 	}
 	defer cs.Close()
 
-	if err := cs.Send("hello", nil); err != nil {
+	if err := cs.Send("hello", nil, nil); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 

@@ -86,7 +86,7 @@ type fixtureSession struct {
 	env    []string
 }
 
-func (s *fixtureSession) Send(prompt string, _ []core.ImageAttachment) error {
+func (s *fixtureSession) Send(prompt string, _ []core.ImageAttachment, _ []core.FileAttachment) error {
 	go func() {
 		time.Sleep(25 * time.Millisecond)
 		s.events <- core.Event{

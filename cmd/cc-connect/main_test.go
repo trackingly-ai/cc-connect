@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/chenhg5/cc-connect/config"
 	"github.com/chenhg5/cc-connect/core"
@@ -26,7 +27,7 @@ func (a *buildJobManagerTestAgent) Stop() error { return nil }
 
 type buildJobManagerTestSession struct{}
 
-func (s *buildJobManagerTestSession) Send(_ string, _ []core.ImageAttachment) error {
+func (s *buildJobManagerTestSession) Send(_ string, _ []core.ImageAttachment, _ []core.FileAttachment) error {
 	return nil
 }
 func (s *buildJobManagerTestSession) RespondPermission(
@@ -67,4 +68,14 @@ func TestBuildJobManagerRegistersProjectRunners(t *testing.T) {
 	if job.Project != "proj-b" {
 		t.Fatalf("unexpected project: %q", job.Project)
 	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		current, ok := jobMgr.Get(job.ID)
+		if ok && current.Status == core.JobStatusCompleted {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("job %s did not complete in time", job.ID)
 }

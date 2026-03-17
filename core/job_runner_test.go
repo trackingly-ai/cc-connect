@@ -36,7 +36,7 @@ type jobTestSession struct {
 	onSend func(prompt string)
 }
 
-func (s *jobTestSession) Send(prompt string, _ []ImageAttachment) error {
+func (s *jobTestSession) Send(prompt string, _ []ImageAttachment, _ []FileAttachment) error {
 	if s.onSend != nil {
 		s.onSend(prompt)
 	}

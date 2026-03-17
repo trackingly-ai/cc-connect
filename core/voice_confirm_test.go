@@ -73,7 +73,7 @@ func newVoiceTestSession() *voiceTestSession {
 	}
 }
 
-func (s *voiceTestSession) Send(prompt string, _ []ImageAttachment) error {
+func (s *voiceTestSession) Send(prompt string, _ []ImageAttachment, _ []FileAttachment) error {
 	s.sendCh <- prompt
 	s.events <- Event{Type: EventResult, Content: "done", Done: true}
 	return nil

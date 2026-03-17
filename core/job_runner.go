@@ -29,7 +29,7 @@ func (r engineJobRunner) Run(
 	}
 	defer agentSession.Close()
 
-	if err := agentSession.Send(req.Prompt, nil); err != nil {
+	if err := agentSession.Send(req.Prompt, nil, nil); err != nil {
 		return nil, fmt.Errorf("send job prompt: %w", err)
 	}
 
