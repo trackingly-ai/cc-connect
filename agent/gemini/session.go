@@ -60,7 +60,7 @@ func newGeminiSession(ctx context.Context, cmd, workDir, model, mode, resumeID s
 	return gs, nil
 }
 
-func (gs *geminiSession) Send(prompt string, images []core.ImageAttachment) error {
+func (gs *geminiSession) Send(prompt string, images []core.ImageAttachment, files []core.FileAttachment) error {
 	if !gs.alive.Load() {
 		return fmt.Errorf("session is closed")
 	}
@@ -112,10 +112,15 @@ func (gs *geminiSession) Send(prompt string, images []core.ImageAttachment) erro
 		args = append(args, "-m", gs.model)
 	}
 
-	// Build the prompt with image file references
+	fileRefs := core.SaveFilesToDisk(gs.workDir, files)
+
+	// Build the prompt with image/file references
 	fullPrompt := prompt
 	if len(imageRefs) > 0 {
 		fullPrompt = strings.Join(imageRefs, " ") + " " + prompt
+	}
+	if len(fileRefs) > 0 {
+		fullPrompt = strings.Join(fileRefs, " ") + " " + strings.TrimSpace(fullPrompt)
 	}
 
 	args = append(args, "-p", fullPrompt)
@@ -201,12 +206,13 @@ func (gs *geminiSession) readLoop(cmd *exec.Cmd, stdout io.ReadCloser, stderrBuf
 }
 
 // Gemini CLI stream-json event types:
-//   init       — session_id, model
-//   message    — role (user/assistant), content, delta
-//   tool_use   — tool_name, tool_id, parameters
-//   tool_result — tool_id, status, output, error
-//   error      — severity, message
-//   result     — status, stats (final event)
+//
+//	init       — session_id, model
+//	message    — role (user/assistant), content, delta
+//	tool_use   — tool_name, tool_id, parameters
+//	tool_result — tool_id, status, output, error
+//	error      — severity, message
+//	result     — status, stats (final event)
 func (gs *geminiSession) handleEvent(raw map[string]any) {
 	eventType, _ := raw["type"].(string)
 

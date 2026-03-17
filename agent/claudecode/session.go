@@ -325,10 +325,12 @@ func (cs *claudeSession) handleControlRequest(raw map[string]any) {
 // Images are saved to local temp files first, then sent as base64 in the
 // multimodal content array. File paths are also mentioned in the text prompt
 // as a fallback so Claude Code can read them with its built-in tools.
-func (cs *claudeSession) Send(prompt string, images []core.ImageAttachment) error {
+func (cs *claudeSession) Send(prompt string, images []core.ImageAttachment, files []core.FileAttachment) error {
 	if !cs.alive.Load() {
 		return fmt.Errorf("session process is not running")
 	}
+	filePaths := core.SaveFilesToDisk(cs.workDir, files)
+	prompt = core.AppendFileRefs(prompt, filePaths)
 
 	if len(images) == 0 {
 		return cs.writeJSON(map[string]any{
@@ -375,8 +377,9 @@ func (cs *claudeSession) Send(prompt string, images []core.ImageAttachment) erro
 	if textPart == "" {
 		textPart = "Please analyze the attached image(s)."
 	}
-	if len(savedPaths) > 0 {
-		textPart += "\n\n(Images also saved locally: " + strings.Join(savedPaths, ", ") + ")"
+	if len(savedPaths) > 0 || len(filePaths) > 0 {
+		refs := append(append([]string{}, savedPaths...), filePaths...)
+		textPart += "\n\n(Local files: " + strings.Join(refs, ", ") + ")"
 	}
 	parts = append(parts, map[string]any{"type": "text", "text": textPart})
 

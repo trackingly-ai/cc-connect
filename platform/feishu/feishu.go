@@ -330,6 +330,32 @@ func (p *Platform) onMessage(event *larkim.P2MessageReceiveV1) error {
 			ReplyCtx: rctx,
 		})
 
+	case "file":
+		var fileBody struct {
+			FileKey  string `json:"file_key"`
+			FileName string `json:"file_name"`
+		}
+		if err := json.Unmarshal([]byte(*msg.Content), &fileBody); err != nil {
+			slog.Error("feishu: failed to parse file content", "error", err)
+			return nil
+		}
+		fileData, err := p.downloadResource(messageID, fileBody.FileKey, "file")
+		if err != nil {
+			slog.Error("feishu: download file failed", "error", err)
+			return nil
+		}
+		p.handler(p, &core.Message{
+			SessionKey: sessionKey, Platform: "feishu",
+			MessageID: messageID,
+			UserID:    userID, UserName: userName,
+			Files: []core.FileAttachment{{
+				MimeType: detectMimeType(fileData),
+				Data:     fileData,
+				FileName: fileBody.FileName,
+			}},
+			ReplyCtx: rctx,
+		})
+
 	case "post":
 		textParts, images := p.parsePostContent(messageID, *msg.Content)
 		text := stripMentions(strings.Join(textParts, "\n"), msg.Mentions)
