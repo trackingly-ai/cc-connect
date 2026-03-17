@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,20 @@ func (a *stubAgent) StartSession(_ context.Context, _ string) (AgentSession, err
 }
 func (a *stubAgent) ListSessions(_ context.Context) ([]AgentSessionInfo, error) { return nil, nil }
 func (a *stubAgent) Stop() error                                                { return nil }
+
+type recordingResumeAgent struct {
+	resumeIDs []string
+}
+
+func (a *recordingResumeAgent) Name() string { return "recording" }
+func (a *recordingResumeAgent) StartSession(_ context.Context, sessionID string) (AgentSession, error) {
+	a.resumeIDs = append(a.resumeIDs, sessionID)
+	return &stubAgentSession{}, nil
+}
+func (a *recordingResumeAgent) ListSessions(_ context.Context) ([]AgentSessionInfo, error) {
+	return nil, nil
+}
+func (a *recordingResumeAgent) Stop() error { return nil }
 
 type stubAgentSession struct{}
 
@@ -143,6 +158,103 @@ func TestProcessInteractiveEvents_BindsSessionIDFromResultEvent(t *testing.T) {
 
 	if session.AgentSessionID != "codex-thread-123" {
 		t.Fatalf("AgentSessionID = %q, want codex-thread-123", session.AgentSessionID)
+	}
+}
+
+func TestSessionIDPersistsAcrossReloadForAgentPatterns(t *testing.T) {
+	cases := []struct {
+		name      string
+		events    []Event
+		sessionID string
+	}{
+		{
+			name: "claudecode",
+			events: []Event{
+				{Type: EventText, SessionID: "claude-session-1"},
+				{Type: EventResult, Done: true},
+			},
+			sessionID: "claude-session-1",
+		},
+		{
+			name: "gemini",
+			events: []Event{
+				{Type: EventText, SessionID: "gemini-session-1"},
+				{Type: EventResult, SessionID: "gemini-session-1", Done: true},
+			},
+			sessionID: "gemini-session-1",
+		},
+		{
+			name: "cursor",
+			events: []Event{
+				{Type: EventText, SessionID: "cursor-session-1"},
+				{Type: EventResult, SessionID: "cursor-session-1", Done: true},
+			},
+			sessionID: "cursor-session-1",
+		},
+		{
+			name: "codex",
+			events: []Event{
+				{Type: EventResult, SessionID: "codex-thread-1", Done: true},
+			},
+			sessionID: "codex-thread-1",
+		},
+		{
+			name: "qoder",
+			events: []Event{
+				{Type: EventResult, SessionID: "qoder-session-1", Done: true},
+			},
+			sessionID: "qoder-session-1",
+		},
+		{
+			name: "opencode",
+			events: []Event{
+				{Type: EventResult, SessionID: "opencode-session-1", Done: true},
+			},
+			sessionID: "opencode-session-1",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			storePath := filepath.Join(t.TempDir(), "sessions.json")
+			sessionKey := "feishu:chat:user"
+			p := &stubPlatformEngine{n: "test"}
+
+			e1 := NewEngine("test", &stubAgent{}, []Platform{p}, storePath, LangEnglish)
+			session1 := e1.sessions.GetOrCreateActive(sessionKey)
+			eventCh := make(chan Event, len(tc.events))
+			for _, evt := range tc.events {
+				eventCh <- evt
+			}
+			close(eventCh)
+
+			state := &interactiveState{
+				agentSession: &eventfulStubAgentSession{events: eventCh},
+				platform:     p,
+				replyCtx:     "ctx",
+			}
+			e1.processInteractiveEvents(state, session1, sessionKey, "msg-1", time.Now())
+
+			if session1.AgentSessionID != tc.sessionID {
+				t.Fatalf("stored AgentSessionID = %q, want %q", session1.AgentSessionID, tc.sessionID)
+			}
+
+			agent2 := &recordingResumeAgent{}
+			e2 := NewEngine("test", agent2, []Platform{p}, storePath, LangEnglish)
+			session2 := e2.sessions.GetOrCreateActive(sessionKey)
+
+			if session2.AgentSessionID != tc.sessionID {
+				t.Fatalf("reloaded AgentSessionID = %q, want %q", session2.AgentSessionID, tc.sessionID)
+			}
+
+			state2 := e2.getOrCreateInteractiveState(sessionKey, p, "ctx", session2)
+			if state2 == nil || state2.agentSession == nil {
+				t.Fatal("expected restarted interactive state to have an agent session")
+			}
+			if len(agent2.resumeIDs) != 1 || agent2.resumeIDs[0] != tc.sessionID {
+				t.Fatalf("resumeIDs = %#v, want [%q]", agent2.resumeIDs, tc.sessionID)
+			}
+		})
 	}
 }
 
