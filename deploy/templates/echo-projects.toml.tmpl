@@ -1,0 +1,54 @@
+[mcp]
+enabled = true
+listen = "{{CC_MCP_HOST}}:{{CC_MCP_PORT}}"
+auth_token = "{{CC_MCP_AUTH_TOKEN}}"
+
+[[projects]]
+name = "echo-manager-claude"
+
+[projects.agent]
+type = "claudecode"
+
+[projects.agent.options]
+work_dir = "{{ECHO_REPO_DIR}}"
+mode = "{{CLAUDE_MANAGER_MODE}}"
+
+[[projects]]
+name = "echo-architect-codex"
+
+[projects.agent]
+type = "codex"
+
+[projects.agent.options]
+work_dir = "{{ECHO_REPO_DIR}}"
+mode = "{{CODEX_ARCHITECT_MODE}}"
+
+[[projects]]
+name = "echo-coder-codex"
+
+[projects.agent]
+type = "codex"
+
+[projects.agent.options]
+work_dir = "{{ECHO_REPO_DIR}}"
+mode = "{{CODEX_CODER_MODE}}"
+
+[[projects]]
+name = "echo-reviewer-qoder"
+
+[projects.agent]
+type = "qoder"
+
+[projects.agent.options]
+work_dir = "{{ECHO_REPO_DIR}}"
+mode = "{{QODER_REVIEWER_MODE}}"
+
+[[projects]]
+name = "echo-lander-codex"
+
+[projects.agent]
+type = "codex"
+
+[projects.agent.options]
+work_dir = "{{ECHO_REPO_DIR}}"
+mode = "{{CODEX_LANDER_MODE}}"

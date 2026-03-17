@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>{{LAUNCHD_CC_CONNECT_LABEL}}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{{RUN_CC_CONNECT_SCRIPT}}</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>{{CC_CONNECT_REPO_DIR}}</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>{{LAUNCHD_PATH}}</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>{{LOG_DIR}}/cc-connect.log</string>
+  <key>StandardErrorPath</key>
+  <string>{{LOG_DIR}}/cc-connect.log</string>
+</dict>
+</plist>

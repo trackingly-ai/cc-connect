@@ -13,6 +13,12 @@ test
 RELEASE.md
 .npmrc
 scripts
+!scripts/
+scripts/*
+!scripts/deploy/
+scripts/deploy/*
+!scripts/deploy/install_echo_worker.sh
+!scripts/deploy/render_echo_single_host.py
 .bin/
 .gocache/
 .gomodcache/

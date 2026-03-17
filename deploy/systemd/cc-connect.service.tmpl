@@ -1,0 +1,16 @@
+[Unit]
+Description=cc-connect for Echo
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory={{CC_CONNECT_REPO_DIR}}
+ExecStart={{RUN_CC_CONNECT_SCRIPT}}
+Restart=always
+RestartSec=5
+StandardOutput=append:{{LOG_DIR}}/cc-connect.log
+StandardError=append:{{LOG_DIR}}/cc-connect.log
+
+[Install]
+WantedBy=default.target
