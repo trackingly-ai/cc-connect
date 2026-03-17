@@ -287,6 +287,19 @@ func (e *Engine) SetCronScheduler(cs *CronScheduler) {
 	e.cronScheduler = cs
 }
 
+// ActiveSessionKeys returns session keys that currently have interactive state.
+func (e *Engine) ActiveSessionKeys() []string {
+	e.interactiveMu.Lock()
+	defer e.interactiveMu.Unlock()
+
+	keys := make([]string, 0, len(e.interactiveStates))
+	for key := range e.interactiveStates {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 func (e *Engine) SetCommandSaveAddFunc(fn func(name, description, prompt, exec, workDir string) error) {
 	e.commandSaveAddFunc = fn
 }
@@ -446,9 +459,17 @@ func (e *Engine) ExecuteCronJob(job *CronJob) error {
 	if !silent {
 		desc := job.Description
 		if desc == "" {
-			desc = truncateStr(job.Prompt, 40)
+			if job.IsShellJob() {
+				desc = truncateStr(job.Exec, 40)
+			} else {
+				desc = truncateStr(job.Prompt, 40)
+			}
 		}
 		e.send(targetPlatform, replyCtx, fmt.Sprintf("⏰ %s", desc))
+	}
+
+	if job.IsShellJob() {
+		return e.executeCronShell(targetPlatform, replyCtx, job)
 	}
 
 	msg := &Message{
@@ -466,6 +487,46 @@ func (e *Engine) ExecuteCronJob(job *CronJob) error {
 	}
 
 	e.processInteractiveMessage(targetPlatform, msg, session)
+	return nil
+}
+
+func (e *Engine) executeCronShell(p Platform, replyCtx any, job *CronJob) error {
+	workDir := job.WorkDir
+	if workDir == "" {
+		if wd, ok := e.agent.(interface{ GetWorkDir() string }); ok {
+			workDir = wd.GetWorkDir()
+		}
+	}
+	if workDir == "" {
+		workDir, _ = os.Getwd()
+	}
+
+	ctx, cancel := context.WithTimeout(e.ctx, cronJobTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "sh", "-c", job.Exec)
+	cmd.Dir = workDir
+	output, err := cmd.CombinedOutput()
+
+	if ctx.Err() == context.DeadlineExceeded {
+		e.send(p, replyCtx, fmt.Sprintf("⏰ ⚠️ timeout: `%s`", truncateStr(job.Exec, 60)))
+		return fmt.Errorf("shell command timed out")
+	}
+
+	result := strings.TrimSpace(string(output))
+	if err != nil {
+		if result != "" {
+			e.send(p, replyCtx, fmt.Sprintf("⏰ ❌ `%s`\n\n%s\n\nerror: %v", truncateStr(job.Exec, 60), truncateStr(result, 3000), err))
+		} else {
+			e.send(p, replyCtx, fmt.Sprintf("⏰ ❌ `%s`\nerror: %v", truncateStr(job.Exec, 60), err))
+		}
+		return fmt.Errorf("shell: %w", err)
+	}
+
+	if result == "" {
+		result = "(no output)"
+	}
+	e.send(p, replyCtx, fmt.Sprintf("⏰ ✅ `%s`\n\n%s", truncateStr(job.Exec, 60), truncateStr(result, 3000)))
 	return nil
 }
 
@@ -1588,6 +1649,7 @@ var builtinCommands = []struct {
 	{[]string{"bind"}, "bind"},
 	{[]string{"search", "find"}, "search"},
 	{[]string{"shell", "sh", "exec", "run"}, "shell"},
+	{[]string{"dir", "cd", "chdir", "workdir"}, "dir"},
 	{[]string{"tts"}, "tts"},
 }
 
@@ -1716,6 +1778,8 @@ func (e *Engine) handleCommand(p Platform, msg *Message, raw string) bool {
 		e.cmdSearch(p, msg, args)
 	case "shell":
 		e.cmdShell(p, msg, raw)
+	case "dir":
+		e.cmdDir(p, msg, args)
 	case "tts":
 		e.cmdTTS(p, msg, args)
 	default:
@@ -1965,6 +2029,51 @@ func (e *Engine) cmdShell(p Platform, msg *Message, raw string) {
 
 		e.reply(p, msg.ReplyCtx, fmt.Sprintf("$ %s\n```\n%s\n```", shellCmd, result))
 	}()
+}
+
+func (e *Engine) cmdDir(p Platform, msg *Message, args []string) {
+	switcher, ok := e.agent.(WorkDirSwitcher)
+	if !ok {
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgDirNotSupported))
+		return
+	}
+
+	if len(args) == 0 {
+		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgDirCurrent, switcher.GetWorkDir()))
+		return
+	}
+	if len(args) == 1 {
+		switch strings.ToLower(strings.TrimSpace(args[0])) {
+		case "help", "-h", "--help":
+			e.reply(p, msg.ReplyCtx, e.i18n.T(MsgDirUsage))
+			return
+		}
+	}
+
+	newDir := filepath.Clean(strings.Join(args, " "))
+	if !filepath.IsAbs(newDir) {
+		baseDir := switcher.GetWorkDir()
+		if baseDir == "" {
+			baseDir, _ = os.Getwd()
+		}
+		newDir = filepath.Join(baseDir, newDir)
+	}
+
+	info, err := os.Stat(newDir)
+	if err != nil || !info.IsDir() {
+		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgDirInvalidPath, newDir))
+		return
+	}
+
+	switcher.SetWorkDir(newDir)
+	e.cleanupInteractiveState(msg.SessionKey)
+
+	s := e.sessions.GetOrCreateActive(msg.SessionKey)
+	s.AgentSessionID = ""
+	s.ClearHistory()
+	e.sessions.Save()
+
+	e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgDirChanged, newDir))
 }
 
 // cmdSearch searches sessions by name or message content.
@@ -3292,11 +3401,13 @@ func (e *Engine) cmdCron(p Platform, msg *Message, args []string) {
 	}
 
 	sub := matchSubCommand(strings.ToLower(args[0]), []string{
-		"add", "list", "del", "delete", "rm", "remove", "enable", "disable",
+		"add", "addexec", "list", "del", "delete", "rm", "remove", "enable", "disable", "setup",
 	})
 	switch sub {
 	case "add":
 		e.cmdCronAdd(p, msg, args[1:])
+	case "addexec":
+		e.cmdCronAddExec(p, msg, args[1:])
 	case "list":
 		e.cmdCronList(p, msg)
 	case "del", "delete", "rm", "remove":
@@ -3305,6 +3416,8 @@ func (e *Engine) cmdCron(p Platform, msg *Message, args []string) {
 		e.cmdCronToggle(p, msg, args[1:], true)
 	case "disable":
 		e.cmdCronToggle(p, msg, args[1:], false)
+	case "setup":
+		e.cmdCronSetup(p, msg)
 	default:
 		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgCronUsage))
 	}
@@ -3338,6 +3451,32 @@ func (e *Engine) cmdCronAdd(p Platform, msg *Message, args []string) {
 	e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgCronAdded), job.ID, cronExpr, truncateStr(prompt, 60)))
 }
 
+func (e *Engine) cmdCronAddExec(p Platform, msg *Message, args []string) {
+	if len(args) < 6 {
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgCronAddExecUsage))
+		return
+	}
+
+	cronExpr := strings.Join(args[:5], " ")
+	shellCmd := strings.Join(args[5:], " ")
+	job := &CronJob{
+		ID:         GenerateCronID(),
+		Project:    e.name,
+		SessionKey: msg.SessionKey,
+		CronExpr:   cronExpr,
+		Exec:       shellCmd,
+		Enabled:    true,
+		CreatedAt:  time.Now(),
+	}
+
+	if err := e.cronScheduler.AddJob(job); err != nil {
+		e.reply(p, msg.ReplyCtx, fmt.Sprintf("❌ %v", err))
+		return
+	}
+
+	e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgCronAddedExec), job.ID, cronExpr, truncateStr(shellCmd, 60)))
+}
+
 func (e *Engine) cmdCronList(p Platform, msg *Message) {
 	jobs := e.cronScheduler.Store().ListBySessionKey(msg.SessionKey)
 	if len(jobs) == 0 {
@@ -3363,7 +3502,11 @@ func (e *Engine) cmdCronList(p Platform, msg *Message) {
 		}
 		desc := j.Description
 		if desc == "" {
-			desc = truncateStr(j.Prompt, 60)
+			if j.IsShellJob() {
+				desc = truncateStr(j.Exec, 60)
+			} else {
+				desc = truncateStr(j.Prompt, 60)
+			}
 		}
 		sb.WriteString(fmt.Sprintf("%s %s\n", status, desc))
 
@@ -3425,6 +3568,22 @@ func (e *Engine) cmdCronToggle(p Platform, msg *Message, args []string, enable b
 		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgCronEnabled), id))
 	} else {
 		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgCronDisabled), id))
+	}
+}
+
+func (e *Engine) cmdCronSetup(p Platform, msg *Message) {
+	result, baseName, err := e.setupMemoryFile()
+	switch result {
+	case setupNative:
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgSetupNative))
+	case setupNoMemory:
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgRelaySetupNoMemory))
+	case setupExists:
+		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgRelaySetupExists), baseName))
+	case setupError:
+		e.reply(p, msg.ReplyCtx, fmt.Sprintf("❌ %v", err))
+	case setupOK:
+		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgCronSetupOK), baseName))
 	}
 }
 
@@ -4430,42 +4589,67 @@ func (e *Engine) cmdBindStatus(p Platform, replyCtx any, chatID string) {
 
 const ccConnectInstructionMarker = "<!-- cc-connect-instructions -->"
 
-func (e *Engine) cmdBindSetup(p Platform, msg *Message) {
+type setupResult int
+
+const (
+	setupOK setupResult = iota
+	setupExists
+	setupNative
+	setupNoMemory
+	setupError
+)
+
+func (e *Engine) setupMemoryFile() (setupResult, string, error) {
+	if _, ok := e.agent.(SystemPromptSupporter); ok {
+		return setupNative, "", nil
+	}
+
 	mp, ok := e.agent.(MemoryFileProvider)
 	if !ok {
-		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgRelaySetupNoMemory))
-		return
+		return setupNoMemory, "", nil
 	}
 
 	filePath := mp.ProjectMemoryFile()
 	if filePath == "" {
-		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgRelaySetupNoMemory))
-		return
+		return setupNoMemory, "", nil
 	}
 
+	baseName := filepath.Base(filePath)
 	existing, _ := os.ReadFile(filePath)
 	if strings.Contains(string(existing), ccConnectInstructionMarker) {
-		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgRelaySetupExists), filepath.Base(filePath)))
-		return
+		return setupExists, baseName, nil
 	}
 
 	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
-		e.reply(p, msg.ReplyCtx, fmt.Sprintf("❌ %v", err))
-		return
+		return setupError, baseName, err
 	}
 
 	f, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
-		e.reply(p, msg.ReplyCtx, fmt.Sprintf("❌ %v", err))
-		return
+		return setupError, baseName, err
 	}
 	defer f.Close()
 
 	block := "\n" + ccConnectInstructionMarker + "\n" + AgentSystemPrompt() + "\n"
 	if _, err := f.WriteString(block); err != nil {
-		e.reply(p, msg.ReplyCtx, fmt.Sprintf("❌ %v", err))
-		return
+		return setupError, baseName, err
 	}
 
-	e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgRelaySetupOK), filepath.Base(filePath)))
+	return setupOK, baseName, nil
+}
+
+func (e *Engine) cmdBindSetup(p Platform, msg *Message) {
+	result, baseName, err := e.setupMemoryFile()
+	switch result {
+	case setupNative:
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgSetupNative))
+	case setupNoMemory:
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgRelaySetupNoMemory))
+	case setupExists:
+		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgRelaySetupExists), baseName))
+	case setupError:
+		e.reply(p, msg.ReplyCtx, fmt.Sprintf("❌ %v", err))
+	case setupOK:
+		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgRelaySetupOK), baseName))
+	}
 }

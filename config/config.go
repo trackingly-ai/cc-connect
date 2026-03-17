@@ -98,7 +98,7 @@ type SpeechConfig struct {
 // TTSConfig configures text-to-speech output (mirrors SpeechConfig style).
 type TTSConfig struct {
 	Enabled         bool   `toml:"enabled"`
-	Provider        string `toml:"provider"`                    // "qwen" | "openai"
+	Provider        string `toml:"provider"`                    // "qwen" | "openai" | "minimax"
 	Voice           string `toml:"voice"`                       // default voice name
 	TTSMode         string `toml:"tts_mode"`                    // "voice_only" (default) | "always"
 	OfferReadButton *bool  `toml:"offer_read_button,omitempty"` // nil = default false
@@ -113,6 +113,11 @@ type TTSConfig struct {
 		BaseURL string `toml:"base_url"`
 		Model   string `toml:"model"`
 	} `toml:"qwen"`
+	MiniMax struct {
+		APIKey  string `toml:"api_key"`
+		BaseURL string `toml:"base_url"`
+		Model   string `toml:"model"`
+	} `toml:"minimax"`
 }
 
 // ProjectConfig binds one agent (with a specific work_dir) to one or more platforms.

@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -208,6 +209,80 @@ func TestOpenAITTS_APIError(t *testing.T) {
 	_, _, err := tts.Synthesize(context.Background(), "hello", TTSSynthesisOpts{})
 	if err == nil {
 		t.Fatal("expected error for non-200 response")
+	}
+}
+
+func TestMiniMaxTTS_Success(t *testing.T) {
+	audioHex := hex.EncodeToString([]byte("fake-mp3-data"))
+	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/t2a_v2" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		if _, err := w.Write([]byte("data: {\"data\":{\"audio\":\"" + audioHex + "\"},\"base_resp\":{\"status_code\":0,\"status_msg\":\"ok\"}}\n\n")); err != nil {
+			t.Fatalf("write SSE chunk: %v", err)
+		}
+	}))
+	defer apiServer.Close()
+
+	tts := NewMiniMaxTTS("test-key", apiServer.URL, "speech-2.8-hd", nil)
+	audio, format, err := tts.Synthesize(context.Background(), "hello", TTSSynthesisOpts{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if format != "mp3" {
+		t.Errorf("expected mp3, got %q", format)
+	}
+	if string(audio) != "fake-mp3-data" {
+		t.Errorf("unexpected audio data: %q", audio)
+	}
+}
+
+func TestMiniMaxTTS_APIError(t *testing.T) {
+	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		if _, err := w.Write([]byte("unauthorized")); err != nil {
+			t.Fatalf("write unauthorized response: %v", err)
+		}
+	}))
+	defer apiServer.Close()
+
+	tts := NewMiniMaxTTS("bad-key", apiServer.URL, "", nil)
+	_, _, err := tts.Synthesize(context.Background(), "hello", TTSSynthesisOpts{})
+	if err == nil {
+		t.Fatal("expected error for non-200 response")
+	}
+}
+
+func TestMiniMaxTTS_BusinessError(t *testing.T) {
+	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		if _, err := w.Write([]byte("data: {\"data\":{},\"base_resp\":{\"status_code\":1001,\"status_msg\":\"bad request\"}}\n\n")); err != nil {
+			t.Fatalf("write business error response: %v", err)
+		}
+	}))
+	defer apiServer.Close()
+
+	tts := NewMiniMaxTTS("bad-key", apiServer.URL, "", nil)
+	_, _, err := tts.Synthesize(context.Background(), "hello", TTSSynthesisOpts{})
+	if err == nil {
+		t.Fatal("expected error for business error response")
+	}
+}
+
+func TestMiniMaxTTS_NoAudio(t *testing.T) {
+	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		if _, err := w.Write([]byte("data: {\"data\":{\"audio\":\"\"},\"base_resp\":{\"status_code\":0,\"status_msg\":\"ok\"}}\n\n")); err != nil {
+			t.Fatalf("write empty audio response: %v", err)
+		}
+	}))
+	defer apiServer.Close()
+
+	tts := NewMiniMaxTTS("test-key", apiServer.URL, "", nil)
+	_, _, err := tts.Synthesize(context.Background(), "hello", TTSSynthesisOpts{})
+	if err == nil {
+		t.Fatal("expected error when no audio data is received")
 	}
 }
 

@@ -216,6 +216,8 @@ type CronAddRequest struct {
 	SessionKey  string `json:"session_key"`
 	CronExpr    string `json:"cron_expr"`
 	Prompt      string `json:"prompt"`
+	Exec        string `json:"exec"`
+	WorkDir     string `json:"work_dir"`
 	Description string `json:"description"`
 	Silent      *bool  `json:"silent,omitempty"`
 }
@@ -320,8 +322,16 @@ func (s *APIServer) handleCronAdd(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if req.CronExpr == "" || req.Prompt == "" {
-		http.Error(w, "cron_expr and prompt are required", http.StatusBadRequest)
+	if req.CronExpr == "" {
+		http.Error(w, "cron_expr is required", http.StatusBadRequest)
+		return
+	}
+	if req.Prompt == "" && req.Exec == "" {
+		http.Error(w, "either prompt or exec is required", http.StatusBadRequest)
+		return
+	}
+	if req.Prompt != "" && req.Exec != "" {
+		http.Error(w, "prompt and exec are mutually exclusive", http.StatusBadRequest)
 		return
 	}
 
@@ -341,12 +351,32 @@ func (s *APIServer) handleCronAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	sessionKey := req.SessionKey
+	if sessionKey == "" {
+		s.mu.RLock()
+		engine := s.engines[project]
+		s.mu.RUnlock()
+		if engine != nil {
+			keys := engine.ActiveSessionKeys()
+			if len(keys) == 1 {
+				sessionKey = keys[0]
+				slog.Debug("auto-detected session_key for cron job", "session_key", sessionKey)
+			}
+		}
+	}
+	if sessionKey == "" {
+		http.Error(w, "session_key is required: set CC_SESSION_KEY env, pass --session-key, or ensure exactly one active session exists", http.StatusBadRequest)
+		return
+	}
+
 	job := &CronJob{
 		ID:          GenerateCronID(),
 		Project:     project,
-		SessionKey:  req.SessionKey,
+		SessionKey:  sessionKey,
 		CronExpr:    req.CronExpr,
 		Prompt:      req.Prompt,
+		Exec:        req.Exec,
+		WorkDir:     req.WorkDir,
 		Description: req.Description,
 		Enabled:     true,
 		Silent:      req.Silent,

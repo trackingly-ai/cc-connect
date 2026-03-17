@@ -146,6 +146,13 @@ type ToolAuthorizer interface {
 	GetAllowedTools() []string
 }
 
+// WorkDirSwitcher is an optional interface for agents that support changing
+// their default working directory at runtime. Changes take effect on new sessions.
+type WorkDirSwitcher interface {
+	SetWorkDir(dir string)
+	GetWorkDir() string
+}
+
 // HistoryProvider is an optional interface for agents that can retrieve
 // conversation history from their backend session files.
 type HistoryProvider interface {

@@ -198,11 +198,15 @@ const (
 	MsgTTSReadPrompt MsgKey = "tts_read_prompt"
 	MsgTTSGenerating MsgKey = "tts_generating"
 	MsgTTSNoContent  MsgKey = "tts_no_content"
+	MsgSetupNative   MsgKey = "setup_native"
 
 	MsgCronNotAvailable MsgKey = "cron_not_available"
 	MsgCronUsage        MsgKey = "cron_usage"
 	MsgCronAddUsage     MsgKey = "cron_add_usage"
 	MsgCronAdded        MsgKey = "cron_added"
+	MsgCronAddedExec    MsgKey = "cron_added_exec"
+	MsgCronAddExecUsage MsgKey = "cron_addexec_usage"
+	MsgCronSetupOK      MsgKey = "cron_setup_ok"
 	MsgCronEmpty        MsgKey = "cron_empty"
 	MsgCronListTitle    MsgKey = "cron_list_title"
 	MsgCronListFooter   MsgKey = "cron_list_footer"
@@ -373,6 +377,13 @@ const (
 	MsgBuiltinCmdHelp     MsgKey = "help"
 	MsgBuiltinCmdBind     MsgKey = "bind"
 	MsgBuiltinCmdShell    MsgKey = "shell"
+	MsgBuiltinCmdDir      MsgKey = "dir"
+
+	MsgDirChanged      MsgKey = "dir_changed"
+	MsgDirCurrent      MsgKey = "dir_current"
+	MsgDirUsage        MsgKey = "dir_usage"
+	MsgDirNotSupported MsgKey = "dir_not_supported"
+	MsgDirInvalidPath  MsgKey = "dir_invalid_path"
 )
 
 var messages = map[MsgKey]map[Language]string{
@@ -1100,6 +1111,13 @@ var messages = map[MsgKey]map[Language]string{
 		LangJapanese:           "読み上げ可能な直近の返信がまだありません。",
 		LangSpanish:            "Todavía no hay una respuesta reciente para leer en voz alta.",
 	},
+	MsgSetupNative: {
+		LangEnglish:            "✅ This agent already supports cc-connect instructions natively. No extra setup is needed.",
+		LangChinese:            "✅ 当前 agent 已原生支持 cc-connect 指令，无需额外配置。",
+		LangTraditionalChinese: "✅ 當前 agent 已原生支援 cc-connect 指令，無需額外配置。",
+		LangJapanese:           "✅ このエージェントは cc-connect の指示をネイティブサポートしています。追加設定は不要です。",
+		LangSpanish:            "✅ Este agente ya soporta las instrucciones de cc-connect de forma nativa. No se necesita configuración extra.",
+	},
 	MsgCronNotAvailable: {
 		LangEnglish:            "Cron scheduler is not available.",
 		LangChinese:            "定时任务调度器未启用。",
@@ -1108,11 +1126,11 @@ var messages = map[MsgKey]map[Language]string{
 		LangSpanish:            "El programador de tareas no está disponible.",
 	},
 	MsgCronUsage: {
-		LangEnglish:            "Usage:\n/cron add <min> <hour> <day> <month> <weekday> <prompt>\n/cron list\n/cron del <id>\n/cron enable <id>\n/cron disable <id>",
-		LangChinese:            "用法：\n/cron add <分> <时> <日> <月> <周> <任务描述>\n/cron list\n/cron del <id>\n/cron enable <id>\n/cron disable <id>",
-		LangTraditionalChinese: "用法：\n/cron add <分> <時> <日> <月> <週> <任務描述>\n/cron list\n/cron del <id>\n/cron enable <id>\n/cron disable <id>",
-		LangJapanese:           "使い方:\n/cron add <分> <時> <日> <月> <曜日> <タスク内容>\n/cron list\n/cron del <id>\n/cron enable <id>\n/cron disable <id>",
-		LangSpanish:            "Uso:\n/cron add <min> <hora> <día> <mes> <día_semana> <tarea>\n/cron list\n/cron del <id>\n/cron enable <id>\n/cron disable <id>",
+		LangEnglish:            "Usage:\n/cron add <min> <hour> <day> <month> <weekday> <prompt>\n/cron addexec <min> <hour> <day> <month> <weekday> <shell command>\n/cron list\n/cron del <id>\n/cron enable <id>\n/cron disable <id>\n/cron setup",
+		LangChinese:            "用法：\n/cron add <分> <时> <日> <月> <周> <任务描述>\n/cron addexec <分> <时> <日> <月> <周> <shell 命令>\n/cron list\n/cron del <id>\n/cron enable <id>\n/cron disable <id>\n/cron setup",
+		LangTraditionalChinese: "用法：\n/cron add <分> <時> <日> <月> <週> <任務描述>\n/cron addexec <分> <時> <日> <月> <週> <shell 命令>\n/cron list\n/cron del <id>\n/cron enable <id>\n/cron disable <id>\n/cron setup",
+		LangJapanese:           "使い方:\n/cron add <分> <時> <日> <月> <曜日> <タスク内容>\n/cron addexec <分> <時> <日> <月> <曜日> <シェルコマンド>\n/cron list\n/cron del <id>\n/cron enable <id>\n/cron disable <id>\n/cron setup",
+		LangSpanish:            "Uso:\n/cron add <min> <hora> <día> <mes> <día_semana> <tarea>\n/cron addexec <min> <hora> <día> <mes> <día_semana> <comando shell>\n/cron list\n/cron del <id>\n/cron enable <id>\n/cron disable <id>\n/cron setup",
 	},
 	MsgCronAddUsage: {
 		LangEnglish:            "Usage: /cron add <min> <hour> <day> <month> <weekday> <prompt>\nExample: /cron add 0 6 * * * Collect GitHub trending data and send me a summary",
@@ -1127,6 +1145,27 @@ var messages = map[MsgKey]map[Language]string{
 		LangTraditionalChinese: "✅ 定時任務已建立\nID: `%s`\n調度: `%s`\n內容: %s",
 		LangJapanese:           "✅ スケジュールタスクを作成しました\nID: `%s`\nスケジュール: `%s`\n内容: %s",
 		LangSpanish:            "✅ Tarea programada creada\nID: `%s`\nProgramación: `%s`\nContenido: %s",
+	},
+	MsgCronAddedExec: {
+		LangEnglish:            "✅ Shell cron job created\nID: `%s`\nSchedule: `%s`\nCommand: `%s`",
+		LangChinese:            "✅ Shell 定时任务已创建\nID: `%s`\n调度: `%s`\n命令: `%s`",
+		LangTraditionalChinese: "✅ Shell 定時任務已建立\nID: `%s`\n調度: `%s`\n命令: `%s`",
+		LangJapanese:           "✅ Shell スケジュールタスクを作成しました\nID: `%s`\nスケジュール: `%s`\nコマンド: `%s`",
+		LangSpanish:            "✅ Tarea shell programada creada\nID: `%s`\nProgramación: `%s`\nComando: `%s`",
+	},
+	MsgCronAddExecUsage: {
+		LangEnglish:            "Usage: /cron addexec <min> <hour> <day> <month> <weekday> <shell command>\nExample: /cron addexec 0 6 * * * df -h",
+		LangChinese:            "用法：/cron addexec <分> <时> <日> <月> <周> <shell 命令>\n示例：/cron addexec 0 6 * * * df -h",
+		LangTraditionalChinese: "用法：/cron addexec <分> <時> <日> <月> <週> <shell 命令>\n範例：/cron addexec 0 6 * * * df -h",
+		LangJapanese:           "使い方: /cron addexec <分> <時> <日> <月> <曜日> <シェルコマンド>\n例: /cron addexec 0 6 * * * df -h",
+		LangSpanish:            "Uso: /cron addexec <min> <hora> <día> <mes> <día_semana> <comando shell>\nEjemplo: /cron addexec 0 6 * * * df -h",
+	},
+	MsgCronSetupOK: {
+		LangEnglish:            "✅ Cron instructions written to %s\nYou can now tell the agent to create scheduled tasks in natural language.",
+		LangChinese:            "✅ 定时任务指令已写入 %s\n你现在可以用自然语言让 agent 创建定时任务了。",
+		LangTraditionalChinese: "✅ 定時任務指令已寫入 %s\n你現在可以用自然語言讓 agent 建立定時任務了。",
+		LangJapanese:           "✅ cron の指示を %s に書き込みました。\n自然言語でエージェントにスケジュールタスクの作成を依頼できるようになりました。",
+		LangSpanish:            "✅ Instrucciones de cron escritas en %s\nAhora puede decirle al agente que cree tareas programadas en lenguaje natural.",
 	},
 	MsgCronEmpty: {
 		LangEnglish:            "No scheduled tasks.",
@@ -2205,6 +2244,48 @@ var messages = map[MsgKey]map[Language]string{
 		LangTraditionalChinese: "執行 Shell 命令，參數: <命令>",
 		LangJapanese:           "シェルコマンドを実行、引数: <コマンド>",
 		LangSpanish:            "Ejecutar un comando shell, arg: <comando>",
+	},
+	MsgBuiltinCmdDir: {
+		LangEnglish:            "View or change the agent work directory, arg: <path>",
+		LangChinese:            "查看或切换 Agent 工作目录，参数: <路径>",
+		LangTraditionalChinese: "查看或切換 Agent 工作目錄，參數: <路徑>",
+		LangJapanese:           "エージェントの作業ディレクトリを表示/変更、引数: <パス>",
+		LangSpanish:            "Ver o cambiar el directorio de trabajo del agente, arg: <ruta>",
+	},
+	MsgDirChanged: {
+		LangEnglish:            "✅ Work directory changed to: `%s`\nThe next session will start in this directory.",
+		LangChinese:            "✅ 工作目录已切换为: `%s`\n下次会话将在此目录下启动。",
+		LangTraditionalChinese: "✅ 工作目錄已切換為: `%s`\n下次會話將在此目錄下啟動。",
+		LangJapanese:           "✅ 作業ディレクトリを変更しました: `%s`\n次のセッションはこのディレクトリで起動します。",
+		LangSpanish:            "✅ Directorio de trabajo cambiado a: `%s`\nLa próxima sesión iniciará en este directorio.",
+	},
+	MsgDirCurrent: {
+		LangEnglish:            "📂 Current work directory: `%s`",
+		LangChinese:            "📂 当前工作目录: `%s`",
+		LangTraditionalChinese: "📂 當前工作目錄: `%s`",
+		LangJapanese:           "📂 現在の作業ディレクトリ: `%s`",
+		LangSpanish:            "📂 Directorio de trabajo actual: `%s`",
+	},
+	MsgDirUsage: {
+		LangEnglish:            "Usage: `/dir <path>`\nExample: `/dir ../project`",
+		LangChinese:            "用法: `/dir <路径>`\n示例: `/dir ../project`",
+		LangTraditionalChinese: "用法: `/dir <路徑>`\n範例: `/dir ../project`",
+		LangJapanese:           "使い方: `/dir <パス>`\n例: `/dir ../project`",
+		LangSpanish:            "Uso: `/dir <ruta>`\nEjemplo: `/dir ../project`",
+	},
+	MsgDirNotSupported: {
+		LangEnglish:            "This agent does not support dynamic work directory switching.",
+		LangChinese:            "当前 Agent 不支持动态切换工作目录。",
+		LangTraditionalChinese: "當前 Agent 不支援動態切換工作目錄。",
+		LangJapanese:           "このエージェントは動的な作業ディレクトリの切り替えをサポートしていません。",
+		LangSpanish:            "Este agente no soporta el cambio dinámico de directorio de trabajo.",
+	},
+	MsgDirInvalidPath: {
+		LangEnglish:            "❌ Directory does not exist: `%s`",
+		LangChinese:            "❌ 目录不存在: `%s`",
+		LangTraditionalChinese: "❌ 目錄不存在: `%s`",
+		LangJapanese:           "❌ ディレクトリが存在しません: `%s`",
+		LangSpanish:            "❌ El directorio no existe: `%s`",
 	},
 }
 

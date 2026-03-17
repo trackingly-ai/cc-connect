@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -24,6 +25,14 @@ func (s *stubAgentSession) Events() <-chan Event                                
 func (s *stubAgentSession) CurrentSessionID() string                             { return "stub-session" }
 func (s *stubAgentSession) Alive() bool                                          { return true }
 func (s *stubAgentSession) Close() error                                         { return nil }
+
+type stubWorkDirAgent struct {
+	stubAgent
+	workDir string
+}
+
+func (a *stubWorkDirAgent) SetWorkDir(dir string) { a.workDir = dir }
+func (a *stubWorkDirAgent) GetWorkDir() string    { return a.workDir }
 
 type stubPlatformEngine struct {
 	n    string
@@ -66,6 +75,33 @@ func TestEngine_Alias(t *testing.T) {
 	got = e.resolveAlias("random text")
 	if got != "random text" {
 		t.Errorf("resolveAlias should not modify unmatched content, got %q", got)
+	}
+}
+
+func TestCmdDir_ChangesWorkDirAndClearsSession(t *testing.T) {
+	baseDir := t.TempDir()
+	targetDir := t.TempDir()
+	agent := &stubWorkDirAgent{workDir: baseDir}
+	p := &stubPlatformEngine{n: "test"}
+	e := NewEngine("test", agent, []Platform{p}, "", LangEnglish)
+
+	session := e.sessions.GetOrCreateActive("test:session")
+	session.AgentSessionID = "agent-session"
+	session.AddHistory("assistant", "old")
+
+	e.cmdDir(p, &Message{SessionKey: "test:session", ReplyCtx: nil}, []string{targetDir})
+
+	if agent.workDir != targetDir {
+		t.Fatalf("workDir = %q, want %q", agent.workDir, targetDir)
+	}
+	if session.AgentSessionID != "" {
+		t.Fatalf("AgentSessionID = %q, want empty", session.AgentSessionID)
+	}
+	if got := len(session.GetHistory(0)); got != 0 {
+		t.Fatalf("history len = %d, want 0", got)
+	}
+	if len(p.sent) == 0 || !strings.Contains(p.sent[len(p.sent)-1], targetDir) {
+		t.Fatalf("last reply = %q, want changed directory message", strings.Join(p.sent, "\n"))
 	}
 }
 
