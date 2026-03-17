@@ -85,6 +85,9 @@ type JobRunner interface {
 
 type managedJob struct {
 	job    *Job
+	req    JobRequest
+	runner JobRunner
+	ctx    context.Context
 	cancel context.CancelFunc
 }
 
@@ -104,6 +107,8 @@ type JobManager struct {
 	jobs    map[string]*managedJob
 	runners map[string]JobRunner
 	agents  map[string]string
+	running map[string]string
+	queues  map[string][]string
 }
 
 func NewJobManager(dataDir string) (*JobManager, error) {
@@ -117,6 +122,8 @@ func NewJobManager(dataDir string) (*JobManager, error) {
 		jobs:    make(map[string]*managedJob),
 		runners: make(map[string]JobRunner),
 		agents:  make(map[string]string),
+		running: make(map[string]string),
+		queues:  make(map[string][]string),
 	}
 	if err := jm.load(); err != nil {
 		return nil, err
@@ -134,9 +141,18 @@ func (jm *JobManager) RegisterProject(
 	runner JobRunner,
 ) {
 	jm.mu.Lock()
-	defer jm.mu.Unlock()
 	jm.runners[project] = runner
 	jm.agents[project] = agentType
+	for _, managed := range jm.jobs {
+		if managed.job.Project == project {
+			managed.runner = runner
+		}
+	}
+	dispatch := jm.prepareNextJobLocked(project)
+	jm.mu.Unlock()
+	if dispatch != nil {
+		go jm.runJob(dispatch)
+	}
 }
 
 func (jm *JobManager) Start(req JobRequest) (*Job, error) {
@@ -176,18 +192,19 @@ func (jm *JobManager) Start(req JobRequest) (*Job, error) {
 		return nil, err
 	}
 
-	ctx := context.Background()
-	cancel := func() {}
-	if req.Timeout > 0 {
-		ctx, cancel = context.WithTimeout(ctx, req.Timeout)
-	} else {
-		ctx, cancel = context.WithCancel(ctx)
+	jm.jobs[job.ID] = &managedJob{
+		job:    job,
+		req:    req,
+		runner: runner,
+		cancel: func() {},
 	}
-
-	jm.jobs[job.ID] = &managedJob{job: job, cancel: cancel}
+	jm.queues[req.Project] = append(jm.queues[req.Project], job.ID)
+	dispatch := jm.prepareNextJobLocked(req.Project)
 	jm.mu.Unlock()
 
-	go jm.runJob(ctx, runner, req, job.ID)
+	if dispatch != nil {
+		go jm.runJob(dispatch)
+	}
 	return job.clone(), nil
 }
 
@@ -258,47 +275,64 @@ func (jm *JobManager) ListAgents() []RegisteredProject {
 }
 
 func (jm *JobManager) Cancel(jobID string) (*Job, error) {
-	jm.mu.RLock()
+	jm.mu.Lock()
 	managed, ok := jm.jobs[jobID]
-	jm.mu.RUnlock()
 	if !ok {
+		jm.mu.Unlock()
 		return nil, fmt.Errorf("job %q not found", jobID)
 	}
-
-	jm.mu.Lock()
-	defer jm.mu.Unlock()
 	if isTerminalJobStatus(managed.job.Status) {
-		return managed.job.clone(), nil
+		job := managed.job.clone()
+		jm.mu.Unlock()
+		return job, nil
 	}
+
+	wasQueued := managed.job.Status == JobStatusQueued
+	wasStarted := managed.job.StartedAt != nil
 	now := time.Now().UTC()
 	managed.job.Status = JobStatusCancelled
 	managed.job.Error = context.Canceled.Error()
-	managed.job.FinishedAt = &now
+	if wasQueued || !wasStarted {
+		managed.job.FinishedAt = &now
+	}
+	jm.removeQueuedJobLocked(managed.job.Project, jobID)
 	if err := jm.saveJob(managed.job); err != nil {
 		managed.job.Status = JobStatusFailed
 		managed.job.Error = fmt.Sprintf("persist cancelled job: %v", err)
 	}
-	managed.cancel()
-	return managed.job.clone(), nil
+	cancel := managed.cancel
+	job := managed.job.clone()
+	jm.mu.Unlock()
+	cancel()
+	return job, nil
 }
 
-func (jm *JobManager) runJob(
-	ctx context.Context,
-	runner JobRunner,
-	req JobRequest,
-	jobID string,
-) {
+func (jm *JobManager) runJob(managed *managedJob) {
+	if managed == nil || managed.job == nil {
+		return
+	}
+	jobID := managed.job.ID
 	now := time.Now().UTC()
 
 	jm.mu.Lock()
-	managed := jm.jobs[jobID]
-	if managed == nil {
+	current := jm.jobs[jobID]
+	if current == nil || current != managed {
+		jm.mu.Unlock()
+		return
+	}
+	if isTerminalJobStatus(managed.job.Status) {
+		if jm.running[managed.job.Project] == jobID {
+			delete(jm.running, managed.job.Project)
+		}
 		jm.mu.Unlock()
 		return
 	}
 	managed.job.Status = JobStatusRunning
 	managed.job.StartedAt = &now
 	job := managed.job.clone()
+	ctx := managed.ctx
+	runner := managed.runner
+	req := managed.req
 	jm.mu.Unlock()
 
 	if err := jm.saveJob(job); err != nil {
@@ -343,7 +377,6 @@ func (jm *JobManager) finishJob(jobID string, mutate func(job *Job)) {
 		jm.mu.Unlock()
 		return
 	}
-	defer managed.cancel()
 	mutate(managed.job)
 	// Persist the terminal state before unlocking so a concurrent restart does not
 	// observe an in-memory completion that was never durably written to disk.
@@ -351,7 +384,18 @@ func (jm *JobManager) finishJob(jobID string, mutate func(job *Job)) {
 		managed.job.Status = JobStatusFailed
 		managed.job.Error = fmt.Sprintf("persist finished job: %v", err)
 	}
+	project := managed.job.Project
+	cancel := managed.cancel
+	var dispatch *managedJob
+	if jm.running[project] == jobID {
+		delete(jm.running, project)
+		dispatch = jm.prepareNextJobLocked(project)
+	}
 	jm.mu.Unlock()
+	cancel()
+	if dispatch != nil {
+		go jm.runJob(dispatch)
+	}
 }
 
 func (jm *JobManager) createUniqueJobIDLocked() (string, error) {
@@ -393,19 +437,38 @@ func (jm *JobManager) load() error {
 			return fmt.Errorf("decode job %s: %w", path, err)
 		}
 		if !isTerminalJobStatus(job.Status) {
-			now := time.Now().UTC()
-			job.Status = JobStatusOrphaned
-			job.Error = "job interrupted by process restart"
-			if job.FinishedAt == nil {
-				job.FinishedAt = &now
-			}
-			if err := jm.saveJob(&job); err != nil {
-				return err
+			if job.Status == JobStatusQueued && job.StartedAt == nil {
+				// Jobs that were accepted but never started can stay queued and
+				// be dispatched again after projects register on restart.
+			} else {
+				now := time.Now().UTC()
+				job.Status = JobStatusOrphaned
+				job.Error = "job interrupted by process restart"
+				if job.FinishedAt == nil {
+					job.FinishedAt = &now
+				}
+				if err := jm.saveJob(&job); err != nil {
+					return err
+				}
 			}
 		}
-		jm.jobs[job.ID] = &managedJob{
-			job:    &job,
+		managed := &managedJob{
+			job: &job,
+			req: JobRequest{
+				Project:      job.Project,
+				TaskID:       job.TaskID,
+				Prompt:       job.Prompt,
+				Timeout:      time.Duration(job.TimeoutSec) * time.Second,
+				WorkspaceRef: job.WorkspaceRef,
+			},
 			cancel: func() {},
+		}
+		if runner, ok := jm.runners[job.Project]; ok {
+			managed.runner = runner
+		}
+		jm.jobs[job.ID] = managed
+		if job.Status == JobStatusQueued {
+			jm.queues[job.Project] = append(jm.queues[job.Project], job.ID)
 		}
 	}
 	return nil
@@ -438,4 +501,53 @@ func newJobID() (string, error) {
 		return "", fmt.Errorf("generate job id: %w", err)
 	}
 	return "job_" + hex.EncodeToString(raw[:]), nil
+}
+
+func (jm *JobManager) prepareNextJobLocked(project string) *managedJob {
+	if project == "" || jm.running[project] != "" {
+		return nil
+	}
+	queue := jm.queues[project]
+	for len(queue) > 0 {
+		jobID := queue[0]
+		queue = queue[1:]
+		managed := jm.jobs[jobID]
+		if managed == nil || managed.job == nil || managed.job.Status != JobStatusQueued || managed.runner == nil {
+			continue
+		}
+		ctx, cancel := newManagedJobContext(managed.req.Timeout)
+		managed.ctx = ctx
+		managed.cancel = cancel
+		jm.running[project] = jobID
+		jm.queues[project] = queue
+		return managed
+	}
+	jm.queues[project] = queue
+	return nil
+}
+
+func (jm *JobManager) removeQueuedJobLocked(project string, jobID string) {
+	queue := jm.queues[project]
+	if len(queue) == 0 {
+		return
+	}
+	filtered := queue[:0]
+	for _, queuedID := range queue {
+		if queuedID != jobID {
+			filtered = append(filtered, queuedID)
+		}
+	}
+	if len(filtered) == 0 {
+		delete(jm.queues, project)
+		return
+	}
+	jm.queues[project] = filtered
+}
+
+func newManagedJobContext(timeout time.Duration) (context.Context, context.CancelFunc) {
+	ctx := context.Background()
+	if timeout > 0 {
+		return context.WithTimeout(ctx, timeout)
+	}
+	return context.WithCancel(ctx)
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -37,6 +38,25 @@ func waitForJobStatus(t *testing.T, jm *JobManager, jobID string, want string) *
 		t.Fatalf("job %s not found", jobID)
 	}
 	t.Fatalf("job %s status = %s, want %s", jobID, job.Status, want)
+	return nil
+}
+
+func waitForFinishedAt(t *testing.T, jm *JobManager, jobID string) *Job {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		job, ok := jm.Get(jobID)
+		if ok && job.FinishedAt != nil {
+			return job
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	job, _ := jm.Get(jobID)
+	if job == nil {
+		t.Fatalf("job %s not found", jobID)
+	}
+	t.Fatalf("job %s did not record finished_at", jobID)
 	return nil
 }
 
@@ -154,10 +174,19 @@ func TestJobManagerCancelRunningJob(t *testing.T) {
 	if current.Status != JobStatusCancelled {
 		t.Fatalf("status after cancel = %s, want %s", current.Status, JobStatusCancelled)
 	}
+	if current.FinishedAt != nil {
+		t.Fatalf("running job should not set finished_at until runner exits")
+	}
 
-	cancelled := waitForJobStatus(t, jm, job.ID, JobStatusCancelled)
+	cancelled := waitForFinishedAt(t, jm, job.ID)
 	if cancelled.Error == "" {
 		t.Fatalf("expected cancellation error message")
+	}
+	if cancelled.Status != JobStatusCancelled {
+		t.Fatalf("final status = %s, want %s", cancelled.Status, JobStatusCancelled)
+	}
+	if cancelled.FinishedAt == nil {
+		t.Fatalf("expected finished_at after runner exits")
 	}
 }
 
@@ -362,4 +391,166 @@ func TestJobManagerListAgents(t *testing.T) {
 	if agents[1].Project != "beta" || agents[1].Status != "idle" {
 		t.Fatalf("unexpected beta status: %+v", agents[1])
 	}
+}
+
+func TestJobManagerQueuesJobsPerProject(t *testing.T) {
+	dataDir := t.TempDir()
+	jm, err := NewJobManager(dataDir)
+	if err != nil {
+		t.Fatalf("NewJobManager: %v", err)
+	}
+
+	firstStarted := make(chan struct{})
+	firstRelease := make(chan struct{})
+	secondStarted := make(chan struct{})
+	var startsMu sync.Mutex
+	startOrder := make([]string, 0, 2)
+	jm.RegisterProject("alpha", "codex", stubJobRunner{
+		run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+			startsMu.Lock()
+			startOrder = append(startOrder, req.Prompt)
+			startsMu.Unlock()
+			switch req.Prompt {
+			case "first":
+				close(firstStarted)
+				<-firstRelease
+			case "second":
+				close(secondStarted)
+			}
+			return &JobResult{Summary: req.Prompt, SessionID: jobID}, nil
+		},
+	})
+
+	firstJob, err := jm.Start(JobRequest{Project: "alpha", Prompt: "first"})
+	if err != nil {
+		t.Fatalf("Start first: %v", err)
+	}
+	<-firstStarted
+
+	secondJob, err := jm.Start(JobRequest{Project: "alpha", Prompt: "second"})
+	if err != nil {
+		t.Fatalf("Start second: %v", err)
+	}
+	queued := waitForJobStatus(t, jm, secondJob.ID, JobStatusQueued)
+	if queued.StartedAt != nil {
+		t.Fatalf("queued job should not have started_at")
+	}
+
+	agents := jm.ListAgents()
+	if len(agents) != 1 {
+		t.Fatalf("agent count = %d, want 1", len(agents))
+	}
+	if agents[0].RunningJobs != 1 || agents[0].QueuedJobs != 1 {
+		t.Fatalf("unexpected queue payload: %+v", agents[0])
+	}
+
+	close(firstRelease)
+	waitForJobStatus(t, jm, firstJob.ID, JobStatusCompleted)
+	<-secondStarted
+	waitForJobStatus(t, jm, secondJob.ID, JobStatusCompleted)
+
+	startsMu.Lock()
+	defer startsMu.Unlock()
+	if len(startOrder) != 2 || startOrder[0] != "first" || startOrder[1] != "second" {
+		t.Fatalf("unexpected start order: %+v", startOrder)
+	}
+}
+
+func TestJobManagerCancelQueuedJob(t *testing.T) {
+	dataDir := t.TempDir()
+	jm, err := NewJobManager(dataDir)
+	if err != nil {
+		t.Fatalf("NewJobManager: %v", err)
+	}
+
+	firstStarted := make(chan struct{})
+	firstRelease := make(chan struct{})
+	secondStarted := make(chan struct{})
+	jm.RegisterProject("alpha", "codex", stubJobRunner{
+		run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+			switch req.Prompt {
+			case "first":
+				close(firstStarted)
+				<-firstRelease
+			case "second":
+				close(secondStarted)
+			}
+			return &JobResult{Summary: req.Prompt}, nil
+		},
+	})
+
+	if _, err := jm.Start(JobRequest{Project: "alpha", Prompt: "first"}); err != nil {
+		t.Fatalf("Start first: %v", err)
+	}
+	<-firstStarted
+
+	secondJob, err := jm.Start(JobRequest{Project: "alpha", Prompt: "second"})
+	if err != nil {
+		t.Fatalf("Start second: %v", err)
+	}
+	waitForJobStatus(t, jm, secondJob.ID, JobStatusQueued)
+
+	cancelled, err := jm.Cancel(secondJob.ID)
+	if err != nil {
+		t.Fatalf("Cancel queued: %v", err)
+	}
+	if cancelled.Status != JobStatusCancelled {
+		t.Fatalf("cancelled status = %s, want cancelled", cancelled.Status)
+	}
+	if cancelled.FinishedAt == nil {
+		t.Fatalf("queued cancel should set finished_at immediately")
+	}
+
+	close(firstRelease)
+	select {
+	case <-secondStarted:
+		t.Fatal("queued cancelled job should never start")
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+func TestJobManagerReloadKeepsQueuedJobsQueued(t *testing.T) {
+	dataDir := t.TempDir()
+	jm, err := NewJobManager(dataDir)
+	if err != nil {
+		t.Fatalf("NewJobManager: %v", err)
+	}
+
+	job := &Job{
+		ID:        "job_queued_reload",
+		Project:   "alpha",
+		Prompt:    "queued after restart",
+		Status:    JobStatusQueued,
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := jm.saveJob(job); err != nil {
+		t.Fatalf("saveJob: %v", err)
+	}
+
+	reloaded, err := NewJobManager(dataDir)
+	if err != nil {
+		t.Fatalf("reload NewJobManager: %v", err)
+	}
+	loaded, ok := reloaded.Get(job.ID)
+	if !ok {
+		t.Fatalf("queued job %s not found", job.ID)
+	}
+	if loaded.Status != JobStatusQueued {
+		t.Fatalf("loaded status = %s, want queued", loaded.Status)
+	}
+
+	started := make(chan struct{})
+	reloaded.RegisterProject("alpha", "codex", stubJobRunner{
+		run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+			close(started)
+			return &JobResult{Summary: "done"}, nil
+		},
+	})
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("queued job was not dispatched after project registration")
+	}
+	waitForJobStatus(t, reloaded, job.ID, JobStatusCompleted)
 }
