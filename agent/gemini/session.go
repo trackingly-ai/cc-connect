@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -184,33 +185,54 @@ func (gs *geminiSession) readLoop(cmd *exec.Cmd, stdout io.ReadCloser, stderrBuf
 		}
 	}()
 
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
-
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			continue
+	if err := readJSONLines(stdout, func(line []byte) error {
+		lineText := string(line)
+		if lineText == "" {
+			return nil
 		}
 
-		slog.Debug("geminiSession: raw", "line", truncate(line, 500))
+		slog.Debug("geminiSession: raw", "line", truncate(lineText, 500))
 
 		var raw map[string]any
-		if err := json.Unmarshal([]byte(line), &raw); err != nil {
-			slog.Debug("geminiSession: non-JSON line", "line", line)
-			continue
+		if err := json.Unmarshal(line, &raw); err != nil {
+			slog.Debug("geminiSession: non-JSON line", "line", lineText)
+			return nil
 		}
 
 		gs.handleEvent(raw)
-	}
-
-	if err := scanner.Err(); err != nil {
+		return nil
+	}); err != nil {
 		slog.Error("geminiSession: scanner error", "error", err)
 		evt := core.Event{Type: core.EventError, Error: fmt.Errorf("read stdout: %w", err)}
 		select {
 		case gs.events <- evt:
 		case <-gs.ctx.Done():
 			return
+		}
+	}
+}
+
+func readJSONLines(r io.Reader, handle func([]byte) error) error {
+	reader := bufio.NewReader(r)
+
+	for {
+		line, err := reader.ReadBytes('\n')
+		if errors.Is(err, io.EOF) && len(line) == 0 {
+			return nil
+		}
+		if err != nil && !errors.Is(err, io.EOF) {
+			return err
+		}
+
+		line = bytes.TrimRight(line, "\r\n")
+		if len(line) > 0 {
+			if err := handle(line); err != nil {
+				return err
+			}
+		}
+
+		if errors.Is(err, io.EOF) {
+			return nil
 		}
 	}
 }
