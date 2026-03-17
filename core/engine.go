@@ -1504,12 +1504,19 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			if fullResponse == "" && len(textParts) > 0 {
 				fullResponse = strings.Join(textParts, "")
 			}
-			if fullResponse == "" {
-				fullResponse = e.i18n.T(MsgEmptyResponse)
+			prompt := detectTextInteractionPrompt(fullResponse)
+			displayResponse := fullResponse
+			if prompt != nil && strings.Contains(strings.ToLower(fullResponse), "<options>") {
+				displayResponse = strings.TrimSpace(prompt.Prompt)
+			}
+			if displayResponse == "" && prompt == nil {
+				displayResponse = e.i18n.T(MsgEmptyResponse)
 			}
 
-			session.AddHistory("assistant", fullResponse)
-			e.sessions.Save()
+			if displayResponse != "" {
+				session.AddHistory("assistant", displayResponse)
+				e.sessions.Save()
+			}
 
 			turnDuration := time.Since(turnStart)
 			slog.Info("turn complete",
@@ -1517,30 +1524,34 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				"agent_session", session.AgentSessionID,
 				"msg_id", msgID,
 				"tools", toolCount,
-				"response_len", len(fullResponse),
+				"response_len", len(displayResponse),
 				"turn_duration", turnDuration,
 			)
 
 			replyStart := time.Now()
 
 			// If streaming preview was active, try to finalize in-place
-			if sp.finish(fullResponse) {
-				slog.Debug("EventResult: finalized via stream preview", "response_len", len(fullResponse))
-			} else {
-				slog.Debug("EventResult: sending via p.Send (preview inactive or failed)", "response_len", len(fullResponse), "chunks", len(splitMessage(fullResponse, maxPlatformMessageLen)))
-				for _, chunk := range splitMessage(fullResponse, maxPlatformMessageLen) {
-					if err := p.Send(e.ctx, replyCtx, chunk); err != nil {
-						slog.Error("failed to send reply", "error", err, "msg_id", msgID)
-						return
+			if displayResponse != "" {
+				if sp.finish(displayResponse) {
+					slog.Debug("EventResult: finalized via stream preview", "response_len", len(displayResponse))
+				} else {
+					slog.Debug("EventResult: sending via p.Send (preview inactive or failed)", "response_len", len(displayResponse), "chunks", len(splitMessage(displayResponse, maxPlatformMessageLen)))
+					for _, chunk := range splitMessage(displayResponse, maxPlatformMessageLen) {
+						if err := p.Send(e.ctx, replyCtx, chunk); err != nil {
+							slog.Error("failed to send reply", "error", err, "msg_id", msgID)
+							return
+						}
 					}
 				}
+			} else {
+				sp.finish("")
 			}
 
 			if elapsed := time.Since(replyStart); elapsed >= slowPlatformSend {
-				slog.Warn("slow final reply send", "platform", p.Name(), "elapsed", elapsed, "response_len", len(fullResponse))
+				slog.Warn("slow final reply send", "platform", p.Name(), "elapsed", elapsed, "response_len", len(displayResponse))
 			}
 
-			if prompt := detectTextInteractionPrompt(fullResponse); prompt != nil {
+			if prompt != nil {
 				followUp := prompt.Description
 				if strings.TrimSpace(followUp) == "" {
 					followUp = "Choose a reply below, or type your own response."
@@ -1548,16 +1559,18 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				e.replyWithInteraction(sessionKey, p, replyCtx, followUp, prompt.Choices, false)
 			}
 
-			e.offerReadAloudButton(p, replyCtx, fullResponse)
+			if displayResponse != "" {
+				e.offerReadAloudButton(p, replyCtx, displayResponse)
+			}
 
 			// TTS: async voice reply if enabled
-			if e.tts != nil && e.tts.Enabled && e.tts.TTS != nil {
+			if displayResponse != "" && e.tts != nil && e.tts.Enabled && e.tts.TTS != nil {
 				state.mu.Lock()
 				fromVoice := state.fromVoice
 				state.mu.Unlock()
 				mode := e.tts.GetTTSMode()
 				if mode == "always" || (mode == "voice_only" && fromVoice) {
-					go e.sendTTSReply(p, replyCtx, fullResponse)
+					go e.sendTTSReply(p, replyCtx, displayResponse)
 				}
 			}
 

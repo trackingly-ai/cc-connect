@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -147,7 +148,7 @@ func TestProcessInteractiveEvents_BindsSessionIDFromResultEvent(t *testing.T) {
 	events <- Event{Type: EventResult, SessionID: "codex-thread-123", Done: true}
 	close(events)
 
-	session := &Session{Name: "default"}
+	session := e.sessions.GetOrCreateActive("test:user1")
 	state := &interactiveState{
 		agentSession: &eventfulStubAgentSession{events: events},
 		platform:     p,
@@ -158,6 +159,51 @@ func TestProcessInteractiveEvents_BindsSessionIDFromResultEvent(t *testing.T) {
 
 	if session.AgentSessionID != "codex-thread-123" {
 		t.Fatalf("AgentSessionID = %q, want codex-thread-123", session.AgentSessionID)
+	}
+}
+
+func TestProcessInteractiveEvents_StripsOptionsXMLFromDisplayedReply(t *testing.T) {
+	p := &stubButtonPlatform{n: "test"}
+	tts := &stubTTS{audio: []byte("audio"), format: "mp3"}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	e.SetTTSConfig(&TTSCfg{
+		Enabled:         true,
+		TTS:             tts,
+		OfferReadButton: true,
+	})
+
+	events := make(chan Event, 1)
+	events <- Event{
+		Type:    EventResult,
+		Content: "我建议下一步先做这两件事。\n<options>\n  <option>写单机部署方案</option>\n  <option>写 agent roster 配置草案</option>\n</options>",
+		Done:    true,
+	}
+	close(events)
+
+	session := &Session{Name: "default"}
+	state := &interactiveState{
+		agentSession: &eventfulStubAgentSession{events: events},
+		platform:     p,
+		replyCtx:     "ctx",
+	}
+
+	e.processInteractiveEvents(state, session, "test:user1", "msg-1", time.Now())
+
+	if len(p.sent) < 2 {
+		t.Fatalf("expected sanitized reply and follow-up buttons, got %#v", p.sent)
+	}
+	if got := p.sent[0]; strings.Contains(got, "<options>") || strings.Contains(got, "<option>") {
+		t.Fatalf("expected first reply without XML options, got %q", got)
+	}
+	if got := p.sent[0]; got != "我建议下一步先做这两件事。" {
+		t.Fatalf("unexpected sanitized reply: %q", got)
+	}
+	if !slices.Contains(p.buttonData, "tts:read_last") {
+		t.Fatalf("expected read-aloud button to still be offered, got %#v", p.buttonData)
+	}
+	history := session.GetHistory(0)
+	if len(history) != 1 || history[0].Content != "我建议下一步先做这两件事。" {
+		t.Fatalf("expected sanitized assistant history, got %#v", history)
 	}
 }
 

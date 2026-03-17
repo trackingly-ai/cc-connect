@@ -107,9 +107,6 @@ func detectOptionsXMLPrompt(text string) *textInteractionPrompt {
 	}
 
 	promptText := strings.TrimSpace(reBlock.ReplaceAllString(text, ""))
-	if promptText == "" {
-		promptText = text
-	}
 
 	return &textInteractionPrompt{
 		Prompt:   promptText,
