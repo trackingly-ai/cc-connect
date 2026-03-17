@@ -61,6 +61,9 @@ func (s *opencodeSession) Send(prompt string, images []core.ImageAttachment, fil
 	if !s.alive.Load() {
 		return fmt.Errorf("session is closed")
 	}
+	if len(images) > 0 {
+		slog.Warn("opencodeSession: images not supported, ignoring")
+	}
 	if len(files) > 0 {
 		prompt = core.AppendFileRefs(prompt, core.SaveFilesToDisk(s.workDir, files))
 	}

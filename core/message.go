@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -73,18 +74,55 @@ func SaveFilesToDisk(workDir string, files []FileAttachment) []string {
 
 	paths := make([]string, 0, len(files))
 	for i, f := range files {
-		fname := f.FileName
-		if fname == "" {
-			fname = fmt.Sprintf("file_%d_%d", time.Now().UnixMilli(), i)
+		fpath, err := createAttachmentPath(attachDir, f.FileName, i)
+		if err != nil {
+			slog.Error("SaveFilesToDisk: create path failed", "error", err, "name", f.FileName)
+			continue
 		}
-		fpath := filepath.Join(attachDir, fname)
 		if err := os.WriteFile(fpath, f.Data, 0o644); err != nil {
-			slog.Error("SaveFilesToDisk: write failed", "error", err, "name", fname)
+			slog.Error("SaveFilesToDisk: write failed", "error", err, "name", f.FileName, "path", fpath)
 			continue
 		}
 		paths = append(paths, fpath)
 	}
 	return paths
+}
+
+var attachmentNameSanitizer = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
+
+func createAttachmentPath(dir, originalName string, index int) (string, error) {
+	fname := sanitizeAttachmentFileName(originalName, index)
+	ext := filepath.Ext(fname)
+	base := strings.TrimSuffix(fname, ext)
+	pattern := base + "-*"
+	if ext != "" {
+		pattern += ext
+	}
+	f, err := os.CreateTemp(dir, pattern)
+	if err != nil {
+		return "", err
+	}
+	path := f.Name()
+	if err := f.Close(); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func sanitizeAttachmentFileName(originalName string, index int) string {
+	fname := strings.TrimSpace(filepath.Base(originalName))
+	if fname == "" || fname == "." || fname == string(filepath.Separator) {
+		return fmt.Sprintf("file_%d_%d", time.Now().UnixMilli(), index)
+	}
+	ext := filepath.Ext(fname)
+	base := strings.TrimSuffix(fname, ext)
+	base = attachmentNameSanitizer.ReplaceAllString(base, "_")
+	base = strings.Trim(base, "._-")
+	if base == "" {
+		base = fmt.Sprintf("file_%d_%d", time.Now().UnixMilli(), index)
+	}
+	ext = attachmentNameSanitizer.ReplaceAllString(ext, "")
+	return base + ext
 }
 
 // AppendFileRefs appends saved file path references to a prompt.

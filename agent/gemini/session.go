@@ -68,7 +68,6 @@ func (gs *geminiSession) Send(prompt string, images []core.ImageAttachment, file
 	// Gemini CLI supports @file references for images; save to temp files
 	var imageRefs []string
 	if len(images) > 0 {
-		tmpDir := os.TempDir()
 		for i, img := range images {
 			ext := ".png"
 			switch img.MimeType {
@@ -79,9 +78,20 @@ func (gs *geminiSession) Send(prompt string, images []core.ImageAttachment, file
 			case "image/webp":
 				ext = ".webp"
 			}
-			fname := fmt.Sprintf("cc-connect-img-%d%s", i, ext)
-			fpath := fmt.Sprintf("%s/%s", tmpDir, fname)
-			if err := os.WriteFile(fpath, img.Data, 0o644); err != nil {
+			f, err := os.CreateTemp("", fmt.Sprintf("cc-connect-img-%d-*%s", i, ext))
+			if err != nil {
+				slog.Warn("geminiSession: failed to create temp image", "error", err)
+				continue
+			}
+			fpath := f.Name()
+			if _, err := f.Write(img.Data); err != nil {
+				f.Close()
+				os.Remove(fpath)
+				slog.Warn("geminiSession: failed to save image", "error", err)
+				continue
+			}
+			if err := f.Close(); err != nil {
+				os.Remove(fpath)
 				slog.Warn("geminiSession: failed to save image", "error", err)
 				continue
 			}
