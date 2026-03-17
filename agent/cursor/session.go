@@ -23,17 +23,18 @@ import (
 // cursorSession manages multi-turn conversations with the Cursor Agent CLI.
 // Each Send() launches a new `agent --print` process with --resume for continuity.
 type cursorSession struct {
-	cmd      string // CLI binary name
-	workDir  string
-	model    string
-	mode     string
-	extraEnv []string
-	events   chan core.Event
-	chatID   atomic.Value // stores string — Cursor chat/session ID
-	ctx      context.Context
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
-	alive    atomic.Bool
+	cmd       string // CLI binary name
+	workDir   string
+	model     string
+	mode      string
+	extraEnv  []string
+	events    chan core.Event
+	closeOnce sync.Once
+	chatID    atomic.Value // stores string — Cursor chat/session ID
+	ctx       context.Context
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+	alive     atomic.Bool
 
 	thinkingBuf strings.Builder // accumulate thinking deltas
 }
@@ -481,6 +482,7 @@ func (cs *cursorSession) Close() error {
 	done := make(chan struct{})
 	go func() {
 		cs.wg.Wait()
+		cs.closeEvents()
 		close(done)
 	}()
 	select {
@@ -488,8 +490,13 @@ func (cs *cursorSession) Close() error {
 	case <-time.After(8 * time.Second):
 		slog.Warn("cursorSession: close timed out, abandoning wg.Wait")
 	}
-	close(cs.events)
 	return nil
+}
+
+func (cs *cursorSession) closeEvents() {
+	cs.closeOnce.Do(func() {
+		close(cs.events)
+	})
 }
 
 func truncateStr(s string, maxRunes int) string {

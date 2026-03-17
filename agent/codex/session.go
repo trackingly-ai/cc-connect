@@ -23,16 +23,17 @@ import (
 // codexSession manages a multi-turn Codex conversation.
 // First Send() uses `codex exec`, subsequent ones use `codex exec resume <threadID>`.
 type codexSession struct {
-	workDir  string
-	model    string
-	mode     string
-	extraEnv []string
-	events   chan core.Event
-	threadID atomic.Value // stores string — Codex thread_id
-	ctx      context.Context
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
-	alive    atomic.Bool
+	workDir   string
+	model     string
+	mode      string
+	extraEnv  []string
+	events    chan core.Event
+	closeOnce sync.Once
+	threadID  atomic.Value // stores string — Codex thread_id
+	ctx       context.Context
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+	alive     atomic.Bool
 
 	pendingMsgs []string // buffered agent_message texts awaiting classification
 }
@@ -452,6 +453,7 @@ func (cs *codexSession) Close() error {
 	done := make(chan struct{})
 	go func() {
 		cs.wg.Wait()
+		cs.closeEvents()
 		close(done)
 	}()
 	select {
@@ -459,8 +461,13 @@ func (cs *codexSession) Close() error {
 	case <-time.After(8 * time.Second):
 		slog.Warn("codexSession: close timed out, abandoning wg.Wait")
 	}
-	close(cs.events)
 	return nil
+}
+
+func (cs *codexSession) closeEvents() {
+	cs.closeOnce.Do(func() {
+		close(cs.events)
+	})
 }
 
 // extractItemText extracts text from an item's array field (e.g. "summary" or "content").

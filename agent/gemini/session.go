@@ -24,17 +24,18 @@ import (
 // Each Send() launches a new `gemini -p ... --output-format stream-json` process
 // with --resume for conversation continuity.
 type geminiSession struct {
-	cmd      string
-	workDir  string
-	model    string
-	mode     string
-	extraEnv []string
-	events   chan core.Event
-	chatID   atomic.Value // stores string — Gemini session ID
-	ctx      context.Context
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
-	alive    atomic.Bool
+	cmd       string
+	workDir   string
+	model     string
+	mode      string
+	extraEnv  []string
+	events    chan core.Event
+	closeOnce sync.Once
+	chatID    atomic.Value // stores string — Gemini session ID
+	ctx       context.Context
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+	alive     atomic.Bool
 
 	pendingMsgs []string // buffered assistant messages awaiting classification
 }
@@ -440,6 +441,7 @@ func (gs *geminiSession) Close() error {
 	done := make(chan struct{})
 	go func() {
 		gs.wg.Wait()
+		gs.closeEvents()
 		close(done)
 	}()
 	select {
@@ -447,8 +449,13 @@ func (gs *geminiSession) Close() error {
 	case <-time.After(8 * time.Second):
 		slog.Warn("geminiSession: close timed out, abandoning wg.Wait")
 	}
-	close(gs.events)
 	return nil
+}
+
+func (gs *geminiSession) closeEvents() {
+	gs.closeOnce.Do(func() {
+		close(gs.events)
+	})
 }
 
 // formatToolParams extracts a human-readable summary from tool parameters.

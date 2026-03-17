@@ -29,6 +29,7 @@ type qoderSession struct {
 	mode      string
 	extraEnv  []string
 	events    chan core.Event
+	closeOnce sync.Once
 	sessionID atomic.Value // stores string
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -305,6 +306,7 @@ func (qs *qoderSession) Close() error {
 	done := make(chan struct{})
 	go func() {
 		qs.wg.Wait()
+		qs.closeEvents()
 		close(done)
 	}()
 	select {
@@ -312,8 +314,13 @@ func (qs *qoderSession) Close() error {
 	case <-time.After(8 * time.Second):
 		slog.Warn("qoderSession: close timed out, abandoning wg.Wait")
 	}
-	close(qs.events)
 	return nil
+}
+
+func (qs *qoderSession) closeEvents() {
+	qs.closeOnce.Do(func() {
+		close(qs.events)
+	})
 }
 
 // ── helpers ──────────────────────────────────────────────────

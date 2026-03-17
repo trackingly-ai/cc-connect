@@ -23,17 +23,18 @@ import (
 // Each Send() launches a new `opencode run --format json` process
 // with --session for conversation continuity.
 type opencodeSession struct {
-	cmd      string
-	workDir  string
-	model    string
-	mode     string
-	extraEnv []string
-	events   chan core.Event
-	chatID   atomic.Value // stores string — OpenCode session ID
-	ctx      context.Context
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
-	alive    atomic.Bool
+	cmd       string
+	workDir   string
+	model     string
+	mode      string
+	extraEnv  []string
+	events    chan core.Event
+	closeOnce sync.Once
+	chatID    atomic.Value // stores string — OpenCode session ID
+	ctx       context.Context
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+	alive     atomic.Bool
 }
 
 func newOpencodeSession(ctx context.Context, cmd, workDir, model, mode, resumeID string, extraEnv []string) (*opencodeSession, error) {
@@ -337,6 +338,7 @@ func (s *opencodeSession) Close() error {
 	done := make(chan struct{})
 	go func() {
 		s.wg.Wait()
+		s.closeEvents()
 		close(done)
 	}()
 	select {
@@ -344,8 +346,13 @@ func (s *opencodeSession) Close() error {
 	case <-time.After(8 * time.Second):
 		slog.Warn("opencodeSession: close timed out, abandoning wg.Wait")
 	}
-	close(s.events)
 	return nil
+}
+
+func (s *opencodeSession) closeEvents() {
+	s.closeOnce.Do(func() {
+		close(s.events)
+	})
 }
 
 func truncate(s string, maxRunes int) string {
