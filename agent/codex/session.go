@@ -69,6 +69,9 @@ func (cs *codexSession) Send(prompt string, images []core.ImageAttachment, files
 	if len(files) > 0 {
 		prompt = core.AppendFileRefs(prompt, core.SaveFilesToDisk(cs.workDir, files))
 	}
+	if hint := strings.TrimSpace(core.InteractionOptionsPrompt()); hint != "" {
+		prompt = hint + "\n\nUser request:\n" + prompt
+	}
 	if !cs.alive.Load() {
 		return fmt.Errorf("session is closed")
 	}

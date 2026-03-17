@@ -66,7 +66,36 @@ This sends a message to the target bot and waits for its response (printed to st
 The conversation is visible in the group chat and each bot maintains its own relay session.
 
 Environment variables CC_PROJECT and CC_SESSION_KEY are already set, so the relay knows which group chat to use.
+
+### Explicit user-choice options
+When you genuinely need the user to choose the next step, do NOT rely on a plain numbered summary.
+Instead, append an explicit XML options block at the end of your message:
+
+<options>
+  <option>First choice</option>
+  <option>Second choice</option>
+</options>
+
+Rules:
+- Only emit <options> when the user must choose among discrete next steps.
+- Keep options short and concrete. Prefer 2-4 options.
+- Do NOT emit <options> for summaries, recaps, status updates, or action-less conclusions.
+- If no user choice is needed, do not emit any <options> block.
 `
+}
+
+// InteractionOptionsPrompt returns a short per-turn reminder for agents that do
+// not support native system prompt injection. It teaches a stable, explicit
+// options protocol so the bridge doesn't need to guess actions from summaries.
+func InteractionOptionsPrompt() string {
+	return `If you need the user to choose among discrete next steps, append exactly one XML block at the end:
+
+<options>
+  <option>First choice</option>
+  <option>Second choice</option>
+</options>
+
+Only use this when a real choice is required. Do not use it in summaries, recaps, or conclusions that do not ask the user to choose.`
 }
 
 // SystemPromptSupporter is an optional marker interface for agents that

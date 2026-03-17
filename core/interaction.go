@@ -59,6 +59,9 @@ func detectTextInteractionPrompt(text string) *textInteractionPrompt {
 		return nil
 	}
 
+	if prompt := detectOptionsXMLPrompt(trimmed); prompt != nil {
+		return prompt
+	}
 	if prompt := detectReplyWithPrompt(trimmed); prompt != nil {
 		return prompt
 	}
@@ -69,6 +72,50 @@ func detectTextInteractionPrompt(text string) *textInteractionPrompt {
 		return prompt
 	}
 	return nil
+}
+
+func detectOptionsXMLPrompt(text string) *textInteractionPrompt {
+	reBlock := regexp.MustCompile(`(?is)<options>\s*([\s\S]*?)\s*</options>`)
+	match := reBlock.FindStringSubmatch(text)
+	if len(match) != 2 {
+		return nil
+	}
+
+	reOption := regexp.MustCompile(`(?is)<option>\s*([\s\S]*?)\s*</option>`)
+	optionMatches := reOption.FindAllStringSubmatch(match[1], -1)
+	if len(optionMatches) < 2 {
+		return nil
+	}
+
+	row := make([]interactionChoice, 0, len(optionMatches))
+	fallback := make([]string, 0, len(optionMatches))
+	for idx, m := range optionMatches {
+		label := normalizeChoiceText(strings.TrimSpace(m[1]))
+		if label == "" {
+			continue
+		}
+		row = append(row, interactionChoice{
+			ID:         fmt.Sprintf("opt_%d", idx+1),
+			Label:      truncateChoiceLabel(label),
+			SendText:   label,
+			MatchTexts: []string{strings.ToLower(label)},
+		})
+		fallback = append(fallback, label)
+	}
+	if len(row) < 2 {
+		return nil
+	}
+
+	promptText := strings.TrimSpace(reBlock.ReplaceAllString(text, ""))
+	if promptText == "" {
+		promptText = text
+	}
+
+	return &textInteractionPrompt{
+		Prompt:   promptText,
+		Choices:  [][]interactionChoice{row},
+		Fallback: fallback,
+	}
 }
 
 func detectReplyWithPrompt(text string) *textInteractionPrompt {
@@ -106,34 +153,56 @@ func detectReplyWithPrompt(text string) *textInteractionPrompt {
 
 func detectNumberedChoicePrompt(text string) *textInteractionPrompt {
 	lines := strings.Split(text, "\n")
+	trimmedLines := make([]string, 0, len(lines))
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line != "" {
+			trimmedLines = append(trimmedLines, line)
+		}
+	}
+	if len(trimmedLines) < 3 {
+		return nil
+	}
+
 	type choiceLine struct {
 		number string
 		label  string
 	}
 	var choices []choiceLine
 	re := regexp.MustCompile(`^\s*(\d+)[\.\)]\s+(.+)$`)
-	for _, raw := range lines {
-		m := re.FindStringSubmatch(strings.TrimSpace(raw))
-		if len(m) != 3 {
+	start := -1
+	for idx, line := range trimmedLines {
+		m := re.FindStringSubmatch(line)
+		if len(m) == 3 {
+			if start == -1 {
+				start = idx
+			}
+			label := strings.TrimSpace(strings.TrimSuffix(m[2], "."))
+			if label == "" || len([]rune(label)) > 100 {
+				return nil
+			}
+			choices = append(choices, choiceLine{number: m[1], label: label})
+			if len(choices) == 4 {
+				break
+			}
 			continue
 		}
-		label := strings.TrimSpace(strings.TrimSuffix(m[2], "."))
-		if label == "" {
-			continue
-		}
-		choices = append(choices, choiceLine{number: m[1], label: label})
-		if len(choices) == 3 {
-			break
+		if start != -1 {
+			// Once the numbered block starts, any following non-numbered line means
+			// this is content, not a clean choice prompt.
+			return nil
 		}
 	}
 	if len(choices) < 2 {
 		return nil
 	}
+	if start <= 0 {
+		return nil
+	}
 
-	lower := strings.ToLower(text)
-	if !strings.Contains(lower, "choose") && !strings.Contains(lower, "pick") &&
-		!strings.Contains(lower, "option") && !strings.Contains(lower, "prefer") &&
-		!strings.Contains(lower, "which") {
+	intro := strings.ToLower(strings.Join(trimmedLines[:start], "\n"))
+	lastIntro := strings.ToLower(trimmedLines[start-1])
+	if !looksLikeChoiceQuestion(intro, lastIntro) {
 		return nil
 	}
 
@@ -158,6 +227,35 @@ func detectNumberedChoicePrompt(text string) *textInteractionPrompt {
 		Choices:  [][]interactionChoice{row},
 		Fallback: fallback,
 	}
+}
+
+func looksLikeChoiceQuestion(fullIntro, lastLine string) bool {
+	keywords := []string{
+		"choose",
+		"pick",
+		"select",
+		"prefer",
+		"which option",
+		"which one",
+		"what should i",
+		"what do you want",
+		"let me know which",
+	}
+	matched := false
+	for _, keyword := range keywords {
+		if strings.Contains(fullIntro, keyword) {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		return false
+	}
+	return strings.Contains(lastLine, "?") ||
+		strings.HasPrefix(lastLine, "choose") ||
+		strings.HasPrefix(lastLine, "pick") ||
+		strings.HasPrefix(lastLine, "select") ||
+		strings.HasPrefix(lastLine, "which")
 }
 
 func detectYesNoPrompt(text string) *textInteractionPrompt {

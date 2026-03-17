@@ -91,3 +91,25 @@ func TestDetectTextInteractionPromptNumberedChoices(t *testing.T) {
 		t.Fatalf("unexpected numbered send texts: %#v", prompt.Choices[0])
 	}
 }
+
+func TestDetectTextInteractionPromptOptionsXML(t *testing.T) {
+	text := "Choose a path:\n<options>\n  <option>Update the API handler</option>\n  <option>Ship a minimal fix</option>\n</options>"
+	prompt := detectTextInteractionPrompt(text)
+	if prompt == nil {
+		t.Fatal("expected XML options prompt to be detected")
+	}
+	if len(prompt.Choices) != 1 || len(prompt.Choices[0]) != 2 {
+		t.Fatalf("unexpected choices: %#v", prompt.Choices)
+	}
+	if prompt.Choices[0][0].SendText != "Update the API handler" || prompt.Choices[0][1].SendText != "Ship a minimal fix" {
+		t.Fatalf("unexpected XML option send texts: %#v", prompt.Choices[0])
+	}
+}
+
+func TestDetectTextInteractionPromptIgnoresSummaryNumberedList(t *testing.T) {
+	text := "Summary:\n1. We can keep the current API.\n2. Option A is to patch the parser.\n3. Option B is to remove the feature."
+	prompt := detectTextInteractionPrompt(text)
+	if prompt != nil {
+		t.Fatalf("expected summary numbered list to be ignored, got %#v", prompt)
+	}
+}
