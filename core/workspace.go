@@ -8,10 +8,19 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
 const workspaceCommandTimeout = 30 * time.Second
+
+var workspaceRepoLocks sync.Map
+var workspacePathLocks sync.Map
+var runGit = runGitCommand
+
+type CleanupWorkspaceOptions struct {
+	KeepBranch bool
+}
 
 func SetupWorkspace(
 	repoPath string,
@@ -36,63 +45,125 @@ func SetupWorkspace(
 	if worktreePath == "" {
 		return fmt.Errorf("worktree_path is required")
 	}
-	if _, err := os.Stat(worktreePath); err == nil {
-		return fmt.Errorf("worktree path already exists: %s", worktreePath)
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("stat worktree path: %w", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(worktreePath), 0o755); err != nil {
-		return fmt.Errorf("create worktree parent dir: %w", err)
-	}
+	return withWorkspacePathLock(worktreePath, func() error {
+		return withWorkspaceRepoLock(repoPath, func() error {
+			if _, err := os.Stat(worktreePath); err == nil {
+				return fmt.Errorf("worktree path already exists: %s", worktreePath)
+			} else if !os.IsNotExist(err) {
+				return fmt.Errorf("stat worktree path: %w", err)
+			}
+			if err := os.MkdirAll(filepath.Dir(worktreePath), 0o755); err != nil {
+				return fmt.Errorf("create worktree parent dir: %w", err)
+			}
 
-	if _, err := runGit(
-		repoPath,
-		"worktree",
-		"add",
-		"--checkout",
-		"-B",
-		branchName,
-		worktreePath,
-		baseBranch,
-	); err != nil {
-		return fmt.Errorf("git worktree add: %w", err)
-	}
-	return nil
+			if _, err := runGit(
+				repoPath,
+				"worktree",
+				"add",
+				"--checkout",
+				"-B",
+				branchName,
+				worktreePath,
+				baseBranch,
+			); err != nil {
+				return fmt.Errorf("git worktree add: %w", err)
+			}
+			return nil
+		})
+	})
 }
 
 func CleanupWorkspace(worktreePath string) error {
+	return CleanupWorkspaceWithOptions(worktreePath, CleanupWorkspaceOptions{})
+}
+
+func CleanupWorkspaceWithOptions(
+	worktreePath string,
+	opts CleanupWorkspaceOptions,
+) error {
 	worktreePath = strings.TrimSpace(worktreePath)
 	if worktreePath == "" {
 		return fmt.Errorf("worktree_path is required")
 	}
-	if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
-		return nil
-	} else if err != nil {
-		return fmt.Errorf("stat worktree path: %w", err)
-	}
-
-	branchName, err := runGit(worktreePath, "rev-parse", "--abbrev-ref", "HEAD")
-	if err != nil {
-		return fmt.Errorf("resolve workspace branch: %w", err)
-	}
-	commonDir, err := runGit(worktreePath, "rev-parse", "--path-format=absolute", "--git-common-dir")
-	if err != nil {
-		return fmt.Errorf("resolve git common dir: %w", err)
-	}
-	repoPath := filepath.Dir(strings.TrimSpace(commonDir))
-	if _, err := runGit(repoPath, "worktree", "remove", "--force", worktreePath); err != nil {
-		return fmt.Errorf("git worktree remove: %w", err)
-	}
-	branchName = strings.TrimSpace(branchName)
-	if branchName != "" && branchName != "HEAD" {
-		if _, err := runGit(repoPath, "branch", "-D", branchName); err != nil {
-			return fmt.Errorf("delete workspace branch: %w", err)
+	return withWorkspacePathLock(worktreePath, func() error {
+		if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
+			return nil
+		} else if err != nil {
+			return fmt.Errorf("stat worktree path: %w", err)
 		}
-	}
-	return nil
+
+		branchName, err := runGit(worktreePath, "rev-parse", "--abbrev-ref", "HEAD")
+		if err != nil {
+			return fmt.Errorf("resolve workspace branch: %w", err)
+		}
+		commonDir, err := runGit(worktreePath, "rev-parse", "--path-format=absolute", "--git-common-dir")
+		if err != nil {
+			return fmt.Errorf("resolve git common dir: %w", err)
+		}
+		repoPath := filepath.Dir(strings.TrimSpace(commonDir))
+		return withWorkspaceRepoLock(repoPath, func() error {
+			if _, err := runGit(repoPath, "worktree", "remove", "--force", worktreePath); err != nil {
+				if os.IsNotExist(err) || strings.Contains(err.Error(), "is not a working tree") {
+					return nil
+				}
+				return fmt.Errorf("git worktree remove: %w", err)
+			}
+			branchName = strings.TrimSpace(branchName)
+			if opts.KeepBranch || branchName == "" || branchName == "HEAD" {
+				return nil
+			}
+			if _, err := runGit(repoPath, "branch", "-D", branchName); err != nil {
+				return fmt.Errorf("delete workspace branch: %w", err)
+			}
+			return nil
+		})
+	})
 }
 
-func runGit(dir string, args ...string) (string, error) {
+func withWorkspaceRepoLock(repoPath string, fn func() error) error {
+	lockKey, err := workspaceLockKey(repoPath)
+	if err != nil {
+		return err
+	}
+	raw, _ := workspaceRepoLocks.LoadOrStore(lockKey, &sync.Mutex{})
+	mu := raw.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+	return fn()
+}
+
+func withWorkspacePathLock(worktreePath string, fn func() error) error {
+	lockKey, err := workspaceLockKey(worktreePath)
+	if err != nil {
+		return err
+	}
+	raw, _ := workspacePathLocks.LoadOrStore(lockKey, &sync.Mutex{})
+	mu := raw.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+	return fn()
+}
+
+func workspaceLockKey(repoPath string) (string, error) {
+	repoPath = strings.TrimSpace(repoPath)
+	if repoPath == "" {
+		return "", fmt.Errorf("repo_path is required")
+	}
+	absPath, err := filepath.Abs(repoPath)
+	if err != nil {
+		return "", fmt.Errorf("abs repo path: %w", err)
+	}
+	if resolved, err := filepath.EvalSymlinks(absPath); err == nil {
+		return resolved, nil
+	}
+	parent := filepath.Dir(absPath)
+	if resolvedParent, err := filepath.EvalSymlinks(parent); err == nil {
+		return filepath.Join(resolvedParent, filepath.Base(absPath)), nil
+	}
+	return filepath.Clean(absPath), nil
+}
+
+func runGitCommand(dir string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), workspaceCommandTimeout)
 	defer cancel()
 

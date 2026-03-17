@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 )
 
 type jobTestAgent struct {
@@ -147,6 +148,38 @@ func TestSummarizeJobOutput(t *testing.T) {
 	}
 	if !strings.HasSuffix(summary, "...") {
 		t.Fatalf("summary = %q, want ellipsis", summary)
+	}
+}
+
+func TestJobTextBufferKeepsOnlyRecentTail(t *testing.T) {
+	var buffer jobTextBuffer
+	buffer.Append(strings.Repeat("a", maxBufferedJobTextBytes/2))
+	buffer.Append(strings.Repeat("b", maxBufferedJobTextBytes/2))
+	buffer.Append(strings.Repeat("c", maxBufferedJobTextBytes/2))
+
+	output := buffer.String()
+	if !strings.HasPrefix(output, "[truncated ") {
+		t.Fatalf("expected truncation notice, got %q", output[:min(len(output), 32)])
+	}
+	if strings.Contains(output, strings.Repeat("a", 32)) {
+		t.Fatalf("expected oldest chunk to be dropped")
+	}
+	if !strings.Contains(output, strings.Repeat("c", 32)) {
+		t.Fatalf("expected newest chunk to be retained")
+	}
+}
+
+func TestJobTextBufferPreservesRuneBoundariesAndWhitespaceOnlyTail(t *testing.T) {
+	var buffer jobTextBuffer
+	buffer.Append(strings.Repeat("界", maxBufferedJobTextBytes/4))
+	buffer.Append(strings.Repeat(" ", maxBufferedJobTextBytes))
+
+	output := buffer.String()
+	if !utf8.ValidString(output) {
+		t.Fatalf("buffer output is not valid UTF-8")
+	}
+	if !strings.HasPrefix(output, "[truncated ") {
+		t.Fatalf("output = %q, want truncation notice", output)
 	}
 }
 

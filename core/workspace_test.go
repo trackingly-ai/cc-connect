@@ -4,7 +4,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestSetupWorkspaceCreatesWorktree(t *testing.T) {
@@ -57,6 +60,67 @@ func TestCleanupWorkspaceMissingPathIsNoop(t *testing.T) {
 
 	if err := CleanupWorkspace(worktreePath); err != nil {
 		t.Fatalf("CleanupWorkspace missing path: %v", err)
+	}
+}
+
+func TestCleanupWorkspaceCanKeepBranch(t *testing.T) {
+	repoPath := initGitRepo(t)
+	worktreePath := filepath.Join(t.TempDir(), "worktrees", "task-keep")
+
+	if err := SetupWorkspace(repoPath, "main", "echo/task-keep", worktreePath); err != nil {
+		t.Fatalf("SetupWorkspace: %v", err)
+	}
+	if err := CleanupWorkspaceWithOptions(worktreePath, CleanupWorkspaceOptions{
+		KeepBranch: true,
+	}); err != nil {
+		t.Fatalf("CleanupWorkspaceWithOptions: %v", err)
+	}
+
+	branches, err := runGit(repoPath, "branch", "--list", "echo/task-keep")
+	if err != nil {
+		t.Fatalf("git branch --list: %v", err)
+	}
+	if !strings.Contains(branches, "echo/task-keep") {
+		t.Fatalf("expected workspace branch to remain, got %q", branches)
+	}
+}
+
+func TestSetupWorkspaceSerializesByRepo(t *testing.T) {
+	repoPath := initGitRepo(t)
+	originalRunGit := runGit
+	defer func() { runGit = originalRunGit }()
+
+	var active int32
+	var maxActive int32
+	var mu sync.Mutex
+	runGit = func(dir string, args ...string) (string, error) {
+		if dir == repoPath && len(args) >= 2 && args[0] == "worktree" && args[1] == "add" {
+			current := atomic.AddInt32(&active, 1)
+			mu.Lock()
+			if current > maxActive {
+				maxActive = current
+			}
+			mu.Unlock()
+			time.Sleep(50 * time.Millisecond)
+			defer atomic.AddInt32(&active, -1)
+		}
+		return originalRunGit(dir, args...)
+	}
+
+	worktreeA := filepath.Join(t.TempDir(), "worktrees", "task-a")
+	worktreeB := filepath.Join(t.TempDir(), "worktrees", "task-b")
+
+	errCh := make(chan error, 2)
+	go func() { errCh <- SetupWorkspace(repoPath, "main", "echo/task-a", worktreeA) }()
+	go func() { errCh <- SetupWorkspace(repoPath, "main", "echo/task-b", worktreeB) }()
+
+	for range 2 {
+		if err := <-errCh; err != nil {
+			t.Fatalf("SetupWorkspace: %v", err)
+		}
+	}
+	if maxActive != 1 {
+		t.Fatalf("max concurrent git worktree add = %d, want 1", maxActive)
 	}
 }
 

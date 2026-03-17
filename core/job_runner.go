@@ -6,9 +6,57 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 )
 
 const maxJobSummaryLen = 240
+const maxBufferedJobTextBytes = 64 * 1024
+
+type jobTextBuffer struct {
+	parts        []string
+	total        int
+	truncated    bool
+	droppedBytes int
+}
+
+func (b *jobTextBuffer) Append(text string) {
+	if text == "" {
+		return
+	}
+	b.parts = append(b.parts, text)
+	b.total += len(text)
+	for b.total > maxBufferedJobTextBytes && len(b.parts) > 0 {
+		overflow := b.total - maxBufferedJobTextBytes
+		head := b.parts[0]
+		if len(head) <= overflow {
+			b.parts = b.parts[1:]
+			b.total -= len(head)
+			b.droppedBytes += len(head)
+			b.truncated = true
+			continue
+		}
+		for overflow < len(head) && !utf8.RuneStart(head[overflow]) {
+			overflow++
+		}
+		b.parts[0] = head[overflow:]
+		b.total -= overflow
+		b.droppedBytes += overflow
+		b.truncated = true
+		break
+	}
+}
+
+func (b *jobTextBuffer) String() string {
+	joined := strings.Join(b.parts, "")
+	output := strings.TrimSpace(joined)
+	if !b.truncated {
+		return output
+	}
+	if output == "" {
+		return fmt.Sprintf("[truncated %d bytes]", b.droppedBytes)
+	}
+	return fmt.Sprintf("[truncated %d bytes]\n%s", b.droppedBytes, output)
+}
 
 type engineJobRunner struct {
 	engine *Engine
@@ -34,7 +82,7 @@ func (r engineJobRunner) Run(
 	}
 
 	sessionID := agentSession.CurrentSessionID()
-	var textParts []string
+	var textBuffer jobTextBuffer
 
 	for {
 		select {
@@ -42,7 +90,7 @@ func (r engineJobRunner) Run(
 			return nil, ctx.Err()
 		case event, ok := <-agentSession.Events():
 			if !ok {
-				output := strings.TrimSpace(strings.Join(textParts, ""))
+				output := textBuffer.String()
 				if output == "" {
 					return nil, fmt.Errorf("job session exited without result")
 				}
@@ -60,12 +108,12 @@ func (r engineJobRunner) Run(
 			switch event.Type {
 			case EventText:
 				if event.Content != "" {
-					textParts = append(textParts, event.Content)
+					textBuffer.Append(event.Content)
 				}
 			case EventResult:
 				output := event.Content
 				if output == "" {
-					output = strings.TrimSpace(strings.Join(textParts, ""))
+					output = textBuffer.String()
 				}
 				return &JobResult{
 					Output:    output,

@@ -147,10 +147,13 @@ func NewMCPServer(jm *JobManager, authToken string) *MCPServer {
 	cleanupWorkspaceTool := mcp.NewTool("cleanup_workspace",
 		mcp.WithDescription("Remove a git worktree workspace for a task."),
 		mcp.WithString("worktree_path", mcp.Description("Workspace worktree path."), mcp.Required()),
+		mcp.WithBoolean("keep_branch", mcp.Description("Keep the workspace branch after removing the worktree.")),
 	)
 	mcpSrv.AddTool(cleanupWorkspaceTool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		worktreePath := strings.TrimSpace(req.GetString("worktree_path", ""))
-		if err := CleanupWorkspace(worktreePath); err != nil {
+		if err := CleanupWorkspaceWithOptions(worktreePath, CleanupWorkspaceOptions{
+			KeepBranch: req.GetBool("keep_branch", false),
+		}); err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 		return mcp.NewToolResultStructured(
