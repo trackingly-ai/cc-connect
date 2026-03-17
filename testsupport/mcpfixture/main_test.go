@@ -3,6 +3,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLookupEnvUsesLastMatch(t *testing.T) {
@@ -180,6 +181,17 @@ func TestRenderEchoResultStartupRecoveryRemoteFailure(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("renderEchoResult() missing %q in %q", want, got)
 		}
+	}
+}
+
+func TestRenderDelay(t *testing.T) {
+	t.Parallel()
+
+	if got := renderDelay(startupRecoveryRemoteRunningSmoke); got != 500*time.Millisecond {
+		t.Fatalf("renderDelay(running-smoke) = %s, want %s", got, 500*time.Millisecond)
+	}
+	if got := renderDelay("ship it"); got != 25*time.Millisecond {
+		t.Fatalf("renderDelay(default) = %s, want %s", got, 25*time.Millisecond)
 	}
 }
 

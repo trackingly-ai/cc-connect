@@ -16,6 +16,8 @@ import (
 	"github.com/chenhg5/cc-connect/core"
 )
 
+const startupRecoveryRemoteRunningSmoke = "startup-recovery-remote-running-smoke"
+
 func main() {
 	listen := flag.String("listen", "127.0.0.1:9820", "listen address")
 	project := flag.String("project", "echo", "project name to register")
@@ -89,7 +91,7 @@ type fixtureSession struct {
 
 func (s *fixtureSession) Send(prompt string, _ []core.ImageAttachment, _ []core.FileAttachment) error {
 	go func() {
-		time.Sleep(25 * time.Millisecond)
+		time.Sleep(renderDelay(prompt))
 		s.events <- core.Event{
 			Type:    core.EventResult,
 			Content: renderEchoResult(prompt, s.env),
@@ -183,6 +185,15 @@ func renderEchoResult(prompt string, env []string) string {
 		"status":  "completed",
 		"summary": "fixture completed: " + prompt + workspaceSummary,
 	})
+}
+
+func renderDelay(prompt string) time.Duration {
+	// The recovery smoke needs the remote job to stay in "running" long enough
+	// for Echo to observe and refresh the heartbeat before the fixture completes.
+	if strings.Contains(prompt, startupRecoveryRemoteRunningSmoke) {
+		return 500 * time.Millisecond
+	}
+	return 25 * time.Millisecond
 }
 
 func mustRenderEchoResult(payload map[string]string) string {
