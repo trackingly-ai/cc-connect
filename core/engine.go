@@ -188,6 +188,27 @@ type interactiveState struct {
 	approveAll   bool // when true, auto-approve all permission requests for this session
 	quiet        bool // when true, suppress thinking and tool progress for this session
 	fromVoice    bool // true if current turn originated from voice transcription
+	stopped      chan struct{}
+	stopOnce     sync.Once
+}
+
+func newInteractiveState(agentSession AgentSession, p Platform, replyCtx any, quiet bool) *interactiveState {
+	return &interactiveState{
+		agentSession: agentSession,
+		platform:     p,
+		replyCtx:     replyCtx,
+		quiet:        quiet,
+		stopped:      make(chan struct{}),
+	}
+}
+
+func (s *interactiveState) stop() {
+	if s == nil {
+		return
+	}
+	s.stopOnce.Do(func() {
+		close(s.stopped)
+	})
 }
 
 // pendingPermission represents a permission request waiting for user response.
@@ -1266,7 +1287,7 @@ func (e *Engine) getOrCreateInteractiveState(sessionKey string, p Platform, repl
 	// Check if context is already canceled (e.g. during shutdown/restart)
 	if e.ctx.Err() != nil {
 		slog.Debug("skipping session start: context canceled", "session_key", sessionKey)
-		state = &interactiveState{platform: p, replyCtx: replyCtx, quiet: quietMode}
+		state = newInteractiveState(nil, p, replyCtx, quietMode)
 		e.interactiveStates[sessionKey] = state
 		return state
 	}
@@ -1280,7 +1301,7 @@ func (e *Engine) getOrCreateInteractiveState(sessionKey string, p Platform, repl
 	startElapsed := time.Since(startAt)
 	if err != nil {
 		slog.Error("failed to start interactive session", "error", err, "elapsed", startElapsed)
-		state = &interactiveState{platform: p, replyCtx: replyCtx, quiet: quietMode}
+		state = newInteractiveState(nil, p, replyCtx, quietMode)
 		e.interactiveStates[sessionKey] = state
 		return state
 	}
@@ -1288,12 +1309,7 @@ func (e *Engine) getOrCreateInteractiveState(sessionKey string, p Platform, repl
 		slog.Warn("slow agent session start", "elapsed", startElapsed, "agent", e.agent.Name(), "session_id", session.AgentSessionID)
 	}
 
-	state = &interactiveState{
-		agentSession: agentSession,
-		platform:     p,
-		replyCtx:     replyCtx,
-		quiet:        quietMode,
-	}
+	state = newInteractiveState(agentSession, p, replyCtx, quietMode)
 	e.interactiveStates[sessionKey] = state
 
 	slog.Info("interactive session started", "session_key", sessionKey, "agent_session", session.AgentSessionID, "elapsed", startElapsed)
@@ -1308,6 +1324,7 @@ func (e *Engine) cleanupInteractiveState(sessionKey string) {
 	e.interactiveMu.Unlock()
 
 	if ok && state != nil && state.agentSession != nil {
+		state.stop()
 		slog.Debug("cleanupInteractiveState: closing agent session", "session", sessionKey)
 		closeStart := time.Now()
 
@@ -1359,6 +1376,8 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			if !ok {
 				goto channelClosed
 			}
+		case <-state.stopped:
+			return
 		case <-idleCh:
 			slog.Error("agent session idle timeout: no events for too long, killing session",
 				"session_key", sessionKey, "timeout", e.eventIdleTimeout, "elapsed", time.Since(turnStart))
@@ -1485,8 +1504,14 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				idleTimer.Stop()
 			}
 
-			<-pending.Resolved
-			slog.Info("permission resolved", "request_id", event.RequestID)
+			select {
+			case <-pending.Resolved:
+				slog.Info("permission resolved", "request_id", event.RequestID)
+			case <-state.stopped:
+				return
+			case <-e.ctx.Done():
+				return
+			}
 
 			// Restart idle timer after permission is resolved
 			if idleTimer != nil {
@@ -2727,7 +2752,7 @@ func (e *Engine) cmdQuiet(p Platform, msg *Message, args []string) {
 	e.interactiveMu.Unlock()
 
 	if !ok || state == nil {
-		state = &interactiveState{platform: p, replyCtx: msg.ReplyCtx, quiet: true}
+		state = newInteractiveState(nil, p, msg.ReplyCtx, true)
 		e.interactiveMu.Lock()
 		e.interactiveStates[msg.SessionKey] = state
 		e.interactiveMu.Unlock()
@@ -2807,7 +2832,7 @@ func (e *Engine) cmdStop(p Platform, msg *Message) {
 			s.quiet = quietMode
 			s.mu.Unlock()
 		} else {
-			e.interactiveStates[msg.SessionKey] = &interactiveState{platform: p, replyCtx: msg.ReplyCtx, quiet: quietMode}
+			e.interactiveStates[msg.SessionKey] = newInteractiveState(nil, p, msg.ReplyCtx, quietMode)
 		}
 		e.interactiveMu.Unlock()
 	}
@@ -2892,6 +2917,8 @@ func (e *Engine) processCompressEvents(state *interactiveState, sessionKey strin
 				}
 				return
 			}
+		case <-state.stopped:
+			return
 		case <-idleCh:
 			e.send(p, replyCtx, fmt.Sprintf(e.i18n.T(MsgError), "compress timed out"))
 			e.cleanupInteractiveState(sessionKey)
