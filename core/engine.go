@@ -17,6 +17,7 @@ import (
 )
 
 const maxPlatformMessageLen = 4000
+const maxParallelTTSRequests = 3
 
 const (
 	defaultThinkingMaxLen = 300
@@ -4427,22 +4428,217 @@ func (e *Engine) synthesizeAndSendTTSReply(p Platform, replyCtx any, text string
 	if e.tts == nil || e.tts.TTS == nil {
 		return fmt.Errorf("tts is not enabled")
 	}
-	if e.tts.MaxTextLen > 0 && utf8.RuneCountInString(text) > e.tts.MaxTextLen {
-		return fmt.Errorf("tts text exceeds max_text_len (%d > %d)", utf8.RuneCountInString(text), e.tts.MaxTextLen)
-	}
-	opts := TTSSynthesisOpts{Voice: e.tts.Voice}
-	audioData, format, err := e.tts.TTS.Synthesize(e.ctx, text, opts)
-	if err != nil {
-		return err
-	}
 	as, ok := p.(AudioSender)
 	if !ok {
 		return fmt.Errorf("platform %s does not support audio sending", p.Name())
 	}
-	if err := as.SendAudio(e.ctx, replyCtx, audioData, format); err != nil {
-		return err
+	chunks := splitTTSChunks(text, e.tts.MaxTextLen)
+	opts := TTSSynthesisOpts{Voice: e.tts.Voice}
+	type ttsResult struct {
+		audio  []byte
+		format string
+	}
+	results := make([]ttsResult, len(chunks))
+
+	parallelism := len(chunks)
+	if parallelism > maxParallelTTSRequests {
+		parallelism = maxParallelTTSRequests
+	}
+	if parallelism < 1 {
+		parallelism = 1
+	}
+
+	sem := make(chan struct{}, parallelism)
+	ctx, cancel := context.WithCancel(e.ctx)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	var firstErr error
+	var firstErrMu sync.Mutex
+
+	for i, chunk := range chunks {
+		wg.Add(1)
+		go func(idx int, part string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			if ctx.Err() != nil {
+				return
+			}
+			audioData, format, err := e.tts.TTS.Synthesize(ctx, part, opts)
+			if err != nil {
+				firstErrMu.Lock()
+				if firstErr == nil {
+					firstErr = err
+					cancel()
+				}
+				firstErrMu.Unlock()
+				return
+			}
+			results[idx] = ttsResult{audio: audioData, format: format}
+		}(i, chunk)
+	}
+	wg.Wait()
+
+	if firstErr != nil {
+		return firstErr
+	}
+
+	for _, result := range results {
+		if err := as.SendAudio(e.ctx, replyCtx, result.audio, result.format); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+func splitTTSChunks(text string, maxLen int) []string {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return nil
+	}
+	if maxLen <= 0 || utf8.RuneCountInString(trimmed) <= maxLen {
+		return []string{trimmed}
+	}
+
+	var chunks []string
+	for _, paragraph := range splitTTSParagraphs(trimmed) {
+		if utf8.RuneCountInString(paragraph) <= maxLen {
+			chunks = append(chunks, paragraph)
+			continue
+		}
+		chunks = append(chunks, splitTTSParagraph(paragraph, maxLen)...)
+	}
+	return chunks
+}
+
+func splitTTSParagraphs(text string) []string {
+	lines := strings.Split(text, "\n")
+	var paragraphs []string
+	var current []string
+	flush := func() {
+		if len(current) == 0 {
+			return
+		}
+		paragraph := strings.TrimSpace(strings.Join(current, "\n"))
+		if paragraph != "" {
+			paragraphs = append(paragraphs, paragraph)
+		}
+		current = nil
+	}
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			flush()
+			continue
+		}
+		current = append(current, line)
+	}
+	flush()
+	if len(paragraphs) == 0 {
+		return []string{strings.TrimSpace(text)}
+	}
+	return paragraphs
+}
+
+func splitTTSParagraph(paragraph string, maxLen int) []string {
+	if utf8.RuneCountInString(paragraph) <= maxLen {
+		return []string{paragraph}
+	}
+
+	sentences := splitTTSSentences(paragraph)
+	var chunks []string
+	var current strings.Builder
+	currentLen := 0
+	flush := func() {
+		chunk := strings.TrimSpace(current.String())
+		if chunk != "" {
+			chunks = append(chunks, chunk)
+		}
+		current.Reset()
+		currentLen = 0
+	}
+
+	for _, sentence := range sentences {
+		sentence = strings.TrimSpace(sentence)
+		if sentence == "" {
+			continue
+		}
+		sentenceLen := utf8.RuneCountInString(sentence)
+		if sentenceLen > maxLen {
+			flush()
+			chunks = append(chunks, splitTTSByLength(sentence, maxLen)...)
+			continue
+		}
+		if currentLen > 0 && currentLen+1+sentenceLen > maxLen {
+			flush()
+		}
+		if currentLen > 0 {
+			current.WriteRune(' ')
+			currentLen++
+		}
+		current.WriteString(sentence)
+		currentLen += sentenceLen
+	}
+	flush()
+	return chunks
+}
+
+func splitTTSSentences(text string) []string {
+	var parts []string
+	var current strings.Builder
+	for _, r := range text {
+		current.WriteRune(r)
+		switch r {
+		case '\n', '。', '！', '？', '.', '!', '?', ';', '；':
+			part := strings.TrimSpace(current.String())
+			if part != "" {
+				parts = append(parts, part)
+			}
+			current.Reset()
+		}
+	}
+	if tail := strings.TrimSpace(current.String()); tail != "" {
+		parts = append(parts, tail)
+	}
+	if len(parts) == 0 {
+		return []string{text}
+	}
+	return parts
+}
+
+func splitTTSByLength(text string, maxLen int) []string {
+	runes := []rune(strings.TrimSpace(text))
+	var chunks []string
+	for len(runes) > 0 {
+		if len(runes) <= maxLen {
+			chunk := strings.TrimSpace(string(runes))
+			if chunk != "" {
+				chunks = append(chunks, chunk)
+			}
+			break
+		}
+
+		splitAt := maxLen
+		minSplit := maxLen / 2
+		if minSplit < 1 {
+			minSplit = 1
+		}
+		for i := maxLen; i >= minSplit; i-- {
+			switch runes[i-1] {
+			case '\n', '。', '！', '？', '.', '!', '?', ';', '；', ',', '，', ' ':
+				splitAt = i
+				i = minSplit
+			}
+		}
+
+		chunk := strings.TrimSpace(string(runes[:splitAt]))
+		if chunk != "" {
+			chunks = append(chunks, chunk)
+		}
+		runes = []rune(strings.TrimSpace(string(runes[splitAt:])))
+	}
+	return chunks
 }
 
 // ──────────────────────────────────────────────────────────────

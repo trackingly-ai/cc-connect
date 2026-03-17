@@ -82,7 +82,9 @@ func NewQwenTTS(apiKey, baseURL, model string, client *http.Client) *QwenTTS {
 		model = "qwen3-tts-flash"
 	}
 	if client == nil {
-		client = &http.Client{Timeout: 60 * time.Second}
+		// Qwen TTS may take noticeably longer to return the first response headers
+		// for longer texts than OpenAI-compatible TTS providers.
+		client = &http.Client{Timeout: 5 * time.Minute}
 	}
 	return &QwenTTS{
 		APIKey:  apiKey,
