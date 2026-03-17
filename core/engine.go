@@ -1392,6 +1392,8 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			}
 		}
 
+		e.bindAgentSessionID(session, event.SessionID)
+
 		state.mu.Lock()
 		p := state.platform
 		replyCtx := state.replyCtx
@@ -1433,20 +1435,6 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				textParts = append(textParts, event.Content)
 				if sp.canPreview() {
 					sp.appendText(event.Content)
-				}
-			}
-			if event.SessionID != "" {
-				session.mu.Lock()
-				if session.AgentSessionID == "" {
-					session.AgentSessionID = event.SessionID
-					pendingName := session.Name
-					session.mu.Unlock()
-					if pendingName != "" && pendingName != "session" && pendingName != "default" {
-						e.sessions.SetSessionName(event.SessionID, pendingName)
-					}
-					e.sessions.Save()
-				} else {
-					session.mu.Unlock()
 				}
 			}
 
@@ -1607,6 +1595,26 @@ channelClosed:
 			}
 		}
 	}
+}
+
+func (e *Engine) bindAgentSessionID(session *Session, agentSessionID string) {
+	if session == nil || agentSessionID == "" {
+		return
+	}
+
+	session.mu.Lock()
+	if session.AgentSessionID != "" {
+		session.mu.Unlock()
+		return
+	}
+	session.AgentSessionID = agentSessionID
+	pendingName := session.Name
+	session.mu.Unlock()
+
+	if pendingName != "" && pendingName != "session" && pendingName != "default" {
+		e.sessions.SetSessionName(agentSessionID, pendingName)
+	}
+	e.sessions.Save()
 }
 
 // ──────────────────────────────────────────────────────────────

@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 // --- stubs for Engine tests ---
@@ -27,6 +28,23 @@ func (s *stubAgentSession) Events() <-chan Event                                
 func (s *stubAgentSession) CurrentSessionID() string                             { return "stub-session" }
 func (s *stubAgentSession) Alive() bool                                          { return true }
 func (s *stubAgentSession) Close() error                                         { return nil }
+
+type eventfulStubAgentSession struct {
+	events chan Event
+}
+
+func (s *eventfulStubAgentSession) Send(_ string, _ []ImageAttachment, _ []FileAttachment) error {
+	return nil
+}
+func (s *eventfulStubAgentSession) RespondPermission(_ string, _ PermissionResult) error {
+	return nil
+}
+func (s *eventfulStubAgentSession) Events() <-chan Event { return s.events }
+func (s *eventfulStubAgentSession) CurrentSessionID() string {
+	return ""
+}
+func (s *eventfulStubAgentSession) Alive() bool  { return true }
+func (s *eventfulStubAgentSession) Close() error { return nil }
 
 type stubWorkDirAgent struct {
 	stubAgent
@@ -104,6 +122,27 @@ func TestCmdDir_ChangesWorkDirAndClearsSession(t *testing.T) {
 	}
 	if len(p.sent) == 0 || !strings.Contains(p.sent[len(p.sent)-1], targetDir) {
 		t.Fatalf("last reply = %q, want changed directory message", strings.Join(p.sent, "\n"))
+	}
+}
+
+func TestProcessInteractiveEvents_BindsSessionIDFromResultEvent(t *testing.T) {
+	e := newTestEngine()
+	p := &stubPlatformEngine{n: "test"}
+	events := make(chan Event, 1)
+	events <- Event{Type: EventResult, SessionID: "codex-thread-123", Done: true}
+	close(events)
+
+	session := &Session{Name: "default"}
+	state := &interactiveState{
+		agentSession: &eventfulStubAgentSession{events: events},
+		platform:     p,
+		replyCtx:     "ctx",
+	}
+
+	e.processInteractiveEvents(state, session, "test:user1", "msg-1", time.Now())
+
+	if session.AgentSessionID != "codex-thread-123" {
+		t.Fatalf("AgentSessionID = %q, want codex-thread-123", session.AgentSessionID)
 	}
 }
 
