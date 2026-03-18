@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -74,16 +75,17 @@ func NewMCPServer(jm *JobManager, authToken string) *MCPServer {
 			return mcp.NewToolResultError("timeout_sec must be >= 0"), nil
 		}
 
+		workspaceRef, err := workspaceRefFromArguments(req)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
 		job, err := jm.Start(JobRequest{
-			Project: project,
-			TaskID:  strings.TrimSpace(req.GetString("task_id", "")),
-			Prompt:  prompt,
-			Timeout: time.Duration(timeoutSec) * time.Second,
-			WorkspaceRef: JobWorkspaceRef{
-				RepoPath:     strings.TrimSpace(req.GetString("repo_path", "")),
-				WorktreePath: strings.TrimSpace(req.GetString("worktree_path", "")),
-				Branch:       strings.TrimSpace(req.GetString("branch", "")),
-			},
+			Project:      project,
+			TaskID:       strings.TrimSpace(req.GetString("task_id", "")),
+			Prompt:       prompt,
+			Timeout:      time.Duration(timeoutSec) * time.Second,
+			WorkspaceRef: workspaceRef,
 		})
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
@@ -181,6 +183,10 @@ func (s *MCPServer) Start(addr string) error {
 	if err != nil {
 		return fmt.Errorf("listen mcp http: %w", err)
 	}
+	if err := validateMCPListenerSecurity(listener.Addr(), s.authToken); err != nil {
+		_ = listener.Close()
+		return err
+	}
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", s.handler)
 	mux.Handle("/mcp/", s.handler)
@@ -217,6 +223,66 @@ func withOptionalBearerAuth(next http.Handler, authToken string) http.Handler {
 	})
 }
 
+func workspaceRefFromArguments(req mcp.CallToolRequest) (JobWorkspaceRef, error) {
+	workspaceRef := JobWorkspaceRef{
+		RepoPath:     strings.TrimSpace(req.GetString("repo_path", "")),
+		WorktreePath: strings.TrimSpace(req.GetString("worktree_path", "")),
+		Branch:       strings.TrimSpace(req.GetString("branch", "")),
+	}
+	args, ok := req.Params.Arguments.(map[string]any)
+	if !ok {
+		return workspaceRef, nil
+	}
+	raw, ok := args["workspace_ref"]
+	if !ok || raw == nil {
+		return workspaceRef, nil
+	}
+	workspaceMap, ok := raw.(map[string]any)
+	if !ok {
+		return JobWorkspaceRef{}, fmt.Errorf("workspace_ref must be an object")
+	}
+	if workspaceRef.RepoPath == "" {
+		workspaceRef.RepoPath = stringArg(workspaceMap, "repo_path")
+	}
+	if workspaceRef.WorktreePath == "" {
+		workspaceRef.WorktreePath = stringArg(workspaceMap, "worktree_path")
+	}
+	if workspaceRef.Branch == "" {
+		workspaceRef.Branch = stringArg(workspaceMap, "branch")
+	}
+	return workspaceRef, nil
+}
+
+func stringArg(values map[string]any, key string) string {
+	value, ok := values[key]
+	if !ok {
+		return ""
+	}
+	asString, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(asString)
+}
+
+func validateMCPListenerSecurity(addr net.Addr, authToken string) error {
+	if strings.TrimSpace(authToken) != "" {
+		return nil
+	}
+	tcpAddr, ok := addr.(*net.TCPAddr)
+	if !ok {
+		return nil
+	}
+	ip, ok := netip.AddrFromSlice(tcpAddr.IP)
+	if !ok {
+		return nil
+	}
+	if !ip.IsValid() || ip.IsUnspecified() || !ip.IsLoopback() {
+		return fmt.Errorf("mcp auth_token is required when binding to non-loopback address %q", addr.String())
+	}
+	return nil
+}
+
 func jobResponse(job *Job) map[string]any {
 	if job == nil {
 		return map[string]any{}
@@ -233,6 +299,7 @@ func jobResponse(job *Job) map[string]any {
 		"summary":       job.Summary,
 		"session_id":    job.SessionID,
 		"error":         job.Error,
+		"error_code":    job.ErrorCode,
 		"created_at":    job.CreatedAt.Format(time.RFC3339Nano),
 		"timeout_sec":   job.TimeoutSec,
 	}

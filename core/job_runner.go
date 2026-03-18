@@ -12,6 +12,19 @@ import (
 const maxJobSummaryLen = 240
 const maxBufferedJobTextBytes = 64 * 1024
 
+type codedJobError struct {
+	code string
+	msg  string
+}
+
+func (e *codedJobError) Error() string {
+	return e.msg
+}
+
+func (e *codedJobError) Code() string {
+	return e.code
+}
+
 type jobTextBuffer struct {
 	parts        []string
 	total        int
@@ -126,10 +139,13 @@ func (r engineJobRunner) Run(
 				}
 				return nil, fmt.Errorf("job runner received agent error event")
 			case EventPermissionRequest:
-				return nil, fmt.Errorf(
-					"job runner cannot satisfy permission request for tool %q",
-					event.ToolName,
-				)
+				return nil, &codedJobError{
+					code: JobErrorCodePermissionRequired,
+					msg: fmt.Sprintf(
+						"job runner cannot satisfy permission request for tool %q",
+						event.ToolName,
+					),
+				}
 			}
 		}
 	}
@@ -221,9 +237,20 @@ func validateJobWorkspace(workspaceRef JobWorkspaceRef) error {
 
 func summarizeJobOutput(output string) string {
 	summary := strings.TrimSpace(output)
+	if summary == "" {
+		return ""
+	}
+	lines := strings.Split(summary, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line != "" {
+			summary = line
+			break
+		}
+	}
 	if len([]rune(summary)) <= maxJobSummaryLen {
 		return summary
 	}
 	runes := []rune(summary)
-	return string(runes[:maxJobSummaryLen-3]) + "..."
+	return "..." + string(runes[len(runes)-(maxJobSummaryLen-3):])
 }

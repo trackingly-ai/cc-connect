@@ -2,8 +2,10 @@ package core
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,6 +35,12 @@ type jobPayload struct {
 	SessionID  string `json:"session_id"`
 	TimeoutSec int    `json:"timeout_sec"`
 	Error      string `json:"error"`
+	ErrorCode  string `json:"error_code"`
+	Workspace  struct {
+		RepoPath     string `json:"repo_path"`
+		WorktreePath string `json:"worktree_path"`
+		Branch       string `json:"branch"`
+	} `json:"workspace_ref"`
 }
 
 type workspacePayload struct {
@@ -126,6 +134,68 @@ func TestMCPServerTaskRunLifecycle(t *testing.T) {
 	if fetched.Summary != "finished" || fetched.SessionID != "session-123" {
 		t.Fatalf("unexpected fetched payload: %+v", fetched)
 	}
+	if fetched.Workspace.RepoPath != "/repo" || fetched.Workspace.WorktreePath != "/repo/.echo/workspaces/task-1" || fetched.Workspace.Branch != "echo/task-1" {
+		t.Fatalf("unexpected workspace payload: %+v", fetched.Workspace)
+	}
+}
+
+func TestMCPServerTaskRunLifecycleAcceptsNestedWorkspaceRef(t *testing.T) {
+	jm, err := NewJobManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewJobManager: %v", err)
+	}
+
+	done := make(chan struct{})
+	jm.RegisterRunner("demo", mcpTestJobRunner{run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+		_ = ctx
+		_ = jobID
+		if req.WorkspaceRef.RepoPath != "/repo" || req.WorkspaceRef.WorktreePath != "/repo/.echo/workspaces/task-2" || req.WorkspaceRef.Branch != "echo/task-2" {
+			t.Fatalf("unexpected workspace ref: %+v", req.WorkspaceRef)
+		}
+		close(done)
+		return &JobResult{Summary: "finished"}, nil
+	}})
+
+	httpServer := httptest.NewServer(NewMCPServer(jm, "").Handler())
+	defer httpServer.Close()
+
+	mcpClient := startMCPClient(t, httpServer.URL+"/mcp")
+	defer func() {
+		_ = mcpClient.Close()
+		time.Sleep(25 * time.Millisecond)
+	}()
+
+	var startReq mcp.CallToolRequest
+	startReq.Params.Name = "start_task_run"
+	startReq.Params.Arguments = map[string]any{
+		"project": "demo",
+		"task_id": "task-2",
+		"prompt":  "fix the tests",
+		"workspace_ref": map[string]any{
+			"repo_path":     "/repo",
+			"worktree_path": "/repo/.echo/workspaces/task-2",
+			"branch":        "echo/task-2",
+		},
+	}
+	startResult, err := mcpClient.CallTool(context.Background(), startReq)
+	if err != nil {
+		t.Fatalf("start_task_run: %v", err)
+	}
+
+	var started jobPayload
+	if err := decodeStructuredResult(startResult, &started); err != nil {
+		t.Fatalf("decode start result: %v", err)
+	}
+	if started.Workspace.RepoPath != "/repo" || started.Workspace.WorktreePath != "/repo/.echo/workspaces/task-2" || started.Workspace.Branch != "echo/task-2" {
+		t.Fatalf("unexpected workspace payload: %+v", started.Workspace)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("job did not complete")
+	}
+	waitForJobStatus(t, jm, started.ID, JobStatusCompleted)
 }
 
 func TestMCPServerCancelTaskRun(t *testing.T) {
@@ -581,5 +651,28 @@ func TestMCPServerHandlerRespondsUnauthorizedWithoutToken(t *testing.T) {
 
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("unexpected status: %d", recorder.Code)
+	}
+}
+
+func TestValidateMCPListenerSecurity(t *testing.T) {
+	if err := validateMCPListenerSecurity(&net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 9820}, ""); err != nil {
+		t.Fatalf("expected loopback listener to be allowed, got %v", err)
+	}
+	if err := validateMCPListenerSecurity(&net.TCPAddr{IP: net.ParseIP("::1"), Port: 9820}, ""); err != nil {
+		t.Fatalf("expected IPv6 loopback listener to be allowed, got %v", err)
+	}
+	if err := validateMCPListenerSecurity(&net.TCPAddr{IP: net.ParseIP("0.0.0.0"), Port: 9820}, "secret"); err != nil {
+		t.Fatalf("expected auth-protected listener to be allowed, got %v", err)
+	}
+	err := validateMCPListenerSecurity(&net.TCPAddr{IP: net.ParseIP("0.0.0.0"), Port: 9820}, "")
+	if err == nil {
+		t.Fatal("expected non-loopback listener without auth to fail")
+	}
+	if !strings.Contains(err.Error(), "auth_token is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	err = validateMCPListenerSecurity(&net.TCPAddr{IP: net.ParseIP("::"), Port: 9820}, "")
+	if err == nil {
+		t.Fatal("expected unspecified IPv6 listener without auth to fail")
 	}
 }

@@ -24,6 +24,8 @@ const (
 	JobStatusOrphaned  = "orphaned"
 )
 
+const JobErrorCodePermissionRequired = "permission_required"
+
 var newJobIDFunc = newJobID
 
 type JobWorkspaceRef struct {
@@ -57,6 +59,7 @@ type Job struct {
 	Summary      string          `json:"summary,omitempty"`
 	SessionID    string          `json:"session_id,omitempty"`
 	Error        string          `json:"error,omitempty"`
+	ErrorCode    string          `json:"error_code,omitempty"`
 	CreatedAt    time.Time       `json:"created_at"`
 	StartedAt    *time.Time      `json:"started_at,omitempty"`
 	FinishedAt   *time.Time      `json:"finished_at,omitempty"`
@@ -359,6 +362,9 @@ func (jm *JobManager) runJob(managed *managedJob) {
 		if err != nil {
 			job.Status = JobStatusFailed
 			job.Error = err.Error()
+			if coded, ok := err.(interface{ Code() string }); ok {
+				job.ErrorCode = coded.Code()
+			}
 			return
 		}
 		job.Status = JobStatusCompleted

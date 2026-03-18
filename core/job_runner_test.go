@@ -133,6 +133,10 @@ func TestEngineJobRunnerRejectsPermissionRequest(t *testing.T) {
 	if !strings.Contains(err.Error(), "permission request") {
 		t.Fatalf("error = %v, want permission request", err)
 	}
+	coded, ok := err.(interface{ Code() string })
+	if !ok || coded.Code() != JobErrorCodePermissionRequired {
+		t.Fatalf("error code = %v, want %q", err, JobErrorCodePermissionRequired)
+	}
 }
 
 func TestSummarizeJobOutput(t *testing.T) {
@@ -141,13 +145,18 @@ func TestSummarizeJobOutput(t *testing.T) {
 		t.Fatalf("short summary = %q", short)
 	}
 
-	longInput := strings.Repeat("a", maxJobSummaryLen+20)
+	multiLine := "thinking...\nresult line"
+	if summary := summarizeJobOutput(multiLine); summary != "result line" {
+		t.Fatalf("summary = %q, want result line", summary)
+	}
+
+	longInput := strings.Repeat("a", 20) + "\n" + strings.Repeat("z", maxJobSummaryLen+20)
 	summary := summarizeJobOutput(longInput)
 	if len([]rune(summary)) != maxJobSummaryLen {
 		t.Fatalf("summary len = %d, want %d", len([]rune(summary)), maxJobSummaryLen)
 	}
-	if !strings.HasSuffix(summary, "...") {
-		t.Fatalf("summary = %q, want ellipsis", summary)
+	if !strings.HasPrefix(summary, "...") {
+		t.Fatalf("summary = %q, want leading ellipsis", summary)
 	}
 }
 
