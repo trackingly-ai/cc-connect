@@ -31,6 +31,23 @@ func TestSetupWorkspaceCreatesWorktree(t *testing.T) {
 	}
 }
 
+func TestSetupWorkspaceRejectsExistingBranch(t *testing.T) {
+	repoPath := initGitRepo(t)
+	worktreePath := filepath.Join(t.TempDir(), "worktrees", "task-existing-branch")
+
+	if _, err := runGit(repoPath, "branch", "echo/task-existing-branch", "main"); err != nil {
+		t.Fatalf("git branch: %v", err)
+	}
+
+	err := SetupWorkspace(repoPath, "main", "echo/task-existing-branch", worktreePath)
+	if err == nil {
+		t.Fatal("expected setup to reject pre-existing branch")
+	}
+	if !strings.Contains(err.Error(), "workspace branch already exists") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestCleanupWorkspaceRemovesWorktree(t *testing.T) {
 	repoPath := initGitRepo(t)
 	worktreePath := filepath.Join(t.TempDir(), "worktrees", "task-2")
@@ -82,6 +99,33 @@ func TestCleanupWorkspaceCanKeepBranch(t *testing.T) {
 	}
 	if !strings.Contains(branches, "echo/task-keep") {
 		t.Fatalf("expected workspace branch to remain, got %q", branches)
+	}
+}
+
+func TestCleanupWorkspaceKeepsNonManagedBranch(t *testing.T) {
+	repoPath := initGitRepo(t)
+	worktreePath := filepath.Join(t.TempDir(), "worktrees", "task-non-managed")
+
+	if err := SetupWorkspace(repoPath, "main", "echo/task-non-managed", worktreePath); err != nil {
+		t.Fatalf("SetupWorkspace: %v", err)
+	}
+	if _, err := runGit(worktreePath, "checkout", "-b", "manual/debug"); err != nil {
+		t.Fatalf("git checkout -b manual/debug: %v", err)
+	}
+
+	if err := CleanupWorkspace(worktreePath); err != nil {
+		t.Fatalf("CleanupWorkspace: %v", err)
+	}
+	if _, err := os.Stat(worktreePath); !os.IsNotExist(err) {
+		t.Fatalf("expected worktree to be removed, stat err = %v", err)
+	}
+
+	branches, err := runGit(repoPath, "branch", "--list", "manual/debug")
+	if err != nil {
+		t.Fatalf("git branch --list: %v", err)
+	}
+	if !strings.Contains(branches, "manual/debug") {
+		t.Fatalf("expected non-managed branch to remain, got %q", branches)
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 )
 
 const workspaceCommandTimeout = 30 * time.Second
+const workspaceBranchPrefix = "echo/"
 
 var workspaceRepoLocks sync.Map
 var workspacePathLocks sync.Map
@@ -52,6 +53,20 @@ func SetupWorkspace(
 			} else if !os.IsNotExist(err) {
 				return fmt.Errorf("stat worktree path: %w", err)
 			}
+			existingBranch, err := runGit(
+				repoPath,
+				"branch",
+				"--list",
+				"--format=%(refname:short)",
+				"--",
+				branchName,
+			)
+			if err != nil {
+				return fmt.Errorf("check workspace branch: %w", err)
+			}
+			if strings.TrimSpace(existingBranch) != "" {
+				return fmt.Errorf("workspace branch already exists: %s", branchName)
+			}
 			if err := os.MkdirAll(filepath.Dir(worktreePath), 0o755); err != nil {
 				return fmt.Errorf("create worktree parent dir: %w", err)
 			}
@@ -61,7 +76,7 @@ func SetupWorkspace(
 				"worktree",
 				"add",
 				"--checkout",
-				"-B",
+				"-b",
 				branchName,
 				worktreePath,
 				baseBranch,
@@ -110,6 +125,9 @@ func CleanupWorkspaceWithOptions(
 			}
 			branchName = strings.TrimSpace(branchName)
 			if opts.KeepBranch || branchName == "" || branchName == "HEAD" {
+				return nil
+			}
+			if !strings.HasPrefix(branchName, workspaceBranchPrefix) {
 				return nil
 			}
 			if _, err := runGit(repoPath, "branch", "-D", branchName); err != nil {
