@@ -273,6 +273,46 @@ func waitForStartIndex(t *testing.T, started <-chan int, want int) {
 	}
 }
 
+type workDirCaptureAgent struct {
+	mu              sync.Mutex
+	workDir         string
+	sessionEnv      []string
+	capturedWorkDir string
+}
+
+func (a *workDirCaptureAgent) Name() string { return "workdir-capture" }
+
+func (a *workDirCaptureAgent) SetWorkDir(dir string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.workDir = dir
+}
+
+func (a *workDirCaptureAgent) GetWorkDir() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.workDir
+}
+
+func (a *workDirCaptureAgent) SetSessionEnv(env []string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.sessionEnv = append([]string(nil), env...)
+}
+
+func (a *workDirCaptureAgent) StartSession(_ context.Context, _ string) (AgentSession, error) {
+	a.mu.Lock()
+	a.capturedWorkDir = SessionWorkDirFromEnv(a.sessionEnv, a.workDir)
+	a.mu.Unlock()
+	return &jobTestSession{events: make(chan Event)}, nil
+}
+
+func (a *workDirCaptureAgent) ListSessions(_ context.Context) ([]AgentSessionInfo, error) {
+	return nil, nil
+}
+
+func (a *workDirCaptureAgent) Stop() error { return nil }
+
 func TestEngineJobRunnerSerializesSessionEnvInjection(t *testing.T) {
 	agent := &serialEnvAgent{
 		firstStartReady:   make(chan struct{}),
@@ -338,6 +378,39 @@ func TestEngineStartJobSessionRejectsMissingWorktree(t *testing.T) {
 	}, "job-missing")
 	if err == nil || !strings.Contains(err.Error(), "stat worktree_path") {
 		t.Fatalf("err = %v, want missing worktree error", err)
+	}
+}
+
+func TestEngineStartJobSessionUsesWorktreeWithoutMutatingDefaultWorkDir(t *testing.T) {
+	worktreePath := t.TempDir()
+	agent := &workDirCaptureAgent{workDir: "/default/workdir"}
+	engine := NewEngine("proj-workdir", agent, nil, "", LangEnglish)
+
+	session, err := engine.StartJobSession(context.Background(), JobRequest{
+		Project: "proj-workdir",
+		Prompt:  "run",
+		WorkspaceRef: JobWorkspaceRef{
+			WorktreePath: worktreePath,
+		},
+	}, "job-workdir")
+	if err != nil {
+		t.Fatalf("StartJobSession: %v", err)
+	}
+	defer func() {
+		if err := session.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}()
+
+	if got := agent.GetWorkDir(); got != "/default/workdir" {
+		t.Fatalf("default workdir = %q, want /default/workdir", got)
+	}
+
+	agent.mu.Lock()
+	captured := agent.capturedWorkDir
+	agent.mu.Unlock()
+	if captured != worktreePath {
+		t.Fatalf("captured workdir = %q, want %q", captured, worktreePath)
 	}
 }
 
