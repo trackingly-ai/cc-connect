@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -216,6 +217,7 @@ type serialEnvAgent struct {
 	startCount        int
 	firstStartReady   chan struct{}
 	releaseFirstStart chan struct{}
+	started           chan int
 }
 
 func (a *serialEnvAgent) Name() string { return "serial-env" }
@@ -231,6 +233,9 @@ func (a *serialEnvAgent) StartSession(_ context.Context, _ string) (AgentSession
 	startIdx := a.startCount
 	a.startCount++
 	a.mu.Unlock()
+	if a.started != nil {
+		a.started <- startIdx
+	}
 
 	if startIdx == 0 {
 		close(a.firstStartReady)
@@ -255,6 +260,18 @@ func (a *serialEnvAgent) ListSessions(_ context.Context) ([]AgentSessionInfo, er
 }
 
 func (a *serialEnvAgent) Stop() error { return nil }
+
+func waitForStartIndex(t *testing.T, started <-chan int, want int) {
+	t.Helper()
+	select {
+	case got := <-started:
+		if got != want {
+			t.Fatalf("start index = %d, want %d", got, want)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for start index %d", want)
+	}
+}
 
 func TestEngineJobRunnerSerializesSessionEnvInjection(t *testing.T) {
 	agent := &serialEnvAgent{
@@ -321,5 +338,85 @@ func TestEngineStartJobSessionRejectsMissingWorktree(t *testing.T) {
 	}, "job-missing")
 	if err == nil || !strings.Contains(err.Error(), "stat worktree_path") {
 		t.Fatalf("err = %v, want missing worktree error", err)
+	}
+}
+
+func TestEngineSerializesInteractiveAndJobSessionStartup(t *testing.T) {
+	agent := &serialEnvAgent{
+		firstStartReady:   make(chan struct{}),
+		releaseFirstStart: make(chan struct{}),
+		started:           make(chan int, 2),
+	}
+	engine := NewEngine("proj-serial", agent, []Platform{&stubPlatformEngine{n: "test"}}, "", LangEnglish)
+
+	session := engine.sessions.GetOrCreateActive("test:user1")
+	stateCh := make(chan *interactiveState, 1)
+	go func() {
+		stateCh <- engine.getOrCreateInteractiveState("test:user1", &stubPlatformEngine{n: "test"}, nil, session)
+	}()
+
+	<-agent.firstStartReady
+	waitForStartIndex(t, agent.started, 0)
+
+	jobSessionCh := make(chan AgentSession, 1)
+	jobErrCh := make(chan error, 1)
+	go func() {
+		sess, err := engine.StartJobSession(context.Background(), JobRequest{
+			Project: "proj-serial",
+			TaskID:  "task-job",
+			Prompt:  "run job",
+		}, "job-1")
+		if err != nil {
+			jobErrCh <- err
+			return
+		}
+		jobSessionCh <- sess
+	}()
+
+	select {
+	case startIdx := <-agent.started:
+		t.Fatalf("job start should be blocked until interactive start finishes, got index %d", startIdx)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(agent.releaseFirstStart)
+
+	state := <-stateCh
+	if state == nil || state.agentSession == nil {
+		t.Fatal("expected interactive state with agent session")
+	}
+	defer func() {
+		if err := state.agentSession.Close(); err != nil {
+			t.Fatalf("close interactive session: %v", err)
+		}
+	}()
+
+	select {
+	case err := <-jobErrCh:
+		t.Fatalf("StartJobSession: %v", err)
+	case sess := <-jobSessionCh:
+		if err := sess.Close(); err != nil {
+			t.Fatalf("close job session: %v", err)
+		}
+	}
+
+	waitForStartIndex(t, agent.started, 1)
+
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if len(agent.capturedEnvs) != 2 {
+		t.Fatalf("captured env count = %d, want 2", len(agent.capturedEnvs))
+	}
+
+	first := strings.Join(agent.capturedEnvs[0], "\n")
+	second := strings.Join(agent.capturedEnvs[1], "\n")
+	if !strings.Contains(first, "CC_SESSION_KEY=test:user1") {
+		t.Fatalf("first env missing interactive session key: %s", first)
+	}
+	if !strings.Contains(second, "CC_SESSION_KEY=echo-job-job-1") {
+		t.Fatalf("second env missing job session key: %s", second)
+	}
+	if !strings.Contains(second, "CC_TASK_ID=task-job") {
+		t.Fatalf("second env missing task-job: %s", second)
 	}
 }
