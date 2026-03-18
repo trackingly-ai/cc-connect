@@ -2,12 +2,14 @@ package core
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
 )
 
 type stubTTS struct {
+	mu           sync.Mutex
 	audio        []byte
 	format       string
 	texts        []string
@@ -16,6 +18,8 @@ type stubTTS struct {
 }
 
 func (s *stubTTS) Synthesize(_ context.Context, text string, _ TTSSynthesisOpts) ([]byte, string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.texts = append(s.texts, text)
 	if d := s.delays[text]; d > 0 {
 		time.Sleep(d)
@@ -24,6 +28,12 @@ func (s *stubTTS) Synthesize(_ context.Context, text string, _ TTSSynthesisOpts)
 		return s.audioForText(text), s.format, nil
 	}
 	return s.audio, s.format, nil
+}
+
+func (s *stubTTS) textsSnapshot() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.texts...)
 }
 
 func TestFinalReplyOffersReadAloudButton(t *testing.T) {
@@ -44,15 +54,17 @@ func TestFinalReplyOffersReadAloudButton(t *testing.T) {
 	})
 
 	deadline := time.Now().Add(2 * time.Second)
-	for len(p.buttonData) == 0 && time.Now().Before(deadline) {
+	for len(p.buttonDataSnapshot()) == 0 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	if len(p.buttonData) != 1 || p.buttonData[0] != "tts:read_last" {
-		t.Fatalf("expected read-aloud button, got %#v", p.buttonData)
+	buttonData := p.buttonDataSnapshot()
+	if len(buttonData) != 1 || buttonData[0] != "tts:read_last" {
+		t.Fatalf("expected read-aloud button, got %#v", buttonData)
 	}
-	if len(p.buttonTexts) != 1 || p.buttonTexts[0] != "Read Aloud" {
-		t.Fatalf("expected read-aloud button label, got %#v", p.buttonTexts)
+	buttonTexts := p.buttonTextsSnapshot()
+	if len(buttonTexts) != 1 || buttonTexts[0] != "Read Aloud" {
+		t.Fatalf("expected read-aloud button label, got %#v", buttonTexts)
 	}
 }
 
@@ -77,18 +89,21 @@ func TestReadAloudRequestSynthesizesLatestAssistantReply(t *testing.T) {
 	})
 
 	deadline := time.Now().Add(2 * time.Second)
-	for len(p.audio) == 0 && time.Now().Before(deadline) {
+	for len(p.audioSnapshot()) == 0 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	if len(tts.texts) != 1 || tts.texts[0] != "Final summary" {
-		t.Fatalf("expected latest assistant reply to be synthesized, got %#v", tts.texts)
+	texts := tts.textsSnapshot()
+	if len(texts) != 1 || texts[0] != "Final summary" {
+		t.Fatalf("expected latest assistant reply to be synthesized, got %#v", texts)
 	}
-	if len(p.audio) != 1 || string(p.audio[0]) != "audio" {
-		t.Fatalf("expected synthesized audio to be sent, got %#v", p.audio)
+	audio := p.audioSnapshot()
+	if len(audio) != 1 || string(audio[0]) != "audio" {
+		t.Fatalf("expected synthesized audio to be sent, got %#v", audio)
 	}
-	if len(p.audioFormat) != 1 || p.audioFormat[0] != "mp3" {
-		t.Fatalf("expected mp3 audio format, got %#v", p.audioFormat)
+	formats := p.audioFormatSnapshot()
+	if len(formats) != 1 || formats[0] != "mp3" {
+		t.Fatalf("expected mp3 audio format, got %#v", formats)
 	}
 }
 
@@ -108,8 +123,9 @@ func TestReadAloudRequestWithoutAssistantReply(t *testing.T) {
 		Content:    "tts read last",
 	})
 
-	if len(p.sent) == 0 || p.sent[len(p.sent)-1] != "There is no recent assistant reply to read aloud yet." {
-		t.Fatalf("expected no-content warning, got %#v", p.sent)
+	sent := p.sentSnapshot()
+	if len(sent) == 0 || sent[len(sent)-1] != "There is no recent assistant reply to read aloud yet." {
+		t.Fatalf("expected no-content warning, got %#v", sent)
 	}
 }
 
@@ -136,20 +152,30 @@ func TestReadAloudRequestSplitsLongTextIntoMultipleChunks(t *testing.T) {
 	})
 
 	deadline := time.Now().Add(2 * time.Second)
-	for len(p.audio) < 2 && time.Now().Before(deadline) {
+	for {
+		audio := p.audioSnapshot()
+		texts := tts.textsSnapshot()
+		if len(texts) >= 2 && len(audio) == len(texts) {
+			break
+		}
+		if time.Now().After(deadline) {
+			break
+		}
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	if len(tts.texts) < 2 {
-		t.Fatalf("expected long text to be split into multiple synthesize calls, got %#v", tts.texts)
+	texts := tts.textsSnapshot()
+	if len(texts) < 2 {
+		t.Fatalf("expected long text to be split into multiple synthesize calls, got %#v", texts)
 	}
-	for _, chunk := range tts.texts {
+	for _, chunk := range texts {
 		if utf8.RuneCountInString(chunk) > 12 {
 			t.Fatalf("chunk %q exceeds max len", chunk)
 		}
 	}
-	if len(p.audio) != len(tts.texts) {
-		t.Fatalf("expected one audio send per chunk, got audio=%d chunks=%d", len(p.audio), len(tts.texts))
+	audio := p.audioSnapshot()
+	if len(audio) != len(texts) {
+		t.Fatalf("expected one audio send per chunk, got audio=%d chunks=%d", len(audio), len(texts))
 	}
 }
 
@@ -195,14 +221,15 @@ func TestReadAloudRequestSynthesizesInParallelButSendsInOrder(t *testing.T) {
 	})
 
 	deadline := time.Now().Add(3 * time.Second)
-	for len(p.audio) < 3 && time.Now().Before(deadline) {
+	for len(p.audioSnapshot()) < 3 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	if len(p.audio) != 3 {
-		t.Fatalf("expected 3 audio chunks, got %#v", p.audio)
+	audio := p.audioSnapshot()
+	if len(audio) != 3 {
+		t.Fatalf("expected 3 audio chunks, got %#v", audio)
 	}
-	if string(p.audio[0]) != "第一段比较短。" || string(p.audio[1]) != "第二段也比较短。" || string(p.audio[2]) != "第三段还是比较短。" {
-		t.Fatalf("expected audio sends to preserve text order, got %#v", p.audio)
+	if string(audio[0]) != "第一段比较短。" || string(audio[1]) != "第二段也比较短。" || string(audio[2]) != "第三段还是比较短。" {
+		t.Fatalf("expected audio sends to preserve text order, got %#v", audio)
 	}
 }

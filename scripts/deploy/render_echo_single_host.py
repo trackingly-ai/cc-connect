@@ -36,6 +36,30 @@ def _write_executable(path: Path, content: str) -> None:
     path.chmod(0o755)
 
 
+def _default_launchd_path(home: Path) -> str:
+    ordered: list[str] = []
+
+    def add(path: str) -> None:
+        if path and path not in ordered:
+            ordered.append(path)
+
+    add(str(home / ".local" / "bin"))
+    add("/opt/homebrew/opt/node@22/bin")
+    add("/opt/homebrew/bin")
+    add("/opt/homebrew/sbin")
+    add("/usr/local/bin")
+    add("/usr/local/sbin")
+    add("/usr/bin")
+    add("/bin")
+    add("/usr/sbin")
+    add("/sbin")
+
+    for path in os.environ.get("PATH", "").split(os.pathsep):
+        add(path)
+
+    return ":".join(ordered)
+
+
 def _build_values(env_file: Path | None) -> dict[str, str]:
     repo_root = _repo_root()
     home = Path.home()
@@ -92,7 +116,7 @@ def _build_values(env_file: Path | None) -> dict[str, str]:
         "CODEX_LANDER_MODE": get("CODEX_LANDER_MODE", "full-auto"),
         "LAUNCHD_PATH": get(
             "LAUNCHD_PATH",
-            "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+            _default_launchd_path(home),
         ),
         "LAUNCHD_CC_CONNECT_LABEL": "com.echo.cc_connect",
     }

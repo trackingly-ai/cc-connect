@@ -50,6 +50,38 @@ auth_token = "secret-token"
 	}
 }
 
+func TestLoadAllowsHeadlessProjectsWhenMCPEnabled(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	content := `
+[mcp]
+enabled = true
+
+[[projects]]
+name = "demo"
+
+[projects.agent]
+type = "codex"
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if !cfg.MCP.Enabled {
+		t.Fatal("expected MCP to be enabled")
+	}
+	if len(cfg.Projects) != 1 {
+		t.Fatalf("unexpected project count: %d", len(cfg.Projects))
+	}
+	if len(cfg.Projects[0].Platforms) != 0 {
+		t.Fatalf("expected headless project without platforms, got %#v", cfg.Projects[0].Platforms)
+	}
+}
+
 const minimalConfigTOML = `
 [[projects]]
 name = "demo"

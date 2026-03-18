@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 )
@@ -15,6 +16,7 @@ func (s *stubSpeechToText) Transcribe(context.Context, []byte, string, string) (
 }
 
 type stubButtonPlatform struct {
+	mu          sync.Mutex
 	n           string
 	sent        []string
 	buttonTexts []string
@@ -26,15 +28,21 @@ type stubButtonPlatform struct {
 func (p *stubButtonPlatform) Name() string               { return p.n }
 func (p *stubButtonPlatform) Start(MessageHandler) error { return nil }
 func (p *stubButtonPlatform) Reply(_ context.Context, _ any, content string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.sent = append(p.sent, content)
 	return nil
 }
 func (p *stubButtonPlatform) Send(_ context.Context, _ any, content string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.sent = append(p.sent, content)
 	return nil
 }
 func (p *stubButtonPlatform) Stop() error { return nil }
 func (p *stubButtonPlatform) SendWithButtons(_ context.Context, _ any, content string, buttons [][]ButtonOption) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.sent = append(p.sent, content)
 	for _, row := range buttons {
 		for _, btn := range row {
@@ -45,9 +53,45 @@ func (p *stubButtonPlatform) SendWithButtons(_ context.Context, _ any, content s
 	return nil
 }
 func (p *stubButtonPlatform) SendAudio(_ context.Context, _ any, audio []byte, format string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.audio = append(p.audio, audio)
 	p.audioFormat = append(p.audioFormat, format)
 	return nil
+}
+
+func (p *stubButtonPlatform) sentSnapshot() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.sent...)
+}
+
+func (p *stubButtonPlatform) buttonDataSnapshot() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.buttonData...)
+}
+
+func (p *stubButtonPlatform) buttonTextsSnapshot() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.buttonTexts...)
+}
+
+func (p *stubButtonPlatform) audioSnapshot() [][]byte {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([][]byte, len(p.audio))
+	for i, audio := range p.audio {
+		out[i] = append([]byte(nil), audio...)
+	}
+	return out
+}
+
+func (p *stubButtonPlatform) audioFormatSnapshot() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.audioFormat...)
 }
 
 type voiceTestAgent struct {
@@ -105,14 +149,16 @@ func TestHandleVoiceMessageQueuesConfirmation(t *testing.T) {
 
 	e.handleVoiceMessage(p, msg)
 
-	if len(p.sent) < 2 {
-		t.Fatalf("expected transcribing message and confirmation prompt, got %d messages", len(p.sent))
+	sent := p.sentSnapshot()
+	if len(sent) < 2 {
+		t.Fatalf("expected transcribing message and confirmation prompt, got %d messages", len(sent))
 	}
-	if got := p.sent[1]; got == "" || got == "draft request" {
+	if got := sent[1]; got == "" || got == "draft request" {
 		t.Fatalf("expected formatted confirmation prompt, got %q", got)
 	}
-	if len(p.buttonTexts) != 2 || p.buttonTexts[0] != "Confirm" || p.buttonTexts[1] != "Modify" {
-		t.Fatalf("unexpected button labels: %#v", p.buttonTexts)
+	buttonTexts := p.buttonTextsSnapshot()
+	if len(buttonTexts) != 2 || buttonTexts[0] != "Confirm" || buttonTexts[1] != "Modify" {
+		t.Fatalf("unexpected button labels: %#v", buttonTexts)
 	}
 	if pending, ok := e.getVoiceConfirmation("test:user1"); !ok || pending.Text != "draft request" {
 		t.Fatalf("expected pending voice confirmation, got %#v, ok=%v", pending, ok)
