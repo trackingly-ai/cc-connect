@@ -170,14 +170,14 @@ func (e *Engine) StartJobSession(
 	req JobRequest,
 	jobID string,
 ) (AgentSession, error) {
-	sessionID := "echo-job-" + strings.TrimSpace(jobID)
-	if sessionID == "echo-job-" {
-		sessionID = "echo-job-anonymous"
+	sessionKey := "echo-job-" + strings.TrimSpace(jobID)
+	if sessionKey == "echo-job-" {
+		sessionKey = "echo-job-anonymous"
 	}
 	if err := validateJobWorkspace(req.WorkspaceRef); err != nil {
 		return nil, err
 	}
-	return e.startAgentSession(ctx, sessionID, e.jobEnv(req, jobID, sessionID))
+	return e.startAgentSession(ctx, "", e.jobEnv(req, jobID, sessionKey))
 }
 
 func (e *Engine) sessionEnv(sessionKey string) []string {

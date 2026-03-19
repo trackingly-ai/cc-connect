@@ -107,8 +107,8 @@ func TestEngineJobRunnerCompletes(t *testing.T) {
 			t.Fatalf("env missing %q: %s", want, env)
 		}
 	}
-	if agent.capturedSessionID != "echo-job-job-123" {
-		t.Fatalf("sessionID = %q, want echo-job-job-123", agent.capturedSessionID)
+	if agent.capturedSessionID != "" {
+		t.Fatalf("sessionID = %q, want empty provider resume id", agent.capturedSessionID)
 	}
 }
 

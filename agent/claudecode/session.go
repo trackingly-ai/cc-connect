@@ -100,10 +100,6 @@ func buildClaudeSessionArgs(model, sessionID, mode string, allowedTools []string
 		"--verbose",
 		"--input-format", "stream-json",
 		"--permission-prompt-tool", "stdio",
-		"--agent", "general-purpose",
-		"--agents", "{}",
-		"--disable-slash-commands",
-		"--setting-sources", "project,local",
 	}
 
 	if mode != "" && mode != "default" {

@@ -39,7 +39,7 @@ func TestReadJSONLines_AllowsLargeJSONLRecords(t *testing.T) {
 	}
 }
 
-func TestBuildClaudeSessionArgsUsesHeadlessIsolatedDefaults(t *testing.T) {
+func TestBuildClaudeSessionArgsUsesExpectedDefaults(t *testing.T) {
 	args := buildClaudeSessionArgs(
 		"claude-sonnet",
 		"357aaa11-8e6b-49dd-a6e3-b954cad2ca8d",
@@ -51,9 +51,6 @@ func TestBuildClaudeSessionArgsUsesHeadlessIsolatedDefaults(t *testing.T) {
 		{"--output-format", "stream-json"},
 		{"--input-format", "stream-json"},
 		{"--permission-prompt-tool", "stdio"},
-		{"--agent", "general-purpose"},
-		{"--agents", "{}"},
-		{"--setting-sources", "project,local"},
 		{"--permission-mode", "bypassPermissions"},
 		{"--resume", "357aaa11-8e6b-49dd-a6e3-b954cad2ca8d"},
 		{"--model", "claude-sonnet"},
@@ -66,9 +63,6 @@ func TestBuildClaudeSessionArgsUsesHeadlessIsolatedDefaults(t *testing.T) {
 		}
 	}
 
-	if !slices.Contains(args, "--disable-slash-commands") {
-		t.Fatalf("args missing --disable-slash-commands: %v", args)
-	}
 	if !slices.Contains(args, "--verbose") {
 		t.Fatalf("args missing --verbose: %v", args)
 	}
