@@ -111,9 +111,9 @@ def _build_values(env_file: Path | None) -> dict[str, str]:
         "CC_MCP_AUTH_TOKEN": get("CC_MCP_AUTH_TOKEN", ""),
         "CLAUDE_MANAGER_MODE": get("CLAUDE_MANAGER_MODE", "bypassPermissions"),
         "CODEX_ARCHITECT_MODE": get("CODEX_ARCHITECT_MODE", "full-auto"),
-        "CODEX_CODER_MODE": get("CODEX_CODER_MODE", "full-auto"),
+        "CODEX_CODER_MODE": get("CODEX_CODER_MODE", "yolo"),
         "QODER_REVIEWER_MODE": get("QODER_REVIEWER_MODE", "yolo"),
-        "CODEX_LANDER_MODE": get("CODEX_LANDER_MODE", "full-auto"),
+        "CODEX_LANDER_MODE": get("CODEX_LANDER_MODE", "yolo"),
         "LAUNCHD_PATH": get(
             "LAUNCHD_PATH",
             _default_launchd_path(home),
