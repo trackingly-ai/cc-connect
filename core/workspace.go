@@ -88,6 +88,69 @@ func SetupWorkspace(
 	})
 }
 
+func EnsureRepoCheckout(repoURL string, repoPath string, defaultBranch string) error {
+	repoURL = strings.TrimSpace(repoURL)
+	repoPath = strings.TrimSpace(repoPath)
+	defaultBranch = strings.TrimSpace(defaultBranch)
+	if repoURL == "" {
+		return fmt.Errorf("repo_url is required")
+	}
+	if repoPath == "" {
+		return fmt.Errorf("repo_path is required")
+	}
+	if defaultBranch == "" {
+		defaultBranch = "main"
+	}
+	return withWorkspaceRepoLock(repoPath, func() error {
+		if info, err := os.Stat(repoPath); err == nil {
+			if !info.IsDir() {
+				return fmt.Errorf("repo_path is not a directory: %s", repoPath)
+			}
+			if _, err := runGit(repoPath, "rev-parse", "--is-inside-work-tree"); err != nil {
+				return fmt.Errorf("repo_path does not point to a git repository")
+			}
+			originURL, err := runGit(repoPath, "remote", "get-url", "origin")
+			if err != nil {
+				return fmt.Errorf("resolve origin remote: %w", err)
+			}
+			if strings.TrimSpace(originURL) != repoURL {
+				return fmt.Errorf(
+					"repo_path origin %q does not match repo_url %q",
+					strings.TrimSpace(originURL),
+					repoURL,
+				)
+			}
+			if _, err := runGit(repoPath, "fetch", "origin", "--prune"); err != nil {
+				return fmt.Errorf("fetch repo checkout: %w", err)
+			}
+			if _, err := runGit(repoPath, "checkout", defaultBranch); err != nil {
+				return fmt.Errorf("checkout default branch: %w", err)
+			}
+			return nil
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("stat repo_path: %w", err)
+		}
+
+		if err := os.MkdirAll(filepath.Dir(repoPath), 0o755); err != nil {
+			return fmt.Errorf("create repo parent dir: %w", err)
+		}
+		if _, err := runGit(
+			filepath.Dir(repoPath),
+			"clone",
+			"--origin",
+			"origin",
+			"--branch",
+			defaultBranch,
+			"--single-branch",
+			repoURL,
+			repoPath,
+		); err != nil {
+			return fmt.Errorf("clone repo checkout: %w", err)
+		}
+		return nil
+	})
+}
+
 func CleanupWorkspace(worktreePath string) error {
 	return CleanupWorkspaceWithOptions(worktreePath, CleanupWorkspaceOptions{})
 }

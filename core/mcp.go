@@ -146,6 +146,33 @@ func NewMCPServer(jm *JobManager, authToken string) *MCPServer {
 		), nil
 	})
 
+	ensureRepoCheckoutTool := mcp.NewTool("ensure_repo_checkout",
+		mcp.WithDescription("Ensure a host-local git checkout exists for a project repository."),
+		mcp.WithString("repo_url", mcp.Description("Git repository URL to clone or validate."), mcp.Required()),
+		mcp.WithString("repo_path", mcp.Description("Destination repository checkout path."), mcp.Required()),
+		mcp.WithString("default_branch", mcp.Description("Default branch to clone or checkout.")),
+	)
+	mcpSrv.AddTool(ensureRepoCheckoutTool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		repoURL := strings.TrimSpace(req.GetString("repo_url", ""))
+		repoPath := strings.TrimSpace(req.GetString("repo_path", ""))
+		defaultBranch := strings.TrimSpace(req.GetString("default_branch", ""))
+		if defaultBranch == "" {
+			defaultBranch = "main"
+		}
+		if err := EnsureRepoCheckout(repoURL, repoPath, defaultBranch); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return mcp.NewToolResultStructured(
+			map[string]any{
+				"status":         "ready",
+				"repo_url":       repoURL,
+				"repo_path":      repoPath,
+				"default_branch": defaultBranch,
+			},
+			fmt.Sprintf("prepared repo checkout %s", repoPath),
+		), nil
+	})
+
 	cleanupWorkspaceTool := mcp.NewTool("cleanup_workspace",
 		mcp.WithDescription("Remove a git worktree workspace for a task."),
 		mcp.WithString("worktree_path", mcp.Description("Workspace worktree path."), mcp.Required()),

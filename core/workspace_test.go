@@ -168,6 +168,43 @@ func TestSetupWorkspaceSerializesByRepo(t *testing.T) {
 	}
 }
 
+func TestEnsureRepoCheckoutClonesMissingRepo(t *testing.T) {
+	sourceRepo := initGitRepo(t)
+	checkoutPath := filepath.Join(t.TempDir(), "clones", "frontend")
+
+	if err := EnsureRepoCheckout(sourceRepo, checkoutPath, "main"); err != nil {
+		t.Fatalf("EnsureRepoCheckout: %v", err)
+	}
+
+	originURL, err := runGit(checkoutPath, "remote", "get-url", "origin")
+	if err != nil {
+		t.Fatalf("git remote get-url origin: %v", err)
+	}
+	if originURL != sourceRepo {
+		t.Fatalf("origin = %q, want %q", originURL, sourceRepo)
+	}
+	if _, err := os.Stat(filepath.Join(checkoutPath, "README.md")); err != nil {
+		t.Fatalf("expected cloned checkout README: %v", err)
+	}
+}
+
+func TestEnsureRepoCheckoutRejectsMismatchedOrigin(t *testing.T) {
+	sourceRepo := initGitRepo(t)
+	otherRepo := initGitRepo(t)
+	checkoutPath := filepath.Join(t.TempDir(), "clones", "frontend")
+
+	if err := EnsureRepoCheckout(sourceRepo, checkoutPath, "main"); err != nil {
+		t.Fatalf("EnsureRepoCheckout initial clone: %v", err)
+	}
+	err := EnsureRepoCheckout(otherRepo, checkoutPath, "main")
+	if err == nil {
+		t.Fatal("expected origin mismatch error")
+	}
+	if !strings.Contains(err.Error(), "does not match repo_url") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func initGitRepo(t *testing.T) string {
 	t.Helper()
 

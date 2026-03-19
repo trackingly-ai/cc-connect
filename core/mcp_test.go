@@ -5,6 +5,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -48,6 +50,13 @@ type workspacePayload struct {
 	RepoPath     string `json:"repo_path"`
 	BranchName   string `json:"branch_name"`
 	WorktreePath string `json:"worktree_path"`
+}
+
+type repoCheckoutPayload struct {
+	Status        string `json:"status"`
+	RepoURL       string `json:"repo_url"`
+	RepoPath      string `json:"repo_path"`
+	DefaultBranch string `json:"default_branch"`
 }
 
 type listAgentsPayload struct {
@@ -381,6 +390,84 @@ func TestMCPServerWorkspaceLifecycle(t *testing.T) {
 	}
 	if cleanupPayload.Status != "cleaned" || cleanupPayload.WorktreePath != worktreePath {
 		t.Fatalf("unexpected cleanup payload: %+v", cleanupPayload)
+	}
+}
+
+func TestMCPServerEnsureRepoCheckout(t *testing.T) {
+	jm, err := NewJobManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewJobManager: %v", err)
+	}
+	sourceRepo := initGitRepo(t)
+	checkoutPath := filepath.Join(t.TempDir(), "clones", "frontend")
+
+	httpServer := httptest.NewServer(NewMCPServer(jm, "").Handler())
+	defer httpServer.Close()
+
+	mcpClient := startMCPClient(t, httpServer.URL+"/mcp")
+	defer func() {
+		_ = mcpClient.Close()
+		time.Sleep(25 * time.Millisecond)
+	}()
+
+	var req mcp.CallToolRequest
+	req.Params.Name = "ensure_repo_checkout"
+	req.Params.Arguments = map[string]any{
+		"repo_url":       sourceRepo,
+		"repo_path":      checkoutPath,
+		"default_branch": "main",
+	}
+	result, err := mcpClient.CallTool(context.Background(), req)
+	if err != nil {
+		t.Fatalf("ensure_repo_checkout: %v", err)
+	}
+
+	var payload repoCheckoutPayload
+	if err := decodeStructuredResult(result, &payload); err != nil {
+		t.Fatalf("decode ensure_repo_checkout result: %v", err)
+	}
+	if payload.Status != "ready" || payload.RepoPath != checkoutPath || payload.RepoURL != sourceRepo {
+		t.Fatalf("unexpected repo checkout payload: %+v", payload)
+	}
+	if _, err := os.Stat(filepath.Join(checkoutPath, "README.md")); err != nil {
+		t.Fatalf("expected checkout README: %v", err)
+	}
+}
+
+func TestMCPServerEnsureRepoCheckoutDefaultsBranch(t *testing.T) {
+	jm, err := NewJobManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewJobManager: %v", err)
+	}
+	sourceRepo := initGitRepo(t)
+	checkoutPath := filepath.Join(t.TempDir(), "clones", "frontend-default")
+
+	httpServer := httptest.NewServer(NewMCPServer(jm, "").Handler())
+	defer httpServer.Close()
+
+	mcpClient := startMCPClient(t, httpServer.URL+"/mcp")
+	defer func() {
+		_ = mcpClient.Close()
+		time.Sleep(25 * time.Millisecond)
+	}()
+
+	var req mcp.CallToolRequest
+	req.Params.Name = "ensure_repo_checkout"
+	req.Params.Arguments = map[string]any{
+		"repo_url":  sourceRepo,
+		"repo_path": checkoutPath,
+	}
+	result, err := mcpClient.CallTool(context.Background(), req)
+	if err != nil {
+		t.Fatalf("ensure_repo_checkout: %v", err)
+	}
+
+	var payload repoCheckoutPayload
+	if err := decodeStructuredResult(result, &payload); err != nil {
+		t.Fatalf("decode ensure_repo_checkout result: %v", err)
+	}
+	if payload.DefaultBranch != "main" {
+		t.Fatalf("default branch = %q, want main", payload.DefaultBranch)
 	}
 }
 
