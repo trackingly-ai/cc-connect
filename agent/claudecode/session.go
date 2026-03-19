@@ -42,29 +42,7 @@ type claudeSession struct {
 func newClaudeSession(ctx context.Context, workDir, model, sessionID, mode string, allowedTools []string, extraEnv []string) (*claudeSession, error) {
 	sessionCtx, cancel := context.WithCancel(ctx)
 
-	args := []string{
-		"--output-format", "stream-json",
-		"--verbose",
-		"--input-format", "stream-json",
-		"--permission-prompt-tool", "stdio",
-	}
-
-	if mode != "" && mode != "default" {
-		args = append(args, "--permission-mode", mode)
-	}
-	if sessionID != "" {
-		args = append(args, "--resume", sessionID)
-	}
-	if model != "" {
-		args = append(args, "--model", model)
-	}
-	if len(allowedTools) > 0 {
-		args = append(args, "--allowedTools", strings.Join(allowedTools, ","))
-	}
-
-	if sysPrompt := core.AgentSystemPrompt(); sysPrompt != "" {
-		args = append(args, "--append-system-prompt", sysPrompt)
-	}
+	args := buildClaudeSessionArgs(model, sessionID, mode, allowedTools)
 
 	slog.Debug("claudeSession: starting", "args", core.RedactArgs(args), "dir", workDir, "mode", mode)
 
@@ -114,6 +92,58 @@ func newClaudeSession(ctx context.Context, workDir, model, sessionID, mode strin
 	go cs.readLoop(stdout, &stderrBuf)
 
 	return cs, nil
+}
+
+func buildClaudeSessionArgs(model, sessionID, mode string, allowedTools []string) []string {
+	args := []string{
+		"--output-format", "stream-json",
+		"--verbose",
+		"--input-format", "stream-json",
+		"--permission-prompt-tool", "stdio",
+		"--agent", "general-purpose",
+		"--agents", "{}",
+		"--disable-slash-commands",
+		"--setting-sources", "project,local",
+	}
+
+	if mode != "" && mode != "default" {
+		args = append(args, "--permission-mode", mode)
+	}
+	if isClaudeSessionID(sessionID) {
+		args = append(args, "--resume", sessionID)
+	}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	if len(allowedTools) > 0 {
+		args = append(args, "--allowedTools", strings.Join(allowedTools, ","))
+	}
+	if sysPrompt := core.AgentSystemPrompt(); sysPrompt != "" {
+		args = append(args, "--append-system-prompt", sysPrompt)
+	}
+
+	return args
+}
+
+func isClaudeSessionID(sessionID string) bool {
+	if len(sessionID) != 36 {
+		return false
+	}
+	for idx, ch := range sessionID {
+		switch idx {
+		case 8, 13, 18, 23:
+			if ch != '-' {
+				return false
+			}
+		default:
+			if (ch < '0' || ch > '9') &&
+				(ch < 'a' || ch > 'f') &&
+				(ch < 'A' || ch > 'F') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (cs *claudeSession) readLoop(stdout io.ReadCloser, stderrBuf *bytes.Buffer) {
