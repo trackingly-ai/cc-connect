@@ -65,6 +65,13 @@ type repoCheckoutPayload struct {
 	DefaultBranch string `json:"default_branch"`
 }
 
+type repoFilePayload struct {
+	Status       string `json:"status"`
+	RepoPath     string `json:"repo_path"`
+	RelativePath string `json:"relative_path"`
+	AbsolutePath string `json:"absolute_path"`
+}
+
 type listAgentsPayload struct {
 	Agents []RegisteredProject `json:"agents"`
 }
@@ -400,6 +407,89 @@ func TestMCPServerWorkspaceLifecycle(t *testing.T) {
 	}
 	if cleanupPayload.Status != "cleaned" || cleanupPayload.WorktreePath != worktreePath {
 		t.Fatalf("unexpected cleanup payload: %+v", cleanupPayload)
+	}
+}
+
+func TestMCPServerWriteRepoFile(t *testing.T) {
+	jm, err := NewJobManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewJobManager: %v", err)
+	}
+	repoPath := initGitRepo(t)
+
+	httpServer := httptest.NewServer(NewMCPServer(jm, "").Handler())
+	defer httpServer.Close()
+
+	mcpClient := startMCPClient(t, httpServer.URL+"/mcp")
+	defer func() {
+		_ = mcpClient.Close()
+		time.Sleep(25 * time.Millisecond)
+	}()
+
+	var writeReq mcp.CallToolRequest
+	writeReq.Params.Name = "write_repo_file"
+	writeReq.Params.Arguments = map[string]any{
+		"repo_path":     repoPath,
+		"relative_path": "docs/echo/designs/design-1.md",
+		"content":       "# Design\n\nPersist me.\n",
+	}
+	writeResult, err := mcpClient.CallTool(context.Background(), writeReq)
+	if err != nil {
+		t.Fatalf("write_repo_file: %v", err)
+	}
+
+	var payload repoFilePayload
+	if err := decodeStructuredResult(writeResult, &payload); err != nil {
+		t.Fatalf("decode write_repo_file result: %v", err)
+	}
+	if payload.Status != "written" {
+		t.Fatalf("unexpected payload: %+v", payload)
+	}
+	if payload.RelativePath != "docs/echo/designs/design-1.md" {
+		t.Fatalf("unexpected relative path: %+v", payload)
+	}
+	content, err := os.ReadFile(filepath.Join(repoPath, "docs/echo/designs/design-1.md"))
+	if err != nil {
+		t.Fatalf("read persisted file: %v", err)
+	}
+	if string(content) != "# Design\n\nPersist me.\n" {
+		t.Fatalf("unexpected file contents: %q", string(content))
+	}
+}
+
+func TestMCPServerWriteRepoFileRejectsTraversal(t *testing.T) {
+	jm, err := NewJobManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewJobManager: %v", err)
+	}
+	repoPath := initGitRepo(t)
+
+	httpServer := httptest.NewServer(NewMCPServer(jm, "").Handler())
+	defer httpServer.Close()
+
+	mcpClient := startMCPClient(t, httpServer.URL+"/mcp")
+	defer func() {
+		_ = mcpClient.Close()
+		time.Sleep(25 * time.Millisecond)
+	}()
+
+	var writeReq mcp.CallToolRequest
+	writeReq.Params.Name = "write_repo_file"
+	writeReq.Params.Arguments = map[string]any{
+		"repo_path":     repoPath,
+		"relative_path": "../escape.md",
+		"content":       "bad",
+	}
+	writeResult, err := mcpClient.CallTool(context.Background(), writeReq)
+	if err != nil {
+		t.Fatalf("write_repo_file: %v", err)
+	}
+	err = decodeStructuredResult(writeResult, &repoFilePayload{})
+	if err == nil {
+		t.Fatal("expected decodeStructuredResult to surface tool error")
+	}
+	if !strings.Contains(err.Error(), "within repo_path") {
+		t.Fatalf("unexpected error text: %q", err.Error())
 	}
 }
 

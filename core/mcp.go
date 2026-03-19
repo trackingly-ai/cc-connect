@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -170,6 +171,31 @@ func NewMCPServer(jm *JobManager, authToken string) *MCPServer {
 				"default_branch": defaultBranch,
 			},
 			fmt.Sprintf("prepared repo checkout %s", repoPath),
+		), nil
+	})
+
+	writeRepoFileTool := mcp.NewTool("write_repo_file",
+		mcp.WithDescription("Write a UTF-8 text file within a host-local git checkout."),
+		mcp.WithString("repo_path", mcp.Description("Repository checkout root path."), mcp.Required()),
+		mcp.WithString("relative_path", mcp.Description("Destination path relative to repo_path."), mcp.Required()),
+		mcp.WithString("content", mcp.Description("UTF-8 file contents to write."), mcp.Required()),
+	)
+	mcpSrv.AddTool(writeRepoFileTool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		repoPath := strings.TrimSpace(req.GetString("repo_path", ""))
+		relativePath := strings.TrimSpace(req.GetString("relative_path", ""))
+		content := req.GetString("content", "")
+		absolutePath, err := WriteRepoFile(repoPath, relativePath, content)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return mcp.NewToolResultStructured(
+			map[string]any{
+				"status":        "written",
+				"repo_path":     repoPath,
+				"relative_path": filepath.ToSlash(filepath.Clean(relativePath)),
+				"absolute_path": absolutePath,
+			},
+			fmt.Sprintf("wrote repo file %s", relativePath),
 		), nil
 	})
 
