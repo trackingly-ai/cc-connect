@@ -11,15 +11,21 @@ import (
 )
 
 type stubJobRunner struct {
-	run func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error)
+	run func(
+		ctx context.Context,
+		req JobRequest,
+		jobID string,
+		onEvent func(JobEvent),
+	) (*JobResult, error)
 }
 
 func (s stubJobRunner) Run(
 	ctx context.Context,
 	req JobRequest,
 	jobID string,
+	onEvent func(JobEvent),
 ) (*JobResult, error) {
-	return s.run(ctx, req, jobID)
+	return s.run(ctx, req, jobID, onEvent)
 }
 
 func waitForJobStatus(t *testing.T, jm *JobManager, jobID string, want string) *Job {
@@ -68,7 +74,8 @@ func TestJobManagerStartAndPersistCompletedJob(t *testing.T) {
 	}
 
 	jm.RegisterRunner("echo", stubJobRunner{
-		run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+		run: func(ctx context.Context, req JobRequest, jobID string, onEvent func(JobEvent)) (*JobResult, error) {
+			_ = onEvent
 			_ = jobID
 			if req.TaskID != "task-1" {
 				t.Fatalf("TaskID = %q, want task-1", req.TaskID)
@@ -138,6 +145,70 @@ func TestJobManagerStartAndPersistCompletedJob(t *testing.T) {
 	}
 }
 
+func TestJobManagerPersistsBufferedEvents(t *testing.T) {
+	dataDir := t.TempDir()
+	jm, err := NewJobManager(dataDir)
+	if err != nil {
+		t.Fatalf("NewJobManager: %v", err)
+	}
+
+	jm.RegisterRunner("echo", stubJobRunner{
+		run: func(
+			ctx context.Context,
+			req JobRequest,
+			jobID string,
+			onEvent func(JobEvent),
+		) (*JobResult, error) {
+			_ = ctx
+			_ = req
+			_ = jobID
+			onEvent(JobEvent{
+				Type:      string(EventToolUse),
+				ToolName:  "Bash",
+				ToolInput: "git status",
+				CreatedAt: time.Now().UTC(),
+			})
+			onEvent(JobEvent{
+				Type:      string(EventText),
+				Content:   "working",
+				CreatedAt: time.Now().UTC(),
+			})
+			return &JobResult{
+				Output:  "done",
+				Summary: "done",
+			}, nil
+		},
+	})
+
+	job, err := jm.Start(JobRequest{Project: "echo", Prompt: "run"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	completed := waitForJobStatus(t, jm, job.ID, JobStatusCompleted)
+	if completed.EventCount != 2 {
+		t.Fatalf("EventCount = %d, want 2", completed.EventCount)
+	}
+	if len(completed.Events) != 2 {
+		t.Fatalf("len(Events) = %d, want 2", len(completed.Events))
+	}
+	if completed.Events[0].Index != 0 || completed.Events[1].Index != 1 {
+		t.Fatalf("event indexes = %#v, want 0/1", completed.Events)
+	}
+
+	reloaded, err := NewJobManager(dataDir)
+	if err != nil {
+		t.Fatalf("reload NewJobManager: %v", err)
+	}
+	saved, ok := reloaded.Get(job.ID)
+	if !ok {
+		t.Fatalf("reloaded job %s not found", job.ID)
+	}
+	if saved.EventCount != 2 || len(saved.Events) != 2 {
+		t.Fatalf("reloaded events = count:%d len:%d, want 2/2", saved.EventCount, len(saved.Events))
+	}
+}
+
 func TestJobManagerCancelRunningJob(t *testing.T) {
 	dataDir := t.TempDir()
 	jm, err := NewJobManager(dataDir)
@@ -147,7 +218,8 @@ func TestJobManagerCancelRunningJob(t *testing.T) {
 
 	started := make(chan struct{})
 	jm.RegisterRunner("echo", stubJobRunner{
-		run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+		run: func(ctx context.Context, req JobRequest, jobID string, onEvent func(JobEvent)) (*JobResult, error) {
+			_ = onEvent
 			_ = jobID
 			if req.Project != "echo" {
 				t.Fatalf("Project = %q, want echo", req.Project)
@@ -198,7 +270,8 @@ func TestJobManagerMarksFailedJob(t *testing.T) {
 	}
 
 	jm.RegisterRunner("echo", stubJobRunner{
-		run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+		run: func(ctx context.Context, req JobRequest, jobID string, onEvent func(JobEvent)) (*JobResult, error) {
+			_ = onEvent
 			_ = jobID
 			return nil, errors.New("runner failed")
 		},
@@ -223,7 +296,8 @@ func TestJobManagerMarksTimedOutJob(t *testing.T) {
 	}
 
 	jm.RegisterRunner("echo", stubJobRunner{
-		run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+		run: func(ctx context.Context, req JobRequest, jobID string, onEvent func(JobEvent)) (*JobResult, error) {
+			_ = onEvent
 			_ = req
 			_ = jobID
 			<-ctx.Done()
@@ -267,7 +341,8 @@ func TestJobManagerReloadMarksNonTerminalJobsOrphaned(t *testing.T) {
 	}
 
 	jm.RegisterRunner("echo", stubJobRunner{
-		run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+		run: func(ctx context.Context, req JobRequest, jobID string, onEvent func(JobEvent)) (*JobResult, error) {
+			_ = onEvent
 			_ = jobID
 			<-ctx.Done()
 			return nil, ctx.Err()
@@ -311,7 +386,8 @@ func TestJobManagerStartRetriesJobIDCollision(t *testing.T) {
 	}
 
 	jm.RegisterRunner("echo", stubJobRunner{
-		run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+		run: func(ctx context.Context, req JobRequest, jobID string, onEvent func(JobEvent)) (*JobResult, error) {
+			_ = onEvent
 			_ = jobID
 			return &JobResult{Summary: "done"}, nil
 		},
@@ -352,7 +428,8 @@ func TestJobManagerListAgents(t *testing.T) {
 	blocked := make(chan struct{})
 	release := make(chan struct{})
 	jm.RegisterProject("alpha", "codex", stubJobRunner{
-		run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+		run: func(ctx context.Context, req JobRequest, jobID string, onEvent func(JobEvent)) (*JobResult, error) {
+			_ = onEvent
 			_ = req
 			_ = jobID
 			close(blocked)
@@ -361,7 +438,8 @@ func TestJobManagerListAgents(t *testing.T) {
 		},
 	})
 	jm.RegisterProject("beta", "claudecode", stubJobRunner{
-		run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+		run: func(ctx context.Context, req JobRequest, jobID string, onEvent func(JobEvent)) (*JobResult, error) {
+			_ = onEvent
 			_ = ctx
 			_ = req
 			_ = jobID
@@ -406,7 +484,8 @@ func TestJobManagerQueuesJobsPerProject(t *testing.T) {
 	var startsMu sync.Mutex
 	startOrder := make([]string, 0, 2)
 	jm.RegisterProject("alpha", "codex", stubJobRunner{
-		run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+		run: func(ctx context.Context, req JobRequest, jobID string, onEvent func(JobEvent)) (*JobResult, error) {
+			_ = onEvent
 			startsMu.Lock()
 			startOrder = append(startOrder, req.Prompt)
 			startsMu.Unlock()
@@ -467,7 +546,8 @@ func TestJobManagerCancelQueuedJob(t *testing.T) {
 	firstRelease := make(chan struct{})
 	secondStarted := make(chan struct{})
 	jm.RegisterProject("alpha", "codex", stubJobRunner{
-		run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+		run: func(ctx context.Context, req JobRequest, jobID string, onEvent func(JobEvent)) (*JobResult, error) {
+			_ = onEvent
 			switch req.Prompt {
 			case "first":
 				close(firstStarted)
@@ -541,7 +621,8 @@ func TestJobManagerReloadKeepsQueuedJobsQueued(t *testing.T) {
 
 	started := make(chan struct{})
 	reloaded.RegisterProject("alpha", "codex", stubJobRunner{
-		run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+		run: func(ctx context.Context, req JobRequest, jobID string, onEvent func(JobEvent)) (*JobResult, error) {
+			_ = onEvent
 			close(started)
 			return &JobResult{Summary: "done"}, nil
 		},

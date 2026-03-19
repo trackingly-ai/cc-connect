@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -83,6 +84,7 @@ func (r engineJobRunner) Run(
 	ctx context.Context,
 	req JobRequest,
 	jobID string,
+	onEvent func(JobEvent),
 ) (*JobResult, error) {
 	agentSession, err := r.engine.StartJobSession(ctx, req, jobID)
 	if err != nil {
@@ -122,6 +124,48 @@ func (r engineJobRunner) Run(
 			case EventText:
 				if event.Content != "" {
 					textBuffer.Append(event.Content)
+					if onEvent != nil {
+						onEvent(JobEvent{
+							Type:      string(EventText),
+							Content:   event.Content,
+							SessionID: sessionID,
+							CreatedAt: time.Now().UTC(),
+						})
+					}
+				}
+			case EventThinking:
+				if event.Content != "" && onEvent != nil {
+					onEvent(JobEvent{
+						Type:      string(EventThinking),
+						Content:   event.Content,
+						SessionID: sessionID,
+						CreatedAt: time.Now().UTC(),
+					})
+				}
+			case EventToolUse:
+				if onEvent != nil {
+					onEvent(JobEvent{
+						Type:      string(EventToolUse),
+						Content:   event.Content,
+						ToolName:  event.ToolName,
+						ToolInput: event.ToolInput,
+						SessionID: sessionID,
+						CreatedAt: time.Now().UTC(),
+					})
+				}
+			case EventToolResult:
+				if onEvent != nil {
+					content := event.ToolResult
+					if content == "" {
+						content = event.Content
+					}
+					onEvent(JobEvent{
+						Type:      string(EventToolResult),
+						Content:   content,
+						ToolName:  event.ToolName,
+						SessionID: sessionID,
+						CreatedAt: time.Now().UTC(),
+					})
 				}
 			case EventResult:
 				output := event.Content
@@ -139,6 +183,16 @@ func (r engineJobRunner) Run(
 				}
 				return nil, fmt.Errorf("job runner received agent error event")
 			case EventPermissionRequest:
+				if onEvent != nil {
+					onEvent(JobEvent{
+						Type:      string(EventPermissionRequest),
+						Content:   event.Content,
+						ToolName:  event.ToolName,
+						ToolInput: event.ToolInput,
+						SessionID: sessionID,
+						CreatedAt: time.Now().UTC(),
+					})
+				}
 				return nil, &codedJobError{
 					code: JobErrorCodePermissionRequired,
 					msg: fmt.Sprintf(

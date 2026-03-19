@@ -17,15 +17,21 @@ import (
 )
 
 type mcpTestJobRunner struct {
-	run func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error)
+	run func(
+		ctx context.Context,
+		req JobRequest,
+		jobID string,
+		onEvent func(JobEvent),
+	) (*JobResult, error)
 }
 
 func (r mcpTestJobRunner) Run(
 	ctx context.Context,
 	req JobRequest,
 	jobID string,
+	onEvent func(JobEvent),
 ) (*JobResult, error) {
-	return r.run(ctx, req, jobID)
+	return r.run(ctx, req, jobID, onEvent)
 }
 
 type jobPayload struct {
@@ -70,7 +76,8 @@ func TestMCPServerTaskRunLifecycle(t *testing.T) {
 	}
 
 	done := make(chan struct{})
-	jm.RegisterRunner("demo", mcpTestJobRunner{run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+	jm.RegisterRunner("demo", mcpTestJobRunner{run: func(ctx context.Context, req JobRequest, jobID string, onEvent func(JobEvent)) (*JobResult, error) {
+		_ = onEvent
 		_ = ctx
 		_ = req
 		_ = jobID
@@ -155,7 +162,8 @@ func TestMCPServerTaskRunLifecycleAcceptsNestedWorkspaceRef(t *testing.T) {
 	}
 
 	done := make(chan struct{})
-	jm.RegisterRunner("demo", mcpTestJobRunner{run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+	jm.RegisterRunner("demo", mcpTestJobRunner{run: func(ctx context.Context, req JobRequest, jobID string, onEvent func(JobEvent)) (*JobResult, error) {
+		_ = onEvent
 		_ = ctx
 		_ = jobID
 		if req.WorkspaceRef.RepoPath != "/repo" || req.WorkspaceRef.WorktreePath != "/repo/.echo/workspaces/task-2" || req.WorkspaceRef.Branch != "echo/task-2" {
@@ -215,7 +223,8 @@ func TestMCPServerCancelTaskRun(t *testing.T) {
 
 	blocked := make(chan struct{})
 	release := make(chan struct{})
-	jm.RegisterRunner("demo", mcpTestJobRunner{run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+	jm.RegisterRunner("demo", mcpTestJobRunner{run: func(ctx context.Context, req JobRequest, jobID string, onEvent func(JobEvent)) (*JobResult, error) {
+		_ = onEvent
 		_ = req
 		_ = jobID
 		close(blocked)
@@ -282,7 +291,8 @@ func TestMCPServerRequiresBearerToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewJobManager: %v", err)
 	}
-	jm.RegisterRunner("demo", mcpTestJobRunner{run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+	jm.RegisterRunner("demo", mcpTestJobRunner{run: func(ctx context.Context, req JobRequest, jobID string, onEvent func(JobEvent)) (*JobResult, error) {
+		_ = onEvent
 		_ = ctx
 		_ = req
 		_ = jobID
@@ -480,7 +490,8 @@ func TestMCPServerListAgents(t *testing.T) {
 	blocked := make(chan struct{})
 	release := make(chan struct{})
 	jm.RegisterProject("alpha", "codex", mcpTestJobRunner{
-		run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+		run: func(ctx context.Context, req JobRequest, jobID string, onEvent func(JobEvent)) (*JobResult, error) {
+			_ = onEvent
 			_ = req
 			_ = jobID
 			close(blocked)
@@ -489,7 +500,8 @@ func TestMCPServerListAgents(t *testing.T) {
 		},
 	})
 	jm.RegisterProject("beta", "claudecode", mcpTestJobRunner{
-		run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+		run: func(ctx context.Context, req JobRequest, jobID string, onEvent func(JobEvent)) (*JobResult, error) {
+			_ = onEvent
 			_ = ctx
 			_ = req
 			_ = jobID
@@ -560,7 +572,8 @@ func TestMCPServerConcurrentJobsAcrossProjects(t *testing.T) {
 	betaRelease := make(chan struct{})
 
 	jm.RegisterProject("alpha", "codex", mcpTestJobRunner{
-		run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+		run: func(ctx context.Context, req JobRequest, jobID string, onEvent func(JobEvent)) (*JobResult, error) {
+			_ = onEvent
 			if req.Project != "alpha" {
 				t.Fatalf("alpha req.Project = %q", req.Project)
 			}
@@ -577,7 +590,8 @@ func TestMCPServerConcurrentJobsAcrossProjects(t *testing.T) {
 		},
 	})
 	jm.RegisterProject("beta", "claudecode", mcpTestJobRunner{
-		run: func(ctx context.Context, req JobRequest, jobID string) (*JobResult, error) {
+		run: func(ctx context.Context, req JobRequest, jobID string, onEvent func(JobEvent)) (*JobResult, error) {
+			_ = onEvent
 			if req.Project != "beta" {
 				t.Fatalf("beta req.Project = %q", req.Project)
 			}

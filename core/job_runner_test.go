@@ -78,7 +78,7 @@ func TestEngineJobRunnerCompletes(t *testing.T) {
 			WorktreePath: t.TempDir(),
 			Branch:       "echo/task-7",
 		},
-	}, "job-123")
+	}, "job-123", nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestEngineJobRunnerRejectsPermissionRequest(t *testing.T) {
 	_, err := engine.JobRunner().Run(context.Background(), JobRequest{
 		Project: "proj-b",
 		Prompt:  "run dangerous command",
-	}, "job-perm")
+	}, "job-perm", nil)
 	if err == nil {
 		t.Fatal("expected permission request error")
 	}
@@ -137,6 +137,48 @@ func TestEngineJobRunnerRejectsPermissionRequest(t *testing.T) {
 	coded, ok := err.(interface{ Code() string })
 	if !ok || coded.Code() != JobErrorCodePermissionRequired {
 		t.Fatalf("error code = %v, want %q", err, JobErrorCodePermissionRequired)
+	}
+}
+
+func TestEngineJobRunnerEmitsStructuredJobEvents(t *testing.T) {
+	session := &jobTestSession{events: make(chan Event, 6)}
+	session.onSend = func(prompt string) {
+		session.events <- Event{Type: EventThinking, Content: "Planning next step"}
+		session.events <- Event{Type: EventToolUse, ToolName: "Bash", ToolInput: "git status"}
+		session.events <- Event{Type: EventToolResult, ToolName: "Bash", ToolResult: "clean"}
+		session.events <- Event{Type: EventText, Content: "Done."}
+		session.events <- Event{Type: EventResult, Content: "final", SessionID: "session-7"}
+		close(session.events)
+	}
+
+	engine := NewEngine("proj-events", &jobTestAgent{session: session}, nil, "", LangEnglish)
+	var captured []JobEvent
+	result, err := engine.JobRunner().Run(context.Background(), JobRequest{
+		Project: "proj-events",
+		Prompt:  "inspect repo",
+	}, "job-events", func(event JobEvent) {
+		captured = append(captured, event)
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.SessionID != "session-7" {
+		t.Fatalf("SessionID = %q, want session-7", result.SessionID)
+	}
+	if len(captured) != 4 {
+		t.Fatalf("captured len = %d, want 4", len(captured))
+	}
+	if captured[0].Type != string(EventThinking) {
+		t.Fatalf("first event type = %q, want thinking", captured[0].Type)
+	}
+	if captured[1].ToolName != "Bash" || captured[1].ToolInput != "git status" {
+		t.Fatalf("tool use = %#v, want Bash git status", captured[1])
+	}
+	if captured[2].Content != "clean" {
+		t.Fatalf("tool result content = %q, want clean", captured[2].Content)
+	}
+	if captured[3].Content != "Done." {
+		t.Fatalf("text content = %q, want Done.", captured[3].Content)
 	}
 }
 
@@ -204,7 +246,7 @@ func TestEngineJobRunnerReturnsAgentError(t *testing.T) {
 	_, err := engine.JobRunner().Run(context.Background(), JobRequest{
 		Project: "proj-c",
 		Prompt:  "fail",
-	}, "job-fail")
+	}, "job-fail", nil)
 	if err == nil || err.Error() != "agent failed" {
 		t.Fatalf("err = %v, want agent failed", err)
 	}
@@ -326,7 +368,7 @@ func TestEngineJobRunnerSerializesSessionEnvInjection(t *testing.T) {
 			Project: "proj-serial",
 			TaskID:  "task-a",
 			Prompt:  "first",
-		}, "job-a")
+		}, "job-a", nil)
 		errCh <- err
 	}()
 
@@ -337,7 +379,7 @@ func TestEngineJobRunnerSerializesSessionEnvInjection(t *testing.T) {
 			Project: "proj-serial",
 			TaskID:  "task-b",
 			Prompt:  "second",
-		}, "job-b")
+		}, "job-b", nil)
 		errCh <- err
 	}()
 

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -48,6 +49,16 @@ type JobResult struct {
 	SessionID string `json:"session_id,omitempty"`
 }
 
+type JobEvent struct {
+	Index     int       `json:"index"`
+	Type      string    `json:"type"`
+	Content   string    `json:"content,omitempty"`
+	ToolName  string    `json:"tool_name,omitempty"`
+	ToolInput string    `json:"tool_input,omitempty"`
+	SessionID string    `json:"session_id,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 type Job struct {
 	ID           string          `json:"id"`
 	Project      string          `json:"project"`
@@ -64,6 +75,8 @@ type Job struct {
 	StartedAt    *time.Time      `json:"started_at,omitempty"`
 	FinishedAt   *time.Time      `json:"finished_at,omitempty"`
 	TimeoutSec   int             `json:"timeout_sec,omitempty"`
+	EventCount   int             `json:"event_count,omitempty"`
+	Events       []JobEvent      `json:"events,omitempty"`
 }
 
 func (j *Job) clone() *Job {
@@ -79,11 +92,19 @@ func (j *Job) clone() *Job {
 		finished := *j.FinishedAt
 		dup.FinishedAt = &finished
 	}
+	if len(j.Events) > 0 {
+		dup.Events = append([]JobEvent(nil), j.Events...)
+	}
 	return &dup
 }
 
 type JobRunner interface {
-	Run(ctx context.Context, req JobRequest, jobID string) (*JobResult, error)
+	Run(
+		ctx context.Context,
+		req JobRequest,
+		jobID string,
+		onEvent func(JobEvent),
+	) (*JobResult, error)
 }
 
 type managedJob struct {
@@ -113,6 +134,8 @@ type JobManager struct {
 	running map[string]string
 	queues  map[string][]string
 }
+
+const maxBufferedJobEvents = 200
 
 func NewJobManager(dataDir string) (*JobManager, error) {
 	jobsDir := filepath.Join(dataDir, "jobs")
@@ -346,7 +369,9 @@ func (jm *JobManager) runJob(managed *managedJob) {
 		return
 	}
 
-	result, err := runner.Run(ctx, req, jobID)
+	result, err := runner.Run(ctx, req, jobID, func(event JobEvent) {
+		jm.recordJobEvent(jobID, event)
+	})
 	jm.finishJob(jobID, func(job *Job) {
 		now := time.Now().UTC()
 		job.FinishedAt = &now
@@ -374,6 +399,27 @@ func (jm *JobManager) runJob(managed *managedJob) {
 			job.SessionID = result.SessionID
 		}
 	})
+}
+
+func (jm *JobManager) recordJobEvent(jobID string, event JobEvent) {
+	jm.mu.Lock()
+	managed := jm.jobs[jobID]
+	if managed == nil {
+		jm.mu.Unlock()
+		return
+	}
+	event.Index = managed.job.EventCount
+	managed.job.EventCount++
+	managed.job.Events = append(managed.job.Events, event)
+	if extra := len(managed.job.Events) - maxBufferedJobEvents; extra > 0 {
+		managed.job.Events = append([]JobEvent(nil), managed.job.Events[extra:]...)
+	}
+	job := managed.job.clone()
+	jm.mu.Unlock()
+
+	if err := jm.saveJob(job); err != nil {
+		slog.Warn("persist job event failed", "job_id", jobID, "error", err)
+	}
 }
 
 func (jm *JobManager) finishJob(jobID string, mutate func(job *Job)) {

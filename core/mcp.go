@@ -329,6 +329,11 @@ func jobResponse(job *Job) map[string]any {
 		"error_code":    job.ErrorCode,
 		"created_at":    job.CreatedAt.Format(time.RFC3339Nano),
 		"timeout_sec":   job.TimeoutSec,
+		"event_count":   job.EventCount,
+		"events":        []JobEvent{},
+	}
+	if len(job.Events) > 0 {
+		payload["events"] = job.Events
 	}
 	if job.StartedAt != nil {
 		payload["started_at"] = job.StartedAt.Format(time.RFC3339Nano)
