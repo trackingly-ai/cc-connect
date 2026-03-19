@@ -59,17 +59,18 @@ func newQoderSession(ctx context.Context, workDir, model, mode, resumeID string,
 }
 
 func (qs *qoderSession) Send(prompt string, images []core.ImageAttachment, files []core.FileAttachment) error {
-	if len(images) > 0 {
-		slog.Warn("qoderSession: images not supported, ignoring")
-	}
-	if len(files) > 0 {
-		prompt = core.AppendFileRefs(prompt, core.SaveFilesToDisk(qs.workDir, files))
+	attachments := append(core.SaveImagesToDisk(qs.workDir, images), core.SaveFilesToDisk(qs.workDir, files)...)
+	if strings.TrimSpace(prompt) == "" && len(attachments) > 0 {
+		prompt = "Please analyze the attached file(s)."
 	}
 	if !qs.alive.Load() {
 		return fmt.Errorf("session is closed")
 	}
 
 	args := []string{"-p", prompt, "-f", "stream-json", "-q", "-w", qs.workDir}
+	for _, attachment := range attachments {
+		args = append(args, "--attachment", attachment)
+	}
 
 	sid := qs.CurrentSessionID()
 	if sid != "" {
