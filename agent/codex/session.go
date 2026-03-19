@@ -71,11 +71,12 @@ func newCodexSession(ctx context.Context, workDir, model, mode, resumeID string,
 // If a threadID exists (from a prior turn or resume), uses `codex exec resume <id> <prompt>`.
 // Otherwise uses `codex exec <prompt>` to start a new conversation.
 func (cs *codexSession) Send(prompt string, images []core.ImageAttachment, files []core.FileAttachment) error {
-	if len(images) > 0 {
-		slog.Warn("codexSession: images not supported by Codex, ignoring")
-	}
+	imagePaths := core.SaveImagesToDisk(cs.workDir, images)
 	if len(files) > 0 {
 		prompt = core.AppendFileRefs(prompt, core.SaveFilesToDisk(cs.workDir, files))
+	}
+	if strings.TrimSpace(prompt) == "" && len(imagePaths) > 0 {
+		prompt = "Please analyze the attached image(s)."
 	}
 	if hint := strings.TrimSpace(core.InteractionOptionsPrompt()); hint != "" {
 		prompt = hint + "\n\nUser request:\n" + prompt
@@ -103,6 +104,9 @@ func (cs *codexSession) Send(prompt string, images []core.ImageAttachment, files
 
 	if cs.model != "" {
 		args = append(args, "--model", cs.model)
+	}
+	for _, imagePath := range imagePaths {
+		args = append(args, "--image", imagePath)
 	}
 
 	if isResume {
@@ -134,15 +138,18 @@ func (cs *codexSession) Send(prompt string, images []core.ImageAttachment, files
 	cs.trackProcess(cmd)
 
 	cs.wg.Add(1)
-	go cs.readLoop(cmd, stdout, &stderrBuf)
+	go cs.readLoop(cmd, stdout, &stderrBuf, imagePaths)
 
 	return nil
 }
 
-func (cs *codexSession) readLoop(cmd *exec.Cmd, stdout io.ReadCloser, stderrBuf *bytes.Buffer) {
+func (cs *codexSession) readLoop(cmd *exec.Cmd, stdout io.ReadCloser, stderrBuf *bytes.Buffer, tempImages []string) {
 	defer cs.wg.Done()
 	defer cs.clearProcess(cmd)
 	defer func() {
+		for _, path := range tempImages {
+			_ = os.Remove(path)
+		}
 		if err := cmd.Wait(); err != nil {
 			stderrMsg := strings.TrimSpace(stderrBuf.String())
 			if stderrMsg != "" {

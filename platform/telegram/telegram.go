@@ -253,6 +253,42 @@ func (p *Platform) Start(handler core.MessageHandler) error {
 					continue
 				}
 
+				// Handle video messages as file attachments
+				if msg.Video != nil {
+					fileData, err := p.downloadFile(msg.Video.FileID)
+					if err != nil {
+						slog.Error("telegram: download video failed", "error", err)
+						continue
+					}
+					caption := msg.Caption
+					if p.bot.Self.UserName != "" {
+						caption = strings.ReplaceAll(caption, "@"+p.bot.Self.UserName, "")
+						caption = strings.TrimSpace(caption)
+					}
+					fileName := "video.mp4"
+					if msg.Video.FileName != "" {
+						fileName = msg.Video.FileName
+					}
+					mimeType := msg.Video.MimeType
+					if mimeType == "" {
+						mimeType = "video/mp4"
+					}
+					coreMsg := &core.Message{
+						SessionKey: sessionKey, Platform: "telegram",
+						UserID: userID, UserName: userName,
+						Content:   caption,
+						MessageID: strconv.Itoa(msg.MessageID),
+						Files: []core.FileAttachment{{
+							MimeType: mimeType,
+							Data:     fileData,
+							FileName: fileName,
+						}},
+						ReplyCtx: rctx,
+					}
+					p.handler(p, coreMsg)
+					continue
+				}
+
 				if msg.Text == "" {
 					continue
 				}

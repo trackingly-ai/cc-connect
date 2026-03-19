@@ -143,3 +143,77 @@ wait $child
 		t.Fatal("timed out waiting for events channel to close")
 	}
 }
+
+func TestSend_PassesImagesToCodexCLI(t *testing.T) {
+	workDir := t.TempDir()
+	binDir := filepath.Join(workDir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+
+	argsFile := filepath.Join(workDir, "args.txt")
+	script := `#!/bin/sh
+printf '%s\n' "$@" > "$CODEX_ARGS_FILE"
+echo '{"type":"thread.started","thread_id":"thread-images"}'
+echo '{"type":"turn.completed"}'
+`
+	scriptPath := filepath.Join(binDir, "codex")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake codex: %v", err)
+	}
+
+	t.Setenv("CODEX_ARGS_FILE", argsFile)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	cs, err := newCodexSession(context.Background(), workDir, "", "", "", nil)
+	if err != nil {
+		t.Fatalf("newCodexSession: %v", err)
+	}
+	defer cs.Close()
+
+	if err := cs.Send("", []core.ImageAttachment{{
+		MimeType: "image/png",
+		Data:     []byte("pngdata"),
+		FileName: "screen shot.png",
+	}}, nil); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	timeout := time.After(5 * time.Second)
+	for {
+		select {
+		case evt := <-cs.Events():
+			if evt.Type == core.EventError {
+				t.Fatalf("unexpected error event: %v", evt.Error)
+			}
+			if evt.Type == core.EventResult && evt.Done {
+				goto done
+			}
+		case <-timeout:
+			t.Fatal("timed out waiting for turn completion")
+		}
+	}
+
+done:
+	argsBytes, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("ReadFile args: %v", err)
+	}
+	args := strings.Split(strings.TrimSpace(string(argsBytes)), "\n")
+	imageIdx := -1
+	for i, arg := range args {
+		if arg == "--image" {
+			imageIdx = i
+			break
+		}
+	}
+	if imageIdx < 0 || imageIdx+1 >= len(args) {
+		t.Fatalf("args = %q, want --image <path>", string(argsBytes))
+	}
+	if !strings.HasPrefix(args[imageIdx+1], filepath.Join(workDir, ".cc-connect", "images")+string(os.PathSeparator)) {
+		t.Fatalf("image arg = %q, want saved image path in work dir", args[imageIdx+1])
+	}
+	if got := args[len(args)-1]; got != "Please analyze the attached image(s)." {
+		t.Fatalf("final prompt = %q, want fallback image prompt", got)
+	}
+}

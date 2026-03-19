@@ -81,3 +81,37 @@ func TestSaveFilesToDisk_SanitizesNamesAndAvoidsOverwrite(t *testing.T) {
 		t.Fatalf("expected distinct file contents, got %q and %q", string(data0), string(data1))
 	}
 }
+
+func TestSaveImagesToDisk_SanitizesNamesAndAddsExtensions(t *testing.T) {
+	workDir := t.TempDir()
+	paths := SaveImagesToDisk(workDir, []ImageAttachment{
+		{
+			MimeType: "image/jpeg",
+			Data:     []byte("jpegdata"),
+			FileName: "../../screen shot.jpg",
+		},
+		{
+			MimeType: "image/png",
+			Data:     []byte("pngdata"),
+		},
+	})
+
+	if len(paths) != 2 {
+		t.Fatalf("paths len = %d, want 2", len(paths))
+	}
+	if !strings.HasSuffix(paths[0], ".jpg") {
+		t.Fatalf("first path = %q, want .jpg suffix", paths[0])
+	}
+	if !strings.HasSuffix(paths[1], ".png") {
+		t.Fatalf("second path = %q, want .png suffix", paths[1])
+	}
+	for _, p := range paths {
+		rel, err := filepath.Rel(filepath.Join(workDir, ".cc-connect", "images"), p)
+		if err != nil {
+			t.Fatalf("Rel: %v", err)
+		}
+		if strings.HasPrefix(rel, "..") {
+			t.Fatalf("path escaped image dir: %q", p)
+		}
+	}
+}

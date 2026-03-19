@@ -172,6 +172,8 @@ type Engine struct {
 	prompts           map[string]*pendingInteractionPrompt
 	voiceConfirmMu    sync.Mutex
 	voiceConfirms     map[string]*pendingVoiceConfirmation
+	pendingAttachMu   sync.Mutex
+	pendingAttach     map[string]*pendingAttachments
 
 	quietMu sync.RWMutex
 	quiet   bool // when true, suppress thinking and tool progress messages globally
@@ -227,6 +229,11 @@ type pendingVoiceConfirmation struct {
 	AwaitingEdit bool
 }
 
+type pendingAttachments struct {
+	Images []ImageAttachment
+	Files  []FileAttachment
+}
+
 // resolve safely closes the Resolved channel exactly once.
 func (pp *pendingPermission) resolve() {
 	pp.resolveOnce.Do(func() { close(pp.Resolved) })
@@ -249,6 +256,7 @@ func NewEngine(name string, ag Agent, platforms []Platform, sessionStorePath str
 		interactiveStates: make(map[string]*interactiveState),
 		prompts:           make(map[string]*pendingInteractionPrompt),
 		voiceConfirms:     make(map[string]*pendingVoiceConfirmation),
+		pendingAttach:     make(map[string]*pendingAttachments),
 		startedAt:         time.Now(),
 		streamPreview:     DefaultStreamPreviewCfg(),
 		eventIdleTimeout:  defaultEventIdleTimeout,
@@ -683,6 +691,11 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 	if content == "" && len(msg.Images) == 0 && len(msg.Files) == 0 {
 		return
 	}
+	if content == "" && (len(msg.Images) > 0 || len(msg.Files) > 0) {
+		e.storePendingAttachments(msg.SessionKey, msg.Images, msg.Files)
+		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgAttachmentsBuffered, len(msg.Images)+len(msg.Files)))
+		return
+	}
 
 	content, consumed := e.resolvePendingInteraction(msg.SessionKey, content)
 	if consumed {
@@ -730,10 +743,19 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 		return
 	}
 
+	pendingAttach := e.getPendingAttachments(msg.SessionKey)
+	if content != "" && pendingAttach != nil {
+		msg.Images = append(append([]ImageAttachment{}, pendingAttach.Images...), msg.Images...)
+		msg.Files = append(append([]FileAttachment{}, pendingAttach.Files...), msg.Files...)
+	}
+
 	session := e.sessions.GetOrCreateActive(msg.SessionKey)
 	if !session.TryLock() {
 		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgPreviousProcessing))
 		return
+	}
+	if content != "" && pendingAttach != nil {
+		e.clearPendingAttachments(msg.SessionKey)
 	}
 
 	slog.Info("processing message",
@@ -743,6 +765,68 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 	)
 
 	go e.processInteractiveMessage(p, msg, session)
+}
+
+func (e *Engine) storePendingAttachments(sessionKey string, images []ImageAttachment, files []FileAttachment) {
+	if len(images) == 0 && len(files) == 0 {
+		return
+	}
+	e.pendingAttachMu.Lock()
+	defer e.pendingAttachMu.Unlock()
+	if e.pendingAttach[sessionKey] == nil {
+		e.pendingAttach[sessionKey] = &pendingAttachments{}
+	}
+	e.pendingAttach[sessionKey].Images = append(e.pendingAttach[sessionKey].Images, cloneImages(images)...)
+	e.pendingAttach[sessionKey].Files = append(e.pendingAttach[sessionKey].Files, cloneFiles(files)...)
+}
+
+func (e *Engine) getPendingAttachments(sessionKey string) *pendingAttachments {
+	e.pendingAttachMu.Lock()
+	defer e.pendingAttachMu.Unlock()
+	pending := e.pendingAttach[sessionKey]
+	if pending == nil {
+		return nil
+	}
+	return &pendingAttachments{
+		Images: cloneImages(pending.Images),
+		Files:  cloneFiles(pending.Files),
+	}
+}
+
+func (e *Engine) clearPendingAttachments(sessionKey string) {
+	e.pendingAttachMu.Lock()
+	defer e.pendingAttachMu.Unlock()
+	delete(e.pendingAttach, sessionKey)
+}
+
+func cloneImages(images []ImageAttachment) []ImageAttachment {
+	if len(images) == 0 {
+		return nil
+	}
+	out := make([]ImageAttachment, 0, len(images))
+	for _, img := range images {
+		cp := img
+		if len(img.Data) > 0 {
+			cp.Data = append([]byte(nil), img.Data...)
+		}
+		out = append(out, cp)
+	}
+	return out
+}
+
+func cloneFiles(files []FileAttachment) []FileAttachment {
+	if len(files) == 0 {
+		return nil
+	}
+	out := make([]FileAttachment, 0, len(files))
+	for _, f := range files {
+		cp := f
+		if len(f.Data) > 0 {
+			cp.Data = append([]byte(nil), f.Data...)
+		}
+		out = append(out, cp)
+	}
+	return out
 }
 
 // ──────────────────────────────────────────────────────────────

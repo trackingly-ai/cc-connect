@@ -60,6 +60,38 @@ type FileAttachment struct {
 	FileName string // original filename
 }
 
+// SaveImagesToDisk saves image attachments to workDir/.cc-connect/images/
+// and returns absolute paths for agent-side multimodal CLI flags.
+func SaveImagesToDisk(workDir string, images []ImageAttachment) []string {
+	if len(images) == 0 {
+		return nil
+	}
+	imageDir := filepath.Join(workDir, ".cc-connect", "images")
+	if err := os.MkdirAll(imageDir, 0o755); err != nil {
+		slog.Error("SaveImagesToDisk: mkdir failed", "error", err)
+		return nil
+	}
+
+	paths := make([]string, 0, len(images))
+	for i, img := range images {
+		fname := strings.TrimSpace(img.FileName)
+		if fname == "" {
+			fname = fmt.Sprintf("image_%d_%d%s", time.Now().UnixMilli(), i, extFromMime(img.MimeType))
+		}
+		fpath, err := createAttachmentPath(imageDir, fname, i)
+		if err != nil {
+			slog.Error("SaveImagesToDisk: create path failed", "error", err, "name", fname)
+			continue
+		}
+		if err := os.WriteFile(fpath, img.Data, 0o644); err != nil {
+			slog.Error("SaveImagesToDisk: write failed", "error", err, "name", fname, "path", fpath)
+			continue
+		}
+		paths = append(paths, fpath)
+	}
+	return paths
+}
+
 // SaveFilesToDisk saves file attachments to workDir/.cc-connect/attachments/
 // and returns absolute paths for agent-side file reading.
 func SaveFilesToDisk(workDir string, files []FileAttachment) []string {
@@ -123,6 +155,19 @@ func sanitizeAttachmentFileName(originalName string, index int) string {
 	}
 	ext = attachmentNameSanitizer.ReplaceAllString(ext, "")
 	return base + ext
+}
+
+func extFromMime(mime string) string {
+	switch mime {
+	case "image/jpeg":
+		return ".jpg"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	default:
+		return ".png"
+	}
 }
 
 // AppendFileRefs appends saved file path references to a prompt.

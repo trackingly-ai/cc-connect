@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -356,6 +357,37 @@ func (p *Platform) onMessage(event *larkim.P2MessageReceiveV1) error {
 			ReplyCtx: rctx,
 		})
 
+	case "media":
+		var mediaBody struct {
+			FileKey  string `json:"file_key"`
+			ImageKey string `json:"image_key"`
+		}
+		if err := json.Unmarshal([]byte(*msg.Content), &mediaBody); err != nil {
+			slog.Error("feishu: failed to parse media content", "error", err)
+			return nil
+		}
+		if mediaBody.FileKey == "" {
+			slog.Debug("feishu: media message missing file_key", "message_id", messageID)
+			return nil
+		}
+		fileData, err := p.downloadResource(messageID, mediaBody.FileKey, "media")
+		if err != nil {
+			slog.Error("feishu: download media failed", "error", err)
+			return nil
+		}
+		mimeType := detectMimeType(fileData)
+		p.handler(p, &core.Message{
+			SessionKey: sessionKey, Platform: "feishu",
+			MessageID: messageID,
+			UserID:    userID, UserName: userName,
+			Files: []core.FileAttachment{{
+				MimeType: mimeType,
+				Data:     fileData,
+				FileName: defaultFileNameForMime("media", mimeType),
+			}},
+			ReplyCtx: rctx,
+		})
+
 	case "post":
 		textParts, images := p.parsePostContent(messageID, *msg.Content)
 		text := stripMentions(strings.Join(textParts, "\n"), msg.Mentions)
@@ -484,21 +516,36 @@ func (p *Platform) downloadResource(messageID, fileKey, resType string) ([]byte,
 }
 
 func detectMimeType(data []byte) string {
-	if len(data) >= 8 {
-		if data[0] == 0x89 && data[1] == 'P' && data[2] == 'N' && data[3] == 'G' {
-			return "image/png"
-		}
-		if data[0] == 0xFF && data[1] == 0xD8 {
-			return "image/jpeg"
-		}
-		if string(data[:4]) == "GIF8" {
-			return "image/gif"
-		}
-		if string(data[:4]) == "RIFF" && string(data[8:12]) == "WEBP" {
-			return "image/webp"
-		}
+	if len(data) == 0 {
+		return "application/octet-stream"
 	}
-	return "image/png"
+	if mime := http.DetectContentType(data); mime != "" {
+		return mime
+	}
+	return "application/octet-stream"
+}
+
+func defaultFileNameForMime(prefix, mime string) string {
+	switch mime {
+	case "video/mp4":
+		return prefix + ".mp4"
+	case "video/quicktime":
+		return prefix + ".mov"
+	case "video/webm":
+		return prefix + ".webm"
+	case "audio/mpeg":
+		return prefix + ".mp3"
+	case "audio/wav":
+		return prefix + ".wav"
+	case "image/jpeg":
+		return prefix + ".jpg"
+	case "image/png":
+		return prefix + ".png"
+	case "image/gif":
+		return prefix + ".gif"
+	default:
+		return prefix + ".bin"
+	}
 }
 
 func buildReplyContent(content string) (msgType string, body string) {

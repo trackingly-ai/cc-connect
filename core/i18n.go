@@ -189,6 +189,7 @@ const (
 	MsgVoiceCanceled         MsgKey = "voice_canceled"
 	MsgVoiceBtnConfirm       MsgKey = "voice_btn_confirm"
 	MsgVoiceBtnModify        MsgKey = "voice_btn_modify"
+	MsgAttachmentsBuffered   MsgKey = "attachments_buffered"
 
 	MsgTTSNotEnabled MsgKey = "tts_not_enabled"
 	MsgTTSStatus     MsgKey = "tts_status"
@@ -1054,6 +1055,13 @@ var messages = map[MsgKey]map[Language]string{
 		LangTraditionalChinese: "修改",
 		LangJapanese:           "修正",
 		LangSpanish:            "Modificar",
+	},
+	MsgAttachmentsBuffered: {
+		LangEnglish:            "📎 Received %d attachment(s). Send a text message with what you want me to do, and I'll attach them to that request.",
+		LangChinese:            "📎 已收到 %d 个附件。请再发一条文字说明你希望我处理什么，我会把这些附件一起带给 agent。",
+		LangTraditionalChinese: "📎 已收到 %d 個附件。請再發一條文字說明你希望我處理什麼，我會把這些附件一起帶給 agent。",
+		LangJapanese:           "📎 添付を %d 件受け取りました。何をしてほしいかを文字で送ってください。そのリクエストに添えて agent に渡します。",
+		LangSpanish:            "📎 Recibí %d archivo(s) adjuntos. Envíe un mensaje de texto con lo que desea que haga y adjuntaré esos archivos a esa solicitud.",
 	},
 	MsgTTSNotEnabled: {
 		LangEnglish:            "TTS is not enabled. Please configure `[tts]` in config.toml.",

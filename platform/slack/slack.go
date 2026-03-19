@@ -132,6 +132,7 @@ func (p *Platform) handleEvent(evt socketmode.Event) {
 				ts := ev.TimeStamp
 
 				var images []core.ImageAttachment
+				var files []core.FileAttachment
 				var audio *core.AudioAttachment
 				for _, f := range ev.Files {
 					if f.Mimetype != "" && strings.HasPrefix(f.Mimetype, "audio/") {
@@ -156,19 +157,30 @@ func (p *Platform) handleEvent(evt socketmode.Event) {
 						images = append(images, core.ImageAttachment{
 							MimeType: f.Mimetype, Data: imgData, FileName: f.Name,
 						})
+					} else {
+						fileData, err := p.downloadSlackFile(f.URLPrivateDownload)
+						if err != nil {
+							slog.Error("slack: download file failed", "error", err)
+							continue
+						}
+						files = append(files, core.FileAttachment{
+							MimeType: f.Mimetype,
+							Data:     fileData,
+							FileName: f.Name,
+						})
 					}
 				}
 
-				if ev.Text == "" && len(images) == 0 && audio == nil {
+				if ev.Text == "" && len(images) == 0 && len(files) == 0 && audio == nil {
 					return
 				}
 
 				msg := &core.Message{
 					SessionKey: sessionKey, Platform: "slack",
 					UserID: ev.User, UserName: ev.User,
-					Content: ev.Text, Images: images, Audio: audio,
+					Content: ev.Text, Images: images, Files: files, Audio: audio,
 					MessageID: ts,
-					ReplyCtx: replyContext{channel: ev.Channel, timestamp: ts},
+					ReplyCtx:  replyContext{channel: ev.Channel, timestamp: ts},
 				}
 				p.handler(p, msg)
 			}

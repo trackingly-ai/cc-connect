@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -61,6 +62,67 @@ func (s *eventfulStubAgentSession) CurrentSessionID() string {
 }
 func (s *eventfulStubAgentSession) Alive() bool  { return true }
 func (s *eventfulStubAgentSession) Close() error { return nil }
+
+type recordedSend struct {
+	prompt string
+	images []ImageAttachment
+	files  []FileAttachment
+}
+
+type recordingSendAgent struct {
+	mu      sync.Mutex
+	session *recordingSendSession
+}
+
+func (a *recordingSendAgent) Name() string { return "recording-send" }
+func (a *recordingSendAgent) StartSession(_ context.Context, _ string) (AgentSession, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.session == nil {
+		a.session = newRecordingSendSession()
+	}
+	return a.session, nil
+}
+func (a *recordingSendAgent) ListSessions(_ context.Context) ([]AgentSessionInfo, error) {
+	return nil, nil
+}
+func (a *recordingSendAgent) Stop() error { return nil }
+
+type recordingSendSession struct {
+	mu     sync.Mutex
+	sends  []recordedSend
+	events chan Event
+}
+
+func newRecordingSendSession() *recordingSendSession {
+	return &recordingSendSession{events: make(chan Event, 8)}
+}
+
+func (s *recordingSendSession) Send(prompt string, images []ImageAttachment, files []FileAttachment) error {
+	s.mu.Lock()
+	s.sends = append(s.sends, recordedSend{
+		prompt: prompt,
+		images: cloneImages(images),
+		files:  append([]FileAttachment(nil), files...),
+	})
+	s.mu.Unlock()
+	s.events <- Event{Type: EventText, Content: "ok"}
+	s.events <- Event{Type: EventResult, Done: true}
+	return nil
+}
+func (s *recordingSendSession) RespondPermission(_ string, _ PermissionResult) error { return nil }
+func (s *recordingSendSession) Events() <-chan Event                                 { return s.events }
+func (s *recordingSendSession) CurrentSessionID() string                             { return "recording-send" }
+func (s *recordingSendSession) Alive() bool                                          { return true }
+func (s *recordingSendSession) Close() error                                         { close(s.events); return nil }
+
+func (s *recordingSendSession) Sends() []recordedSend {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]recordedSend, len(s.sends))
+	copy(out, s.sends)
+	return out
+}
 
 type stubWorkDirAgent struct {
 	stubAgent
@@ -204,6 +266,180 @@ func TestProcessInteractiveEvents_StripsOptionsXMLFromDisplayedReply(t *testing.
 	history := session.GetHistory(0)
 	if len(history) != 1 || history[0].Content != "我建议下一步先做这两件事。" {
 		t.Fatalf("expected sanitized assistant history, got %#v", history)
+	}
+}
+
+func TestHandleMessage_BuffersAttachmentsUntilTextArrives(t *testing.T) {
+	agent := &recordingSendAgent{}
+	p := &stubPlatformEngine{n: "test"}
+	e := NewEngine("test", agent, []Platform{p}, "", LangEnglish)
+
+	e.handleMessage(p, &Message{
+		SessionKey: "test:user1",
+		Platform:   "test",
+		MessageID:  "img-1",
+		Images:     []ImageAttachment{{MimeType: "image/png", Data: []byte("img1")}},
+		ReplyCtx:   "ctx",
+	})
+
+	if got := len(p.sent); got != 1 {
+		t.Fatalf("reply count = %d, want 1 buffering ack", got)
+	}
+	if !strings.Contains(p.sent[0], "Received 1 attachment") {
+		t.Fatalf("buffering ack = %q", p.sent[0])
+	}
+	if agent.session != nil && len(agent.session.Sends()) != 0 {
+		t.Fatalf("expected no agent send for image-only message")
+	}
+
+	e.handleMessage(p, &Message{
+		SessionKey: "test:user1",
+		Platform:   "test",
+		MessageID:  "txt-1",
+		Content:    "please review this screenshot",
+		ReplyCtx:   "ctx",
+	})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if agent.session != nil && len(agent.session.Sends()) == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if agent.session == nil {
+		t.Fatal("expected agent session to start")
+	}
+	sends := agent.session.Sends()
+	if len(sends) != 1 {
+		t.Fatalf("send count = %d, want 1", len(sends))
+	}
+	if sends[0].prompt != "please review this screenshot" {
+		t.Fatalf("prompt = %q", sends[0].prompt)
+	}
+	if len(sends[0].images) != 1 || string(sends[0].images[0].Data) != "img1" {
+		t.Fatalf("images = %#v, want buffered image", sends[0].images)
+	}
+	if pending := e.getPendingAttachments("test:user1"); pending != nil {
+		t.Fatalf("expected pending attachments to be cleared after send, got %#v", pending)
+	}
+}
+
+func TestHandleMessage_SendsTextAndImagesImmediately(t *testing.T) {
+	agent := &recordingSendAgent{}
+	p := &stubPlatformEngine{n: "test"}
+	e := NewEngine("test", agent, []Platform{p}, "", LangEnglish)
+
+	e.handleMessage(p, &Message{
+		SessionKey: "test:user1",
+		Platform:   "test",
+		MessageID:  "mix-1",
+		Content:    "summarize this",
+		Images:     []ImageAttachment{{MimeType: "image/png", Data: []byte("img1")}},
+		ReplyCtx:   "ctx",
+	})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if agent.session != nil && len(agent.session.Sends()) == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if agent.session == nil {
+		t.Fatal("expected agent session to start")
+	}
+	sends := agent.session.Sends()
+	if len(sends) != 1 {
+		t.Fatalf("send count = %d, want 1", len(sends))
+	}
+	for _, sent := range p.sent {
+		if strings.Contains(sent, "Received 1 attachment") {
+			t.Fatalf("expected no buffering ack for mixed message, got %#v", p.sent)
+		}
+	}
+	if sends[0].prompt != "summarize this" || len(sends[0].images) != 1 {
+		t.Fatalf("send = %#v", sends[0])
+	}
+}
+
+func TestHandleMessage_BufferedAttachmentsStayScopedToSessionKey(t *testing.T) {
+	agent := &recordingSendAgent{}
+	p := &stubPlatformEngine{n: "test"}
+	e := NewEngine("test", agent, []Platform{p}, "", LangEnglish)
+
+	e.handleMessage(p, &Message{
+		SessionKey: "test:user1",
+		Platform:   "test",
+		MessageID:  "img-1",
+		Images:     []ImageAttachment{{MimeType: "image/png", Data: []byte("img1")}},
+		ReplyCtx:   "ctx",
+	})
+	e.handleMessage(p, &Message{
+		SessionKey: "test:user2",
+		Platform:   "test",
+		MessageID:  "txt-2",
+		Content:    "no image here",
+		ReplyCtx:   "ctx",
+	})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if agent.session != nil && len(agent.session.Sends()) == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	sends := agent.session.Sends()
+	if len(sends) != 1 {
+		t.Fatalf("send count = %d, want 1", len(sends))
+	}
+	if len(sends[0].images) != 0 || len(sends[0].files) != 0 {
+		t.Fatalf("expected no cross-session buffered attachments, got %#v", sends[0])
+	}
+	if pending := e.getPendingAttachments("test:user1"); pending == nil || len(pending.Images) != 1 {
+		t.Fatalf("expected user1 buffered attachment to remain pending, got %#v", pending)
+	}
+}
+
+func TestHandleMessage_BuffersFileOnlyUntilTextArrives(t *testing.T) {
+	agent := &recordingSendAgent{}
+	p := &stubPlatformEngine{n: "test"}
+	e := NewEngine("test", agent, []Platform{p}, "", LangEnglish)
+
+	e.handleMessage(p, &Message{
+		SessionKey: "test:user1",
+		Platform:   "test",
+		MessageID:  "file-1",
+		Files: []FileAttachment{{
+			MimeType: "video/mp4",
+			Data:     []byte("video"),
+			FileName: "clip.mp4",
+		}},
+		ReplyCtx: "ctx",
+	})
+
+	e.handleMessage(p, &Message{
+		SessionKey: "test:user1",
+		Platform:   "test",
+		MessageID:  "txt-1",
+		Content:    "summarize this clip",
+		ReplyCtx:   "ctx",
+	})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if agent.session != nil && len(agent.session.Sends()) == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	sends := agent.session.Sends()
+	if len(sends) != 1 {
+		t.Fatalf("send count = %d, want 1", len(sends))
+	}
+	if len(sends[0].files) != 1 || sends[0].files[0].FileName != "clip.mp4" {
+		t.Fatalf("files = %#v, want buffered file", sends[0].files)
 	}
 }
 
