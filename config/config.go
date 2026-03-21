@@ -32,6 +32,7 @@ type Config struct {
 	Quiet           *bool               `toml:"quiet,omitempty"` // global default for quiet mode; project-level overrides this
 	Cron            CronConfig          `toml:"cron"`
 	IdleTimeoutMins *int                `toml:"idle_timeout_mins,omitempty"` // max minutes between agent events; 0 = no timeout; default 120
+	Echo            EchoConfig          `toml:"echo"`
 }
 
 // CronConfig controls cron job behavior.
@@ -44,6 +45,18 @@ type MCPConfig struct {
 	Enabled   bool   `toml:"enabled"`
 	Listen    string `toml:"listen"`
 	AuthToken string `toml:"auth_token"`
+}
+
+// EchoConfig controls the optional outbound worker connection back to Echo Server.
+type EchoConfig struct {
+	ServerURL            string   `toml:"server_url"`
+	AuthToken            string   `toml:"auth_token"`
+	RegisterOnStart      *bool    `toml:"register_on_start"`
+	HostID               string   `toml:"host_id"`
+	Label                string   `toml:"label"`
+	OrgID                string   `toml:"org_id"`
+	Tags                 []string `toml:"tags"`
+	HeartbeatIntervalSec int      `toml:"heartbeat_interval_sec"`
 }
 
 // DisplayConfig controls how intermediate messages (thinking, tool output) are shown.
@@ -122,11 +135,21 @@ type TTSConfig struct {
 
 // ProjectConfig binds one agent (with a specific work_dir) to one or more platforms.
 type ProjectConfig struct {
-	Name             string           `toml:"name"`
-	Agent            AgentConfig      `toml:"agent"`
-	Platforms        []PlatformConfig `toml:"platforms"`
-	Quiet            *bool            `toml:"quiet,omitempty"`             // project-level quiet mode; overrides global setting
-	DisabledCommands []string         `toml:"disabled_commands,omitempty"` // commands to disable for this project (e.g. ["restart", "upgrade"])
+	Name             string            `toml:"name"`
+	Agent            AgentConfig       `toml:"agent"`
+	Platforms        []PlatformConfig  `toml:"platforms"`
+	Quiet            *bool             `toml:"quiet,omitempty"`             // project-level quiet mode; overrides global setting
+	DisabledCommands []string          `toml:"disabled_commands,omitempty"` // commands to disable for this project (e.g. ["restart", "upgrade"])
+	Echo             EchoProjectConfig `toml:"echo"`
+}
+
+// EchoProjectConfig controls how a local project is exposed to Echo as a worker lane.
+type EchoProjectConfig struct {
+	Enabled        *bool  `toml:"enabled"`
+	AgentID        string `toml:"agent_id"`
+	Role           string `toml:"role"`
+	PromptTemplate string `toml:"prompt_template"`
+	OrgID          string `toml:"org_id"`
 }
 
 type AgentConfig struct {
@@ -177,6 +200,9 @@ func Load(path string) (*Config, error) {
 	cfg := &Config{
 		Log: LogConfig{Level: "info"},
 		MCP: MCPConfig{Listen: "127.0.0.1:9820"},
+		Echo: EchoConfig{
+			HeartbeatIntervalSec: 30,
+		},
 	}
 	if err := toml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
@@ -208,7 +234,7 @@ func (c *Config) validate() error {
 		if proj.Agent.Type == "" {
 			return fmt.Errorf("config: %s.agent.type is required", prefix)
 		}
-		if len(proj.Platforms) == 0 && !c.MCP.Enabled {
+		if len(proj.Platforms) == 0 && !c.MCP.Enabled && c.Echo.ServerURL == "" {
 			return fmt.Errorf("config: %s needs at least one [[projects.platforms]]", prefix)
 		}
 		for j, p := range proj.Platforms {

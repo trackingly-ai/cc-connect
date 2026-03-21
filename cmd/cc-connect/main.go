@@ -530,6 +530,20 @@ func main() {
 		}
 	}
 
+	var workerClient *core.WorkerClient
+	var stopWorkerClient context.CancelFunc
+	registerWithEcho := cfg.Echo.ServerURL != "" && (cfg.Echo.RegisterOnStart == nil || *cfg.Echo.RegisterOnStart)
+	if registerWithEcho {
+		workerClient, err = core.NewWorkerClient(cfg.Echo, cfg.Projects)
+		if err != nil {
+			slog.Warn("echo worker client unavailable", "error", err)
+		} else {
+			var workerCtx context.Context
+			workerCtx, stopWorkerClient = context.WithCancel(context.Background())
+			workerClient.Start(workerCtx)
+		}
+	}
+
 	slog.Info("cc-connect is running", "projects", len(engines))
 
 	// After startup, check if we were restarted and send success notification
@@ -561,6 +575,14 @@ func main() {
 	if mcpSrv != nil {
 		if err := mcpSrv.Stop(context.Background()); err != nil {
 			slog.Warn("mcp shutdown error", "error", err)
+		}
+	}
+	if stopWorkerClient != nil {
+		stopWorkerClient()
+	}
+	if workerClient != nil {
+		if err := workerClient.Stop(context.Background()); err != nil {
+			slog.Warn("echo worker client shutdown error", "error", err)
 		}
 	}
 	for _, e := range engines {

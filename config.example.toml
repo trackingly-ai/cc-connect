@@ -53,6 +53,30 @@ level = "info" # debug, info, warn, error
 # auth_token = ""
 
 # =============================================================================
+# Echo Worker Gateway / Echo Worker Gateway 长连接
+# =============================================================================
+# Optional outbound WebSocket connection back to Echo Server.
+# 可选的到 Echo Server 的出站 WebSocket 长连接。
+#
+# When configured, cc-connect can register this host and its agent lanes with
+# Echo without exposing an inbound MCP endpoint on a public IP.
+# 配置后，cc-connect 可以主动向 Echo 注册当前 host 和 agent lane，
+# 无需把 MCP 端点暴露到公网。
+#
+# Headless projects are allowed when either MCP is enabled or echo.server_url is set.
+# 若启用 MCP 或设置 echo.server_url，则允许无 IM platform 的 headless 项目。
+
+# [echo]
+# server_url = "https://echo.example.com"
+# auth_token = ""
+# register_on_start = true
+# host_id = "host-local"
+# label = "Local Host"
+# org_id = "coding-team"
+# tags = ["local"]
+# heartbeat_interval_sec = 30
+
+# =============================================================================
 # Display Settings / 显示设置
 # =============================================================================
 # Controls how intermediate messages (thinking, tool use) are shown in chat.
@@ -345,6 +369,16 @@ type = "claudecode"
 [projects.agent.options]
 work_dir = "/path/to/backend"
 mode = "default" # "default" | "acceptEdits" (edit) | "plan" | "bypassPermissions" (yolo)
+
+# Optional: expose this project as an Echo worker lane.
+# 可选：把这个 project 暴露为 Echo 的一个 worker lane。
+#
+# [projects.echo]
+# enabled = true
+# role = "coder"                              # manager | architect | coder | reviewer | lander
+# agent_id = "agent-coder-claudecode-1"       # optional explicit agent id / 可选显式 agent id
+# prompt_template = "prompts/coding/coder.md" # optional prompt template label / 可选 prompt 模板标签
+# org_id = "coding-team"                      # optional per-project org override / 可选项目级 org 覆盖
 
 # Mode options / 模式说明:
 # - "default":            Every tool call requires user approval. / 每次工具调用都需要用户确认。
