@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shlex
 from pathlib import Path
 
 
@@ -36,28 +37,12 @@ def _write_executable(path: Path, content: str) -> None:
     path.chmod(0o755)
 
 
-def _default_launchd_path(home: Path) -> str:
-    ordered: list[str] = []
-
-    def add(path: str) -> None:
-        if path and path not in ordered:
-            ordered.append(path)
-
-    add(str(home / ".local" / "bin"))
-    add("/opt/homebrew/opt/node@22/bin")
-    add("/opt/homebrew/bin")
-    add("/opt/homebrew/sbin")
-    add("/usr/local/bin")
-    add("/usr/local/sbin")
-    add("/usr/bin")
-    add("/bin")
-    add("/usr/sbin")
-    add("/sbin")
-
-    for path in os.environ.get("PATH", "").split(os.pathsep):
-        add(path)
-
-    return ":".join(ordered)
+def _write_shell_env(path: Path, values: dict[str, str]) -> None:
+    path.write_text(
+        "\n".join(f"{key}={shlex.quote(value)}" for key, value in sorted(values.items()))
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def _build_values(env_file: Path | None) -> dict[str, str]:
@@ -71,12 +56,6 @@ def _build_values(env_file: Path | None) -> dict[str, str]:
     deploy_base_dir = Path(
         get("DEPLOY_BASE_DIR", str(home / ".local" / "share" / "echo-single-host"))
     )
-    systemd_user_dir = Path(
-        get("SYSTEMD_USER_DIR", str(home / ".config" / "systemd" / "user"))
-    )
-    launchd_agent_dir = Path(
-        get("LAUNCHD_AGENT_DIR", str(home / "Library" / "LaunchAgents"))
-    )
     echo_repo_dir = Path(get("ECHO_REPO_DIR", str(repo_root.parent / "echo")))
     cc_connect_repo_dir = Path(get("CC_CONNECT_REPO_DIR", str(repo_root)))
     rendered_dir = deploy_base_dir / "rendered" / "cc-connect"
@@ -87,15 +66,11 @@ def _build_values(env_file: Path | None) -> dict[str, str]:
     deploy_env_path = config_dir / "deploy.env"
     run_cc_connect_script = bin_dir / "run-cc-connect.sh"
     cc_connect_binary = bin_dir / "cc-connect"
-    cc_connect_unit_path = rendered_dir / "cc-connect.service"
-    cc_connect_plist_path = rendered_dir / "cc-connect.plist"
 
     values = {
         "ECHO_REPO_DIR": str(echo_repo_dir),
         "CC_CONNECT_REPO_DIR": str(cc_connect_repo_dir),
         "DEPLOY_BASE_DIR": str(deploy_base_dir),
-        "SYSTEMD_USER_DIR": str(systemd_user_dir),
-        "LAUNCHD_AGENT_DIR": str(launchd_agent_dir),
         "RENDERED_DIR": str(rendered_dir),
         "CONFIG_DIR": str(config_dir),
         "BIN_DIR": str(bin_dir),
@@ -104,10 +79,10 @@ def _build_values(env_file: Path | None) -> dict[str, str]:
         "DEPLOY_ENV_PATH": str(deploy_env_path),
         "RUN_CC_CONNECT_SCRIPT": str(run_cc_connect_script),
         "CC_CONNECT_BINARY": str(cc_connect_binary),
-        "CC_CONNECT_UNIT_PATH": str(cc_connect_unit_path),
-        "CC_CONNECT_PLIST_PATH": str(cc_connect_plist_path),
         "ECHO_SERVER_URL": get("ECHO_SERVER_URL", "http://127.0.0.1:8000"),
-        "ECHO_WORKER_TOKEN": get("ECHO_WORKER_TOKEN", get("ECHO_WORKER_GATEWAY_TOKEN", "")),
+        "ECHO_WORKER_TOKEN": get(
+            "ECHO_WORKER_TOKEN", get("ECHO_WORKER_GATEWAY_TOKEN", "")
+        ),
         "CC_HOST_ID": get("CC_HOST_ID", "host-local"),
         "CC_HOST_LABEL": get("CC_HOST_LABEL", "Local Host"),
         "CLAUDE_MANAGER_MODE": get("CLAUDE_MANAGER_MODE", "bypassPermissions"),
@@ -115,11 +90,6 @@ def _build_values(env_file: Path | None) -> dict[str, str]:
         "CODEX_CODER_MODE": get("CODEX_CODER_MODE", "yolo"),
         "QODER_REVIEWER_MODE": get("QODER_REVIEWER_MODE", "yolo"),
         "CODEX_LANDER_MODE": get("CODEX_LANDER_MODE", "yolo"),
-        "LAUNCHD_PATH": get(
-            "LAUNCHD_PATH",
-            _default_launchd_path(home),
-        ),
-        "LAUNCHD_CC_CONNECT_LABEL": "com.echo.cc_connect",
     }
     return values
 
@@ -138,32 +108,19 @@ def render(env_file: Path | None) -> dict[str, str]:
     log_dir.mkdir(parents=True, exist_ok=True)
 
     template_root = repo_root / "deploy"
-    Path(values["CC_CONNECT_UNIT_PATH"]).write_text(
-        _render_template(template_root / "systemd" / "cc-connect.service.tmpl", values),
-        encoding="utf-8",
-    )
-    Path(values["CC_CONNECT_PLIST_PATH"]).write_text(
-        _render_template(template_root / "launchd" / "cc-connect.plist.tmpl", values),
-        encoding="utf-8",
-    )
     Path(values["CC_CONNECT_CONFIG_PATH"]).write_text(
         _render_template(
             template_root / "templates" / "echo-projects.toml.tmpl", values
         ),
         encoding="utf-8",
     )
-    Path(values["DEPLOY_ENV_PATH"]).write_text(
-        "\n".join(f"{key}={value}" for key, value in sorted(values.items())) + "\n",
-        encoding="utf-8",
-    )
-    launchd_path_export = f'export PATH="{values["LAUNCHD_PATH"]}:${{PATH}}"'
+    _write_shell_env(Path(values["DEPLOY_ENV_PATH"]), values)
     _write_executable(
         Path(values["RUN_CC_CONNECT_SCRIPT"]),
         "\n".join(
             [
                 "#!/usr/bin/env bash",
                 "set -euo pipefail",
-                launchd_path_export,
                 f"cd {values['CC_CONNECT_REPO_DIR']}",
                 (
                     f"exec {values['CC_CONNECT_BINARY']} "
@@ -191,6 +148,7 @@ def main() -> int:
     print(f"Rendered cc-connect deployment assets to {values['RENDERED_DIR']}")
     print(f"cc-connect deploy env: {values['DEPLOY_ENV_PATH']}")
     print(f"cc-connect config: {values['CC_CONNECT_CONFIG_PATH']}")
+    print(f"cc-connect run script: {values['RUN_CC_CONNECT_SCRIPT']}")
     return 0
 
 

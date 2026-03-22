@@ -714,7 +714,14 @@ For short single-line messages:
 
 ## Daemon Mode
 
-Run cc-connect as a background service managed by the OS init system (Linux systemd user service, macOS launchd LaunchAgent).
+For Echo worker deployments, the preferred model is now:
+
+- configure `cc-connect` with `echo.server_url` and `echo.auth_token`
+- run it natively on the host that owns the repos and credentials
+- optionally wrap that host-native process with your preferred supervisor
+
+The built-in daemon subcommands remain available if you want OS-managed
+background execution (Linux `systemd --user`, macOS `launchd` LaunchAgent).
 
 ```bash
 cc-connect daemon install --config ~/.cc-connect/config.toml   # install service

@@ -11,49 +11,8 @@ require_cmd() {
   fi
 }
 
-wait_for_launch_agent_absent() {
-  local label="$1"
-  local attempt
-  for attempt in {1..20}; do
-    if ! launchctl print "gui/$(id -u)/${label}" >/dev/null 2>&1; then
-      return 0
-    fi
-    sleep 0.5
-  done
-  echo "timed out waiting for launch agent ${label} to unload" >&2
-  return 1
-}
-
-install_launch_agent() {
-  local label="$1"
-  local plist_path="$2"
-  local attempt
-
-  launchctl bootout "gui/$(id -u)/${label}" >/dev/null 2>&1 || true
-  wait_for_launch_agent_absent "${label}"
-
-  for attempt in {1..5}; do
-    if launchctl bootstrap "gui/$(id -u)" "${plist_path}"; then
-      launchctl kickstart -kp "gui/$(id -u)/${label}"
-      return 0
-    fi
-    sleep 1
-  done
-
-  echo "failed to bootstrap launch agent ${label}" >&2
-  return 1
-}
-
-PLATFORM="$(uname -s)"
-
 require_cmd python3
 require_cmd go
-if [[ "${PLATFORM}" == "Darwin" ]]; then
-  require_cmd launchctl
-  require_cmd plutil
-else
-  require_cmd systemctl
-fi
 
 RENDER_ARGS=()
 if [[ -n "${ENV_FILE}" ]]; then
@@ -79,18 +38,8 @@ echo "Building cc-connect binary"
 cd "${ROOT_DIR}"
 go build -o "${CC_CONNECT_BINARY}" ./cmd/cc-connect
 
-if [[ "${PLATFORM}" == "Darwin" ]]; then
-  echo "Installing launchd user agent for cc-connect"
-  mkdir -p "${LAUNCHD_AGENT_DIR}"
-  cp "${CC_CONNECT_PLIST_PATH}" "${LAUNCHD_AGENT_DIR}/com.echo.cc_connect.plist"
-  plutil -lint "${LAUNCHD_AGENT_DIR}/com.echo.cc_connect.plist"
-  install_launch_agent "com.echo.cc_connect" "${LAUNCHD_AGENT_DIR}/com.echo.cc_connect.plist"
-else
-  echo "Installing systemd user unit for cc-connect"
-  mkdir -p "${SYSTEMD_USER_DIR}"
-  cp "${CC_CONNECT_UNIT_PATH}" "${SYSTEMD_USER_DIR}/cc-connect.service"
-  systemctl --user daemon-reload
-  systemctl --user enable --now cc-connect.service
-fi
-
-echo "cc-connect deployment completed"
+echo "cc-connect worker prepared"
+echo "Config: ${CC_CONNECT_CONFIG_PATH}"
+echo "Binary: ${CC_CONNECT_BINARY}"
+echo "Run:"
+echo "  ${RUN_CC_CONNECT_SCRIPT}"

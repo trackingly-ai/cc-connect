@@ -662,7 +662,13 @@ For short single-line messages:
 
 ## 守护进程模式
 
-将 cc-connect 作为后台服务运行，由系统 init 管理（Linux systemd 用户服务，macOS launchd LaunchAgent）。
+对于 Echo worker 部署，当前更推荐的方式是：
+
+- 用 `echo.server_url` 和 `echo.auth_token` 配置 `cc-connect`
+- 让它以 host-native 进程运行在真正拥有 repo 和凭证的机器上
+- 如有需要，再由你自己的 supervisor 包装这个本机进程
+
+内置 daemon 子命令仍然可用；如果你确实想交给操作系统管理后台进程，也可以继续使用 Linux `systemd --user` 或 macOS `launchd`。
 
 ```bash
 cc-connect daemon install --config ~/.cc-connect/config.toml   # 安装服务
