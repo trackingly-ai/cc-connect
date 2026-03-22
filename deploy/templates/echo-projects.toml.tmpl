@@ -37,6 +37,20 @@ enabled = true
 role = "architect"
 
 [[projects]]
+name = "echo-researcher-codex"
+
+[projects.agent]
+type = "codex"
+
+[projects.agent.options]
+work_dir = "{{ECHO_REPO_DIR}}"
+mode = "{{CODEX_ARCHITECT_MODE}}"
+
+[projects.echo]
+enabled = true
+role = "researcher"
+
+[[projects]]
 name = "echo-coder-codex"
 
 [projects.agent]
