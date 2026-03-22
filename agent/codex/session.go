@@ -308,7 +308,7 @@ var codexToolNames = map[string]string{
 	"file_search":      "FileSearch",
 	"code_interpreter": "CodeInterpreter",
 	"computer_use":     "ComputerUse",
-	"mcp_tool":         "MCP",
+	"mcp_tool":         "ToolCall",
 }
 
 func (cs *codexSession) handleItemStarted(raw map[string]any) {
