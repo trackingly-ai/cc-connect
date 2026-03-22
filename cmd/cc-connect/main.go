@@ -517,19 +517,6 @@ func main() {
 		apiSrv.Start()
 	}
 
-	var mcpSrv *core.MCPServer
-	if cfg.MCP.Enabled {
-		if jobMgr == nil {
-			slog.Warn("mcp server skipped because job manager is unavailable")
-		} else {
-			mcpSrv = core.NewMCPServer(jobMgr, cfg.MCP.AuthToken)
-			if err := mcpSrv.Start(cfg.MCP.Listen); err != nil {
-				slog.Warn("mcp server unavailable", "error", err)
-				mcpSrv = nil
-			}
-		}
-	}
-
 	var workerClient *core.WorkerClient
 	var stopWorkerClient context.CancelFunc
 	registerWithEcho := cfg.Echo.ServerURL != "" && (cfg.Echo.RegisterOnStart == nil || *cfg.Echo.RegisterOnStart)
@@ -571,11 +558,6 @@ func main() {
 	}
 	if apiSrv != nil {
 		apiSrv.Stop()
-	}
-	if mcpSrv != nil {
-		if err := mcpSrv.Stop(context.Background()); err != nil {
-			slog.Warn("mcp shutdown error", "error", err)
-		}
 	}
 	if stopWorkerClient != nil {
 		stopWorkerClient()

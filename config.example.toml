@@ -33,38 +33,18 @@
 level = "info" # debug, info, warn, error
 
 # =============================================================================
-# MCP Server / MCP 服务器
-# =============================================================================
-# Optional Streamable HTTP MCP endpoint for external orchestrators such as Echo.
-# 可选的 Streamable HTTP MCP 端点，供 Echo 等外部编排器调用。
-#
-# Exposes tool-style APIs for asynchronous jobs:
-#   start_task_run / get_task_run / cancel_task_run
-# 提供异步任务工具接口：
-#   start_task_run / get_task_run / cancel_task_run
-#
-# The server binds to localhost by default. Set auth_token when exposing it
-# beyond a trusted local network boundary.
-# 默认仅监听本机。若暴露到可信本地网络之外，建议设置 auth_token。
-
-# [mcp]
-# enabled = false
-# listen = "127.0.0.1:9820"
-# auth_token = ""
-
-# =============================================================================
 # Echo Worker Gateway / Echo Worker Gateway 长连接
 # =============================================================================
 # Optional outbound WebSocket connection back to Echo Server.
 # 可选的到 Echo Server 的出站 WebSocket 长连接。
 #
 # When configured, cc-connect can register this host and its agent lanes with
-# Echo without exposing an inbound MCP endpoint on a public IP.
-# 配置后，cc-connect 可以主动向 Echo 注册当前 host 和 agent lane，
-# 无需把 MCP 端点暴露到公网。
+# Echo over the worker gateway WebSocket.
+# 配置后，cc-connect 可以通过 worker gateway WebSocket 主动向 Echo 注册当前
+# host 和 agent lane。
 #
-# Headless projects are allowed when either MCP is enabled or echo.server_url is set.
-# 若启用 MCP 或设置 echo.server_url，则允许无 IM platform 的 headless 项目。
+# Headless projects are allowed when echo.server_url is set.
+# 设置 echo.server_url 后，允许无 IM platform 的 headless 项目。
 
 # [echo]
 # server_url = "https://echo.example.com"

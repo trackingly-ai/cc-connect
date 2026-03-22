@@ -22,7 +22,6 @@ type Config struct {
 	Aliases         []AliasConfig       `toml:"aliases"`      // global command aliases
 	BannedWords     []string            `toml:"banned_words"` // messages containing any of these words are blocked
 	Log             LogConfig           `toml:"log"`
-	MCP             MCPConfig           `toml:"mcp"`
 	Language        string              `toml:"language"` // "en" or "zh", default is "en"
 	Speech          SpeechConfig        `toml:"speech"`
 	TTS             TTSConfig           `toml:"tts"`
@@ -38,13 +37,6 @@ type Config struct {
 // CronConfig controls cron job behavior.
 type CronConfig struct {
 	Silent *bool `toml:"silent"` // suppress cron start notification; default false
-}
-
-// MCPConfig controls the optional MCP HTTP server used by external orchestrators.
-type MCPConfig struct {
-	Enabled   bool   `toml:"enabled"`
-	Listen    string `toml:"listen"`
-	AuthToken string `toml:"auth_token"`
 }
 
 // EchoConfig controls the optional outbound worker connection back to Echo Server.
@@ -199,7 +191,6 @@ func Load(path string) (*Config, error) {
 
 	cfg := &Config{
 		Log: LogConfig{Level: "info"},
-		MCP: MCPConfig{Listen: "127.0.0.1:9820"},
 		Echo: EchoConfig{
 			HeartbeatIntervalSec: 30,
 		},
@@ -234,7 +225,7 @@ func (c *Config) validate() error {
 		if proj.Agent.Type == "" {
 			return fmt.Errorf("config: %s.agent.type is required", prefix)
 		}
-		if len(proj.Platforms) == 0 && !c.MCP.Enabled && c.Echo.ServerURL == "" {
+		if len(proj.Platforms) == 0 && c.Echo.ServerURL == "" {
 			return fmt.Errorf("config: %s needs at least one [[projects.platforms]]", prefix)
 		}
 		for j, p := range proj.Platforms {

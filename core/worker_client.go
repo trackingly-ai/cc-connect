@@ -280,6 +280,14 @@ func (c *WorkerClient) readLoop(ctx context.Context, conn *websocket.Conn) error
 			go c.handleAssignTask(ctx, payload)
 		case "cancel_task":
 			go c.handleCancelTask(payload)
+		case "setup_workspace":
+			go c.handleSetupWorkspace(payload)
+		case "cleanup_workspace":
+			go c.handleCleanupWorkspace(payload)
+		case "ensure_repo_checkout":
+			go c.handleEnsureRepoCheckout(payload)
+		case "write_repo_file":
+			go c.handleWriteRepoFile(payload)
 		default:
 			slog.Warn("worker client received unsupported gateway message", "type", msgType)
 		}
@@ -340,6 +348,129 @@ func (c *WorkerClient) handleCancelTask(payload map[string]any) {
 		"job":        workerJobPayload(job),
 	})
 	c.ensureWatcher(context.Background(), job.ID)
+}
+
+func (c *WorkerClient) handleSetupWorkspace(payload map[string]any) {
+	requestID, _ := payload["request_id"].(string)
+	repoPath, _ := payload["repo_path"].(string)
+	baseBranch, _ := payload["base_branch"].(string)
+	branchName, _ := payload["branch_name"].(string)
+	worktreePath, _ := payload["worktree_path"].(string)
+	if err := SetupWorkspace(
+		strings.TrimSpace(repoPath),
+		strings.TrimSpace(baseBranch),
+		strings.TrimSpace(branchName),
+		strings.TrimSpace(worktreePath),
+	); err != nil {
+		_ = c.sendJSON(map[string]any{
+			"type":       "workspace_ready",
+			"request_id": requestID,
+			"host_id":    c.hostID,
+			"error":      err.Error(),
+		})
+		return
+	}
+	_ = c.sendJSON(map[string]any{
+		"type":       "workspace_ready",
+		"request_id": requestID,
+		"host_id":    c.hostID,
+		"result": map[string]any{
+			"repo_path":     strings.TrimSpace(repoPath),
+			"base_branch":   strings.TrimSpace(baseBranch),
+			"branch_name":   strings.TrimSpace(branchName),
+			"worktree_path": strings.TrimSpace(worktreePath),
+		},
+	})
+}
+
+func (c *WorkerClient) handleCleanupWorkspace(payload map[string]any) {
+	requestID, _ := payload["request_id"].(string)
+	worktreePath, _ := payload["worktree_path"].(string)
+	if err := CleanupWorkspace(strings.TrimSpace(worktreePath)); err != nil {
+		_ = c.sendJSON(map[string]any{
+			"type":       "workspace_cleaned",
+			"request_id": requestID,
+			"host_id":    c.hostID,
+			"error":      err.Error(),
+		})
+		return
+	}
+	_ = c.sendJSON(map[string]any{
+		"type":       "workspace_cleaned",
+		"request_id": requestID,
+		"host_id":    c.hostID,
+		"result": map[string]any{
+			"worktree_path": strings.TrimSpace(worktreePath),
+		},
+	})
+}
+
+func (c *WorkerClient) handleEnsureRepoCheckout(payload map[string]any) {
+	requestID, _ := payload["request_id"].(string)
+	repoURL, _ := payload["repo_url"].(string)
+	repoPath, _ := payload["repo_path"].(string)
+	defaultBranch, _ := payload["default_branch"].(string)
+	if err := EnsureRepoCheckout(
+		strings.TrimSpace(repoURL),
+		strings.TrimSpace(repoPath),
+		strings.TrimSpace(defaultBranch),
+	); err != nil {
+		_ = c.sendJSON(map[string]any{
+			"type":       "repo_checkout_ready",
+			"request_id": requestID,
+			"host_id":    c.hostID,
+			"error":      err.Error(),
+		})
+		return
+	}
+	branch := strings.TrimSpace(defaultBranch)
+	if branch == "" {
+		branch = "main"
+	}
+	_ = c.sendJSON(map[string]any{
+		"type":       "repo_checkout_ready",
+		"request_id": requestID,
+		"host_id":    c.hostID,
+		"result": map[string]any{
+			"repo_url":          strings.TrimSpace(repoURL),
+			"repo_path":         strings.TrimSpace(repoPath),
+			"default_branch":    branch,
+			"checkout_state":    "ready",
+			"provisioned":       true,
+			"provisioning_mode": "worker_gateway",
+		},
+	})
+}
+
+func (c *WorkerClient) handleWriteRepoFile(payload map[string]any) {
+	requestID, _ := payload["request_id"].(string)
+	repoPath, _ := payload["repo_path"].(string)
+	relativePath, _ := payload["relative_path"].(string)
+	content, _ := payload["content"].(string)
+	absolutePath, err := WriteRepoFile(
+		strings.TrimSpace(repoPath),
+		strings.TrimSpace(relativePath),
+		content,
+	)
+	if err != nil {
+		_ = c.sendJSON(map[string]any{
+			"type":       "repo_file_written",
+			"request_id": requestID,
+			"host_id":    c.hostID,
+			"error":      err.Error(),
+		})
+		return
+	}
+	_ = c.sendJSON(map[string]any{
+		"type":       "repo_file_written",
+		"request_id": requestID,
+		"host_id":    c.hostID,
+		"result": map[string]any{
+			"repo_path":     strings.TrimSpace(repoPath),
+			"relative_path": strings.TrimSpace(relativePath),
+			"absolute_path": absolutePath,
+		},
+	})
 }
 
 func (c *WorkerClient) ensureWatcher(ctx context.Context, jobID string) {

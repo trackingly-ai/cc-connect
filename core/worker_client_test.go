@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -357,5 +359,147 @@ func TestWorkerClientCancelsAssignedTask(t *testing.T) {
 	}
 	if !cancelledResultSeen {
 		t.Fatal("expected cancelled task_result to be sent")
+	}
+}
+
+func TestWorkerClientHandlesWorkspaceAndRepoRPCs(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	var mu sync.Mutex
+	workspaceReadySeen := false
+	checkoutReadySeen := false
+	repoFileWrittenSeen := false
+	workspaceCleanedSeen := false
+
+	repoPath := initGitRepo(t)
+	worktreePath := filepath.Join(t.TempDir(), "worktree")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("upgrade: %v", err)
+		}
+		defer conn.Close()
+		for {
+			var payload map[string]any
+			if err := conn.ReadJSON(&payload); err != nil {
+				return
+			}
+			msgType, _ := payload["type"].(string)
+			switch msgType {
+			case "hello":
+				_ = conn.WriteJSON(map[string]any{"type": "hello_ack", "request_id": payload["request_id"]})
+			case "register_host":
+				host := payload["host"].(map[string]any)
+				_ = conn.WriteJSON(map[string]any{"type": "host_registered", "request_id": payload["request_id"], "host_id": host["id"], "status": "online"})
+			case "register_agents":
+				_ = conn.WriteJSON(map[string]any{"type": "agents_registered", "request_id": payload["request_id"], "host_id": "host-local", "count": 1})
+				_ = conn.WriteJSON(map[string]any{
+					"type":          "setup_workspace",
+					"request_id":    "setup-1",
+					"repo_path":     repoPath,
+					"base_branch":   "main",
+					"branch_name":   "echo/task-1",
+					"worktree_path": worktreePath,
+				})
+			case "workspace_ready":
+				mu.Lock()
+				workspaceReadySeen = true
+				mu.Unlock()
+				_ = conn.WriteJSON(map[string]any{
+					"type":           "ensure_repo_checkout",
+					"request_id":     "checkout-1",
+					"repo_url":       repoPath,
+					"repo_path":      filepath.Join(t.TempDir(), "checkout"),
+					"default_branch": "main",
+				})
+			case "repo_checkout_ready":
+				mu.Lock()
+				checkoutReadySeen = true
+				mu.Unlock()
+				_ = conn.WriteJSON(map[string]any{
+					"type":          "write_repo_file",
+					"request_id":    "write-1",
+					"repo_path":     repoPath,
+					"relative_path": "docs/design.md",
+					"content":       "# hello\n",
+				})
+			case "repo_file_written":
+				mu.Lock()
+				repoFileWrittenSeen = true
+				mu.Unlock()
+				_ = conn.WriteJSON(map[string]any{
+					"type":          "cleanup_workspace",
+					"request_id":    "cleanup-1",
+					"worktree_path": worktreePath,
+				})
+			case "workspace_cleaned":
+				mu.Lock()
+				workspaceCleanedSeen = true
+				mu.Unlock()
+				return
+			case "heartbeat":
+				_ = conn.WriteJSON(map[string]any{"type": "heartbeat_ack", "request_id": payload["request_id"], "host_id": "host-local", "agent_count": 1})
+			}
+		}
+	}))
+	defer server.Close()
+
+	jobMgr, err := NewJobManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewJobManager: %v", err)
+	}
+	jobMgr.RegisterProject("echo-manager-claude", "claudecode", workerTestRunner{})
+
+	client, err := NewWorkerClient(
+		config.EchoConfig{
+			ServerURL:            server.URL,
+			HostID:               "host-local",
+			HeartbeatIntervalSec: 1,
+		},
+		[]config.ProjectConfig{
+			{
+				Name: "echo-manager-claude",
+				Agent: config.AgentConfig{
+					Type: "claudecode",
+				},
+			},
+		},
+		jobMgr,
+	)
+	if err != nil {
+		t.Fatalf("NewWorkerClient: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	client.Start(ctx)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		done := workspaceReadySeen && checkoutReadySeen && repoFileWrittenSeen && workspaceCleanedSeen
+		mu.Unlock()
+		if done {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	cancel()
+	if err := client.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !workspaceReadySeen || !checkoutReadySeen || !repoFileWrittenSeen || !workspaceCleanedSeen {
+		t.Fatalf(
+			"expected all rpc acknowledgements, got workspace=%v checkout=%v file=%v cleanup=%v",
+			workspaceReadySeen,
+			checkoutReadySeen,
+			repoFileWrittenSeen,
+			workspaceCleanedSeen,
+		)
+	}
+	if _, err := os.Stat(filepath.Join(repoPath, "docs", "design.md")); err != nil {
+		t.Fatalf("expected repo file to be written: %v", err)
 	}
 }

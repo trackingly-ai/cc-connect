@@ -1,7 +1,12 @@
-[mcp]
-enabled = true
-listen = "{{CC_MCP_HOST}}:{{CC_MCP_PORT}}"
-auth_token = "{{CC_MCP_AUTH_TOKEN}}"
+[echo]
+server_url = "{{ECHO_SERVER_URL}}"
+auth_token = "{{ECHO_WORKER_TOKEN}}"
+register_on_start = true
+host_id = "{{CC_HOST_ID}}"
+label = "{{CC_HOST_LABEL}}"
+org_id = "coding-team"
+tags = ["local"]
+heartbeat_interval_sec = 30
 
 [[projects]]
 name = "echo-manager-claude"
@@ -13,6 +18,10 @@ type = "claudecode"
 work_dir = "{{ECHO_REPO_DIR}}"
 mode = "{{CLAUDE_MANAGER_MODE}}"
 
+[projects.echo]
+enabled = true
+role = "manager"
+
 [[projects]]
 name = "echo-architect-codex"
 
@@ -22,6 +31,10 @@ type = "codex"
 [projects.agent.options]
 work_dir = "{{ECHO_REPO_DIR}}"
 mode = "{{CODEX_ARCHITECT_MODE}}"
+
+[projects.echo]
+enabled = true
+role = "architect"
 
 [[projects]]
 name = "echo-coder-codex"
@@ -33,6 +46,10 @@ type = "codex"
 work_dir = "{{ECHO_REPO_DIR}}"
 mode = "{{CODEX_CODER_MODE}}"
 
+[projects.echo]
+enabled = true
+role = "coder"
+
 [[projects]]
 name = "echo-reviewer-qoder"
 
@@ -43,6 +60,10 @@ type = "qoder"
 work_dir = "{{ECHO_REPO_DIR}}"
 mode = "{{QODER_REVIEWER_MODE}}"
 
+[projects.echo]
+enabled = true
+role = "reviewer"
+
 [[projects]]
 name = "echo-lander-codex"
 
@@ -52,3 +73,7 @@ type = "codex"
 [projects.agent.options]
 work_dir = "{{ECHO_REPO_DIR}}"
 mode = "{{CODEX_LANDER_MODE}}"
+
+[projects.echo]
+enabled = true
+role = "lander"
