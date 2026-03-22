@@ -12,6 +12,60 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+type workerTestRunner struct{}
+
+func (workerTestRunner) Run(
+	ctx context.Context,
+	req JobRequest,
+	jobID string,
+	onEvent func(JobEvent),
+) (*JobResult, error) {
+	if onEvent != nil {
+		onEvent(JobEvent{
+			Type:      string(EventThinking),
+			Content:   "planning",
+			SessionID: "session-1",
+			CreatedAt: time.Now().UTC(),
+		})
+		onEvent(JobEvent{
+			Type:      string(EventText),
+			Content:   "partial output",
+			SessionID: "session-1",
+			CreatedAt: time.Now().UTC(),
+		})
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(700 * time.Millisecond):
+	}
+	return &JobResult{
+		Output:    "final output",
+		Summary:   summarizeJobOutput("final output"),
+		SessionID: "session-1",
+	}, nil
+}
+
+type workerBlockingRunner struct{}
+
+func (workerBlockingRunner) Run(
+	ctx context.Context,
+	req JobRequest,
+	jobID string,
+	onEvent func(JobEvent),
+) (*JobResult, error) {
+	if onEvent != nil {
+		onEvent(JobEvent{
+			Type:      string(EventThinking),
+			Content:   "waiting",
+			SessionID: "session-blocking",
+			CreatedAt: time.Now().UTC(),
+		})
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
 func TestBuildWorkerAgentRegistrations(t *testing.T) {
 	enabled := true
 	agents, err := buildWorkerAgentRegistrations(
@@ -70,6 +124,8 @@ func TestWorkerClientRegistersAndHeartbeats(t *testing.T) {
 	receivedTypes := []string{}
 	receivedHostID := ""
 	receivedAgentCount := 0
+	taskProgressSeen := false
+	taskResultSeen := false
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -88,24 +144,47 @@ func TestWorkerClientRegistersAndHeartbeats(t *testing.T) {
 			mu.Unlock()
 			switch msgType {
 			case "hello":
-				_ = conn.WriteJSON(map[string]any{"type": "hello_ack"})
+				_ = conn.WriteJSON(map[string]any{"type": "hello_ack", "request_id": payload["request_id"]})
 			case "register_host":
 				host, _ := payload["host"].(map[string]any)
 				hostID, _ := host["id"].(string)
 				receivedHostID = hostID
-				_ = conn.WriteJSON(map[string]any{"type": "host_registered", "host_id": hostID, "status": "online"})
+				_ = conn.WriteJSON(map[string]any{"type": "host_registered", "request_id": payload["request_id"], "host_id": hostID, "status": "online"})
 			case "register_agents":
 				agents, _ := payload["agents"].([]any)
 				receivedAgentCount = len(agents)
-				_ = conn.WriteJSON(map[string]any{"type": "agents_registered", "host_id": "host-local", "count": len(agents)})
+				_ = conn.WriteJSON(map[string]any{"type": "agents_registered", "request_id": payload["request_id"], "host_id": "host-local", "count": len(agents)})
+				_ = conn.WriteJSON(map[string]any{
+					"type":          "assign_task",
+					"request_id":    "assign-1",
+					"agent_project": "echo-manager-claude",
+					"task_id":       "task-1",
+					"prompt":        "do the task",
+					"timeout_sec":   30,
+					"workspace_ref": map[string]any{},
+				})
 			case "heartbeat":
-				_ = conn.WriteJSON(map[string]any{"type": "heartbeat_ack", "host_id": "host-local", "agent_count": 1})
+				_ = conn.WriteJSON(map[string]any{"type": "heartbeat_ack", "request_id": payload["request_id"], "host_id": "host-local", "agent_count": 1})
+			case "task_progress":
+				mu.Lock()
+				taskProgressSeen = true
+				mu.Unlock()
+			case "task_result":
+				mu.Lock()
+				taskResultSeen = true
+				mu.Unlock()
 			default:
 				_ = conn.WriteJSON(map[string]any{"type": "error", "message": "unexpected"})
 			}
 		}
 	}))
 	defer server.Close()
+
+	jobMgr, err := NewJobManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewJobManager: %v", err)
+	}
+	jobMgr.RegisterProject("echo-manager-claude", "claudecode", workerTestRunner{})
 
 	client, err := NewWorkerClient(
 		config.EchoConfig{
@@ -121,6 +200,7 @@ func TestWorkerClientRegistersAndHeartbeats(t *testing.T) {
 				},
 			},
 		},
+		jobMgr,
 	)
 	if err != nil {
 		t.Fatalf("NewWorkerClient: %v", err)
@@ -133,8 +213,10 @@ func TestWorkerClientRegistersAndHeartbeats(t *testing.T) {
 	for time.Now().Before(deadline) {
 		mu.Lock()
 		count := len(receivedTypes)
+		progressSeen := taskProgressSeen
+		resultSeen := taskResultSeen
 		mu.Unlock()
-		if count >= 4 {
+		if count >= 5 && progressSeen && resultSeen {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -154,5 +236,126 @@ func TestWorkerClientRegistersAndHeartbeats(t *testing.T) {
 	}
 	if len(receivedTypes) < 4 {
 		t.Fatalf("expected hello/register_host/register_agents/heartbeat, got %#v", receivedTypes)
+	}
+	if !taskProgressSeen {
+		t.Fatal("expected task_progress to be sent")
+	}
+	if !taskResultSeen {
+		t.Fatal("expected task_result to be sent")
+	}
+}
+
+func TestWorkerClientCancelsAssignedTask(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	var mu sync.Mutex
+	cancelAckSeen := false
+	cancelledResultSeen := false
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("upgrade: %v", err)
+		}
+		defer conn.Close()
+		for {
+			var payload map[string]any
+			if err := conn.ReadJSON(&payload); err != nil {
+				return
+			}
+			msgType, _ := payload["type"].(string)
+			switch msgType {
+			case "hello":
+				_ = conn.WriteJSON(map[string]any{"type": "hello_ack", "request_id": payload["request_id"]})
+			case "register_host":
+				host := payload["host"].(map[string]any)
+				_ = conn.WriteJSON(map[string]any{"type": "host_registered", "request_id": payload["request_id"], "host_id": host["id"], "status": "online"})
+			case "register_agents":
+				_ = conn.WriteJSON(map[string]any{"type": "agents_registered", "request_id": payload["request_id"], "host_id": "host-local", "count": 1})
+				_ = conn.WriteJSON(map[string]any{
+					"type":          "assign_task",
+					"request_id":    "assign-1",
+					"agent_project": "echo-manager-claude",
+					"task_id":       "task-2",
+					"prompt":        "block forever",
+					"timeout_sec":   30,
+					"workspace_ref": map[string]any{},
+				})
+			case "task_assigned":
+				jobID := payload["job"].(map[string]any)["id"]
+				_ = conn.WriteJSON(map[string]any{
+					"type":       "cancel_task",
+					"request_id": "cancel-1",
+					"job_id":     jobID,
+				})
+			case "cancel_ack":
+				mu.Lock()
+				cancelAckSeen = true
+				mu.Unlock()
+			case "task_result":
+				job := payload["job"].(map[string]any)
+				if status, _ := job["status"].(string); status == JobStatusCancelled {
+					mu.Lock()
+					cancelledResultSeen = true
+					mu.Unlock()
+					return
+				}
+			case "heartbeat":
+				_ = conn.WriteJSON(map[string]any{"type": "heartbeat_ack", "request_id": payload["request_id"], "host_id": "host-local", "agent_count": 1})
+			}
+		}
+	}))
+	defer server.Close()
+
+	jobMgr, err := NewJobManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewJobManager: %v", err)
+	}
+	jobMgr.RegisterProject("echo-manager-claude", "claudecode", workerBlockingRunner{})
+
+	client, err := NewWorkerClient(
+		config.EchoConfig{
+			ServerURL:            server.URL,
+			HostID:               "host-local",
+			HeartbeatIntervalSec: 1,
+		},
+		[]config.ProjectConfig{
+			{
+				Name: "echo-manager-claude",
+				Agent: config.AgentConfig{
+					Type: "claudecode",
+				},
+			},
+		},
+		jobMgr,
+	)
+	if err != nil {
+		t.Fatalf("NewWorkerClient: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	client.Start(ctx)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		done := cancelAckSeen && cancelledResultSeen
+		mu.Unlock()
+		if done {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	cancel()
+	if err := client.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !cancelAckSeen {
+		t.Fatal("expected cancel_ack to be sent")
+	}
+	if !cancelledResultSeen {
+		t.Fatal("expected cancelled task_result to be sent")
 	}
 }

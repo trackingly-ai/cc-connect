@@ -534,7 +534,7 @@ func main() {
 	var stopWorkerClient context.CancelFunc
 	registerWithEcho := cfg.Echo.ServerURL != "" && (cfg.Echo.RegisterOnStart == nil || *cfg.Echo.RegisterOnStart)
 	if registerWithEcho {
-		workerClient, err = core.NewWorkerClient(cfg.Echo, cfg.Projects)
+		workerClient, err = core.NewWorkerClient(cfg.Echo, cfg.Projects, jobMgr)
 		if err != nil {
 			slog.Warn("echo worker client unavailable", "error", err)
 		} else {

@@ -17,7 +17,10 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-const defaultEchoOrgID = "coding-team"
+const (
+	defaultEchoOrgID          = "coding-team"
+	defaultWorkerPollInterval = 500 * time.Millisecond
+)
 
 type WorkerClient struct {
 	serverURL         string
@@ -27,10 +30,15 @@ type WorkerClient struct {
 	tags              []string
 	heartbeatInterval time.Duration
 	agents            []workerAgentRegistration
+	jobMgr            *JobManager
 
-	mu     sync.Mutex
-	conn   *websocket.Conn
-	doneCh chan struct{}
+	mu       sync.Mutex
+	conn     *websocket.Conn
+	sendMu   sync.Mutex
+	doneCh   chan struct{}
+	pending  map[string]chan map[string]any
+	reqSeq   int
+	watchers map[string]context.CancelFunc
 }
 
 type workerAgentRegistration struct {
@@ -45,10 +53,14 @@ type workerAgentRegistration struct {
 func NewWorkerClient(
 	echoCfg config.EchoConfig,
 	projects []config.ProjectConfig,
+	jobMgr *JobManager,
 ) (*WorkerClient, error) {
 	serverURL := strings.TrimSpace(echoCfg.ServerURL)
 	if serverURL == "" {
 		return nil, nil
+	}
+	if jobMgr == nil {
+		return nil, fmt.Errorf("echo worker client requires job manager")
 	}
 	wsURL, err := workerGatewayWebSocketURL(serverURL)
 	if err != nil {
@@ -88,7 +100,10 @@ func NewWorkerClient(
 		tags:              append([]string(nil), echoCfg.Tags...),
 		heartbeatInterval: interval,
 		agents:            agents,
+		jobMgr:            jobMgr,
 		doneCh:            make(chan struct{}),
+		pending:           make(map[string]chan map[string]any),
+		watchers:          make(map[string]context.CancelFunc),
 	}, nil
 }
 
@@ -98,6 +113,7 @@ func (c *WorkerClient) Start(ctx context.Context) {
 
 func (c *WorkerClient) Stop(ctx context.Context) error {
 	c.closeConn()
+	c.stopAllWatchers()
 	select {
 	case <-c.doneCh:
 		return nil
@@ -148,13 +164,18 @@ func (c *WorkerClient) runSession(ctx context.Context) error {
 	c.setConn(conn)
 	defer c.closeConn()
 
-	if err := c.sendAndExpect(conn, map[string]any{
+	readerErrCh := make(chan error, 1)
+	go func() {
+		readerErrCh <- c.readLoop(ctx, conn)
+	}()
+
+	if _, err := c.request(ctx, map[string]any{
 		"type":           "hello",
 		"worker_version": "cc-connect",
 	}, "hello_ack"); err != nil {
 		return err
 	}
-	if err := c.sendAndExpect(conn, map[string]any{
+	if _, err := c.request(ctx, map[string]any{
 		"type": "register_host",
 		"host": map[string]any{
 			"id": c.hostID,
@@ -167,7 +188,7 @@ func (c *WorkerClient) runSession(ctx context.Context) error {
 	}, "host_registered"); err != nil {
 		return err
 	}
-	if err := c.sendAndExpect(conn, map[string]any{
+	if _, err := c.request(ctx, map[string]any{
 		"type":    "register_agents",
 		"host_id": c.hostID,
 		"agents":  c.agents,
@@ -181,8 +202,10 @@ func (c *WorkerClient) runSession(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return nil
+		case err := <-readerErrCh:
+			return err
 		case <-ticker.C:
-			if err := c.sendAndExpect(conn, map[string]any{
+			if _, err := c.request(ctx, map[string]any{
 				"type":      "heartbeat",
 				"host_id":   c.hostID,
 				"agent_ids": c.agentIDs(),
@@ -193,23 +216,243 @@ func (c *WorkerClient) runSession(ctx context.Context) error {
 	}
 }
 
-func (c *WorkerClient) sendAndExpect(conn *websocket.Conn, payload map[string]any, wantType string) error {
+func (c *WorkerClient) request(
+	ctx context.Context,
+	payload map[string]any,
+	wantType string,
+) (map[string]any, error) {
+	requestID := c.nextRequestID()
+	payload = cloneMap(payload)
+	payload["request_id"] = requestID
+	waitCh := make(chan map[string]any, 1)
+
+	c.mu.Lock()
+	c.pending[requestID] = waitCh
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		delete(c.pending, requestID)
+		c.mu.Unlock()
+	}()
+
+	if err := c.sendJSON(payload); err != nil {
+		return nil, err
+	}
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case response := <-waitCh:
+		gotType, _ := response["type"].(string)
+		if gotType == "error" {
+			raw, _ := json.Marshal(response)
+			return nil, fmt.Errorf("echo worker gateway error: %s", strings.TrimSpace(string(raw)))
+		}
+		if gotType != wantType {
+			return nil, fmt.Errorf("unexpected worker gateway response type %q, want %q", gotType, wantType)
+		}
+		return response, nil
+	}
+}
+
+func (c *WorkerClient) readLoop(ctx context.Context, conn *websocket.Conn) error {
+	for {
+		var payload map[string]any
+		if err := conn.ReadJSON(&payload); err != nil {
+			c.failPending(err)
+			return err
+		}
+
+		requestID, _ := payload["request_id"].(string)
+		if requestID != "" {
+			c.mu.Lock()
+			waitCh := c.pending[requestID]
+			c.mu.Unlock()
+			if waitCh != nil {
+				waitCh <- cloneMap(payload)
+				continue
+			}
+		}
+
+		msgType, _ := payload["type"].(string)
+		switch msgType {
+		case "assign_task":
+			go c.handleAssignTask(ctx, payload)
+		case "cancel_task":
+			go c.handleCancelTask(payload)
+		default:
+			slog.Warn("worker client received unsupported gateway message", "type", msgType)
+		}
+	}
+}
+
+func (c *WorkerClient) handleAssignTask(ctx context.Context, payload map[string]any) {
+	requestID, _ := payload["request_id"].(string)
+	agentProject, _ := payload["agent_project"].(string)
+	taskID, _ := payload["task_id"].(string)
+	prompt, _ := payload["prompt"].(string)
+	timeoutSec, _ := payload["timeout_sec"].(float64)
+	workspaceRef := decodeWorkspaceRef(payload["workspace_ref"])
+
+	job, err := c.jobMgr.Start(JobRequest{
+		Project:      strings.TrimSpace(agentProject),
+		TaskID:       strings.TrimSpace(taskID),
+		Prompt:       prompt,
+		Timeout:      time.Duration(int(timeoutSec)) * time.Second,
+		WorkspaceRef: workspaceRef,
+	})
+	if err != nil {
+		_ = c.sendJSON(map[string]any{
+			"type":       "task_assigned",
+			"request_id": requestID,
+			"host_id":    c.hostID,
+			"error":      err.Error(),
+		})
+		return
+	}
+
+	_ = c.sendJSON(map[string]any{
+		"type":       "task_assigned",
+		"request_id": requestID,
+		"host_id":    c.hostID,
+		"job":        workerJobPayload(job),
+	})
+	c.ensureWatcher(ctx, job.ID)
+}
+
+func (c *WorkerClient) handleCancelTask(payload map[string]any) {
+	requestID, _ := payload["request_id"].(string)
+	jobID, _ := payload["job_id"].(string)
+	job, err := c.jobMgr.Cancel(strings.TrimSpace(jobID))
+	if err != nil {
+		_ = c.sendJSON(map[string]any{
+			"type":       "cancel_ack",
+			"request_id": requestID,
+			"host_id":    c.hostID,
+			"error":      err.Error(),
+		})
+		return
+	}
+	_ = c.sendJSON(map[string]any{
+		"type":       "cancel_ack",
+		"request_id": requestID,
+		"host_id":    c.hostID,
+		"job":        workerJobPayload(job),
+	})
+	c.ensureWatcher(context.Background(), job.ID)
+}
+
+func (c *WorkerClient) ensureWatcher(ctx context.Context, jobID string) {
+	c.mu.Lock()
+	if _, exists := c.watchers[jobID]; exists {
+		c.mu.Unlock()
+		return
+	}
+	watchCtx, cancel := context.WithCancel(ctx)
+	c.watchers[jobID] = cancel
+	c.mu.Unlock()
+
+	go c.watchJob(watchCtx, jobID)
+}
+
+func (c *WorkerClient) watchJob(ctx context.Context, jobID string) {
+	defer func() {
+		c.mu.Lock()
+		delete(c.watchers, jobID)
+		c.mu.Unlock()
+	}()
+
+	ticker := time.NewTicker(defaultWorkerPollInterval)
+	defer ticker.Stop()
+
+	lastFingerprint := ""
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			job, ok := c.jobMgr.Get(jobID)
+			if !ok {
+				return
+			}
+			payload := map[string]any{
+				"host_id": c.hostID,
+				"job":     workerJobPayload(job),
+			}
+			fingerprint := fingerprintPayload(payload)
+			if fingerprint == lastFingerprint {
+				if isTerminalWorkerJobStatus(job.Status) {
+					return
+				}
+				continue
+			}
+			lastFingerprint = fingerprint
+			if isTerminalWorkerJobStatus(job.Status) {
+				if err := c.sendJSON(map[string]any{
+					"type":    "task_result",
+					"host_id": c.hostID,
+					"job":     workerJobPayload(job),
+				}); err != nil {
+					slog.Warn("worker client failed to send task result", "job_id", jobID, "error", err)
+				}
+				return
+			}
+			if err := c.sendJSON(map[string]any{
+				"type":    "task_progress",
+				"host_id": c.hostID,
+				"job":     workerJobPayload(job),
+			}); err != nil {
+				slog.Warn("worker client failed to send task progress", "job_id", jobID, "error", err)
+				return
+			}
+		}
+	}
+}
+
+func (c *WorkerClient) sendJSON(payload map[string]any) error {
+	c.mu.Lock()
+	conn := c.conn
+	c.mu.Unlock()
+	if conn == nil {
+		return fmt.Errorf("worker gateway websocket is not connected")
+	}
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
 	if err := conn.WriteJSON(payload); err != nil {
 		return fmt.Errorf("write %s: %w", payload["type"], err)
 	}
-	var response map[string]any
-	if err := conn.ReadJSON(&response); err != nil {
-		return fmt.Errorf("read %s response: %w", payload["type"], err)
-	}
-	gotType, _ := response["type"].(string)
-	if gotType == "error" {
-		raw, _ := json.Marshal(response)
-		return fmt.Errorf("echo worker gateway error: %s", strings.TrimSpace(string(raw)))
-	}
-	if gotType != wantType {
-		return fmt.Errorf("unexpected worker gateway response type %q, want %q", gotType, wantType)
-	}
 	return nil
+}
+
+func (c *WorkerClient) failPending(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for requestID, waitCh := range c.pending {
+		select {
+		case waitCh <- map[string]any{
+			"type":       "error",
+			"request_id": requestID,
+			"message":    err.Error(),
+		}:
+		default:
+		}
+	}
+}
+
+func (c *WorkerClient) stopAllWatchers() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, cancel := range c.watchers {
+		cancel()
+	}
+	c.watchers = make(map[string]context.CancelFunc)
+}
+
+func (c *WorkerClient) nextRequestID() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.reqSeq++
+	return fmt.Sprintf("req-%d", c.reqSeq)
 }
 
 func (c *WorkerClient) agentIDs() []string {
@@ -329,4 +572,77 @@ func workerGatewayWebSocketURL(serverURL string) (string, error) {
 	parsed.RawQuery = ""
 	parsed.Fragment = ""
 	return parsed.String(), nil
+}
+
+func decodeWorkspaceRef(raw any) JobWorkspaceRef {
+	payload, ok := raw.(map[string]any)
+	if !ok {
+		return JobWorkspaceRef{}
+	}
+	ref := JobWorkspaceRef{}
+	if value, ok := payload["repo_path"].(string); ok {
+		ref.RepoPath = value
+	}
+	if value, ok := payload["worktree_path"].(string); ok {
+		ref.WorktreePath = value
+	}
+	if value, ok := payload["branch"].(string); ok {
+		ref.Branch = value
+	}
+	return ref
+}
+
+func cloneMap(in map[string]any) map[string]any {
+	out := make(map[string]any, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func fingerprintPayload(payload map[string]any) string {
+	data, _ := json.Marshal(payload)
+	return string(data)
+}
+
+func isTerminalWorkerJobStatus(status string) bool {
+	switch status {
+	case JobStatusCompleted, JobStatusFailed, JobStatusCancelled, JobStatusTimedOut, JobStatusOrphaned:
+		return true
+	default:
+		return false
+	}
+}
+
+func workerJobPayload(job *Job) map[string]any {
+	if job == nil {
+		return map[string]any{}
+	}
+	payload := map[string]any{
+		"id":            job.ID,
+		"project":       job.Project,
+		"task_id":       job.TaskID,
+		"prompt":        job.Prompt,
+		"workspace_ref": job.WorkspaceRef,
+		"status":        job.Status,
+		"output":        job.Output,
+		"summary":       job.Summary,
+		"session_id":    job.SessionID,
+		"error":         job.Error,
+		"error_code":    job.ErrorCode,
+		"created_at":    job.CreatedAt.Format(time.RFC3339Nano),
+		"timeout_sec":   job.TimeoutSec,
+		"event_count":   job.EventCount,
+		"events":        []JobEvent{},
+	}
+	if len(job.Events) > 0 {
+		payload["events"] = append([]JobEvent(nil), job.Events...)
+	}
+	if job.StartedAt != nil {
+		payload["started_at"] = job.StartedAt.Format(time.RFC3339Nano)
+	}
+	if job.FinishedAt != nil {
+		payload["finished_at"] = job.FinishedAt.Format(time.RFC3339Nano)
+	}
+	return payload
 }
