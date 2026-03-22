@@ -723,6 +723,42 @@ For Echo worker deployments, the preferred model is now:
 The built-in daemon subcommands remain available if you want OS-managed
 background execution (Linux `systemd --user`, macOS `launchd` LaunchAgent).
 
+### Echo Worker Deployment
+
+When `cc-connect` is used as an Echo worker, the recommended path is:
+
+1. Make sure Echo Server is already reachable at a stable URL.
+2. Reuse Echo's `.env` file or create one that contains:
+   - `ECHO_SERVER_URL`
+   - `ECHO_WORKER_GATEWAY_TOKEN`
+   - `DEPLOY_BASE_DIR`
+3. Render config and build the binary:
+
+```bash
+./scripts/deploy/install_echo_worker.sh /path/to/echo/.env
+```
+
+That script now:
+
+- renders `config.toml`
+- builds the `cc-connect` binary into the deployment directory
+- prints the exact host-native run command
+
+4. Start the worker manually on the host:
+
+```bash
+~/.local/share/echo-single-host/bin/run-cc-connect.sh
+```
+
+Once started, the worker will:
+
+- dial Echo over the worker gateway WebSocket
+- register the host and its agent lanes
+- maintain heartbeats and accept task assignment over that long-lived channel
+
+If you want OS-managed startup, you can still wrap the same host-native process
+with `launchd`, `systemd`, or another supervisor of your choice.
+
 ```bash
 cc-connect daemon install --config ~/.cc-connect/config.toml   # install service
 cc-connect daemon install --work-dir ~/.cc-connect             # same, using config dir

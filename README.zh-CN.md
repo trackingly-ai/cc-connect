@@ -670,6 +670,41 @@ For short single-line messages:
 
 内置 daemon 子命令仍然可用；如果你确实想交给操作系统管理后台进程，也可以继续使用 Linux `systemd --user` 或 macOS `launchd`。
 
+### Echo Worker 部署
+
+当 `cc-connect` 作为 Echo worker 使用时，更推荐的路径是：
+
+1. 先确保 Echo Server 已经部署好，并且有一个稳定可访问的 URL。
+2. 复用 Echo 的 `.env`，或者自己准备一个包含下面字段的环境文件：
+   - `ECHO_SERVER_URL`
+   - `ECHO_WORKER_GATEWAY_TOKEN`
+   - `DEPLOY_BASE_DIR`
+3. 渲染配置并构建二进制：
+
+```bash
+./scripts/deploy/install_echo_worker.sh /path/to/echo/.env
+```
+
+这个脚本现在会：
+
+- 渲染 `config.toml`
+- 把 `cc-connect` 二进制构建到部署目录
+- 打印出精确的 host-native 启动命令
+
+4. 在目标 host 上手动启动 worker：
+
+```bash
+~/.local/share/echo-single-host/bin/run-cc-connect.sh
+```
+
+启动后，worker 会：
+
+- 通过 worker gateway WebSocket 主动连到 Echo
+- 注册 host 和 agent lanes
+- 持续发 heartbeat，并通过同一条长连接接收任务
+
+如果你希望操作系统托管后台进程，也可以再用 `launchd`、`systemd` 或你自己的 supervisor 去包装这个同一个 host-native 进程。
+
 ```bash
 cc-connect daemon install --config ~/.cc-connect/config.toml   # 安装服务
 cc-connect daemon install --work-dir ~/.cc-connect             # 等价写法：指定配置目录
