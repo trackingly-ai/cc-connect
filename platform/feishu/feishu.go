@@ -1342,6 +1342,10 @@ func (p *Platform) SendAudio(ctx context.Context, rctx any, audio []byte, format
 type postElement struct {
 	Tag      string `json:"tag"`
 	Text     string `json:"text,omitempty"`
+	Content  string `json:"content,omitempty"`
+	Code     string `json:"code,omitempty"`
+	Language string `json:"language,omitempty"`
+	UserName string `json:"user_name,omitempty"`
 	ImageKey string `json:"image_key,omitempty"`
 	Href     string `json:"href,omitempty"`
 }
@@ -1380,13 +1384,13 @@ func (p *Platform) extractPostParts(messageID string, post *postLang) ([]string,
 	for _, line := range post.Content {
 		for _, elem := range line {
 			switch elem.Tag {
-			case "text":
-				if elem.Text != "" {
-					textParts = append(textParts, elem.Text)
+			case "text", "a", "at":
+				if text := postElementText(elem); text != "" {
+					textParts = append(textParts, text)
 				}
-			case "a":
-				if elem.Text != "" {
-					textParts = append(textParts, elem.Text)
+			case "md", "code", "code_block", "pre":
+				if text := postElementCode(elem); text != "" {
+					textParts = append(textParts, text)
 				}
 			case "img":
 				if elem.ImageKey != "" {
@@ -1397,8 +1401,41 @@ func (p *Platform) extractPostParts(messageID string, post *postLang) ([]string,
 					}
 					images = append(images, core.ImageAttachment{MimeType: mimeType, Data: imgData})
 				}
+			default:
+				if text := postElementText(elem); text != "" {
+					textParts = append(textParts, text)
+				}
 			}
 		}
 	}
 	return textParts, images
+}
+
+func postElementText(elem postElement) string {
+	switch {
+	case elem.Text != "":
+		return elem.Text
+	case elem.Content != "":
+		return elem.Content
+	case elem.Code != "":
+		return elem.Code
+	case elem.UserName != "":
+		return "@" + elem.UserName
+	default:
+		return ""
+	}
+}
+
+func postElementCode(elem postElement) string {
+	code := postElementText(elem)
+	if code == "" {
+		return ""
+	}
+	if strings.Contains(code, "```") {
+		return code
+	}
+	if elem.Language != "" {
+		return "```" + elem.Language + "\n" + code + "\n```"
+	}
+	return "```\n" + code + "\n```"
 }

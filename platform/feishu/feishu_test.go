@@ -103,6 +103,36 @@ func TestParsePostContent_InvalidJSON(t *testing.T) {
 	}
 }
 
+func TestExtractPostParts_WithCodeBlockTag(t *testing.T) {
+	p := &Platform{}
+	post := &postLang{
+		Content: [][]postElement{
+			{
+				{Tag: "code_block", Code: "fmt.Println(\"hi\")", Language: "go"},
+			},
+		},
+	}
+	texts, _ := p.extractPostParts("", post)
+	if len(texts) != 1 {
+		t.Fatalf("expected 1 text part, got %d", len(texts))
+	}
+	if texts[0] != "```go\nfmt.Println(\"hi\")\n```" {
+		t.Fatalf("unexpected code block text: %q", texts[0])
+	}
+}
+
+func TestParsePostContent_PreservesMarkdownCodeBlock(t *testing.T) {
+	p := &Platform{}
+	raw := "{\"title\":\"snippet\",\"content\":[[{\"tag\":\"md\",\"content\":\"```python\\nprint(1)\\n```\"}]]}"
+	texts, _ := p.parsePostContent("", raw)
+	if len(texts) != 2 {
+		t.Fatalf("expected 2 text parts, got %d", len(texts))
+	}
+	if texts[1] != "```python\nprint(1)\n```" {
+		t.Fatalf("unexpected markdown code text: %q", texts[1])
+	}
+}
+
 func TestParseInlineMarkdown_Link(t *testing.T) {
 	elements := parseInlineMarkdown("visit [Google](https://google.com) now")
 	found := false
