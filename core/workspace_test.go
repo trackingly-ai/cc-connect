@@ -31,7 +31,7 @@ func TestSetupWorkspaceCreatesWorktree(t *testing.T) {
 	}
 }
 
-func TestSetupWorkspaceRejectsExistingBranch(t *testing.T) {
+func TestSetupWorkspaceReusesExistingBranch(t *testing.T) {
 	repoPath := initGitRepo(t)
 	worktreePath := filepath.Join(t.TempDir(), "worktrees", "task-existing-branch")
 
@@ -39,12 +39,16 @@ func TestSetupWorkspaceRejectsExistingBranch(t *testing.T) {
 		t.Fatalf("git branch: %v", err)
 	}
 
-	err := SetupWorkspace(repoPath, "main", "echo/task-existing-branch", worktreePath)
-	if err == nil {
-		t.Fatal("expected setup to reject pre-existing branch")
+	if err := SetupWorkspace(repoPath, "main", "echo/task-existing-branch", worktreePath); err != nil {
+		t.Fatalf("SetupWorkspace with existing branch: %v", err)
 	}
-	if !strings.Contains(err.Error(), "workspace branch already exists") {
-		t.Fatalf("unexpected error: %v", err)
+
+	branch, err := runGit(worktreePath, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		t.Fatalf("git rev-parse HEAD: %v", err)
+	}
+	if branch != "echo/task-existing-branch" {
+		t.Fatalf("branch = %q, want %q", branch, "echo/task-existing-branch")
 	}
 }
 

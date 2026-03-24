@@ -64,23 +64,18 @@ func SetupWorkspace(
 			if err != nil {
 				return fmt.Errorf("check workspace branch: %w", err)
 			}
-			if strings.TrimSpace(existingBranch) != "" {
-				return fmt.Errorf("workspace branch already exists: %s", branchName)
-			}
+			branchExists := strings.TrimSpace(existingBranch) != ""
 			if err := os.MkdirAll(filepath.Dir(worktreePath), 0o755); err != nil {
 				return fmt.Errorf("create worktree parent dir: %w", err)
 			}
 
-			if _, err := runGit(
-				repoPath,
-				"worktree",
-				"add",
-				"--checkout",
-				"-b",
-				branchName,
-				worktreePath,
-				baseBranch,
-			); err != nil {
+			args := []string{"worktree", "add", "--checkout"}
+			if branchExists {
+				args = append(args, worktreePath, branchName)
+			} else {
+				args = append(args, "-b", branchName, worktreePath, baseBranch)
+			}
+			if _, err := runGit(repoPath, args...); err != nil {
 				return fmt.Errorf("git worktree add: %w", err)
 			}
 			return nil
