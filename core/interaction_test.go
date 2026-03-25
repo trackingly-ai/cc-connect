@@ -65,6 +65,37 @@ func TestResolvePendingInteractionClearsNonStrictOnFreeform(t *testing.T) {
 	}
 }
 
+func TestReplyWithInteractionKeepsFullOptionLabels(t *testing.T) {
+	p := &stubButtonPlatform{n: "feishu"}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+
+	e.replyWithInteraction("test:user1", p, "ctx", "Choose an action", [][]interactionChoice{{
+		{
+			ID:       "a",
+			Label:    "Investigate thread ff683237-d720-49e1-ac52-dcf220e38bcf status and fix the stuck task aggregation",
+			SendText: "Investigate thread ff683237-d720-49e1-ac52-dcf220e38bcf status and fix the stuck task aggregation",
+		},
+		{
+			ID:       "b",
+			Label:    "Patch timeout handling so long-running Codex turns are force-cleaned and the session is released",
+			SendText: "Patch timeout handling so long-running Codex turns are force-cleaned and the session is released",
+		},
+	}}, false)
+
+	sent := p.sentSnapshot()
+	if len(sent) == 0 {
+		t.Fatal("expected interaction content to be sent")
+	}
+	if sent[0] != "Choose an action" {
+		t.Fatalf("unexpected interaction content: %q", sent[0])
+	}
+
+	buttonTexts := p.buttonTextsSnapshot()
+	if len(buttonTexts) != 2 || buttonTexts[0] != "Investigate thread ff683237-d720-49e1-ac52-dcf220e38bcf status and fix the stuck task aggregation" || buttonTexts[1] != "Patch timeout handling so long-running Codex turns are force-cleaned and the session is released" {
+		t.Fatalf("expected full button labels, got %#v", buttonTexts)
+	}
+}
+
 func TestDetectTextInteractionPromptYesNo(t *testing.T) {
 	prompt := detectTextInteractionPrompt("Would you like me to proceed with the refactor?")
 	if prompt == nil {

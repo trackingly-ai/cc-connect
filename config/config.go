@@ -16,22 +16,24 @@ var configMu sync.Mutex
 var ConfigPath string
 
 type Config struct {
-	DataDir         string              `toml:"data_dir"` // session store directory, default ~/.cc-connect
-	Projects        []ProjectConfig     `toml:"projects"`
-	Commands        []CommandConfig     `toml:"commands"`     // global custom slash commands
-	Aliases         []AliasConfig       `toml:"aliases"`      // global command aliases
-	BannedWords     []string            `toml:"banned_words"` // messages containing any of these words are blocked
-	Log             LogConfig           `toml:"log"`
-	Language        string              `toml:"language"` // "en" or "zh", default is "en"
-	Speech          SpeechConfig        `toml:"speech"`
-	TTS             TTSConfig           `toml:"tts"`
-	Display         DisplayConfig       `toml:"display"`
-	StreamPreview   StreamPreviewConfig `toml:"stream_preview"`  // real-time streaming preview
-	RateLimit       RateLimitConfig     `toml:"rate_limit"`      // per-session rate limiting
-	Quiet           *bool               `toml:"quiet,omitempty"` // global default for quiet mode; project-level overrides this
-	Cron            CronConfig          `toml:"cron"`
-	IdleTimeoutMins *int                `toml:"idle_timeout_mins,omitempty"` // max minutes between agent events; 0 = no timeout; default 120
-	Echo            EchoConfig          `toml:"echo"`
+	DataDir               string              `toml:"data_dir"` // session store directory, default ~/.cc-connect
+	Projects              []ProjectConfig     `toml:"projects"`
+	Commands              []CommandConfig     `toml:"commands"`     // global custom slash commands
+	Aliases               []AliasConfig       `toml:"aliases"`      // global command aliases
+	BannedWords           []string            `toml:"banned_words"` // messages containing any of these words are blocked
+	Log                   LogConfig           `toml:"log"`
+	Language              string              `toml:"language"` // "en" or "zh", default is "en"
+	Speech                SpeechConfig        `toml:"speech"`
+	TTS                   TTSConfig           `toml:"tts"`
+	Display               DisplayConfig       `toml:"display"`
+	StreamPreview         StreamPreviewConfig `toml:"stream_preview"`  // real-time streaming preview
+	RateLimit             RateLimitConfig     `toml:"rate_limit"`      // per-session rate limiting
+	Quiet                 *bool               `toml:"quiet,omitempty"` // global default for quiet mode; project-level overrides this
+	Cron                  CronConfig          `toml:"cron"`
+	IdleTimeoutMins       *int                `toml:"idle_timeout_mins,omitempty"`        // max minutes between agent events; 0 = no timeout; default 120
+	FirstEventTimeoutSecs *int                `toml:"first_event_timeout_secs,omitempty"` // max seconds to wait for first agent event; 0 = disabled; default 300
+	TurnTimeoutMins       *int                `toml:"turn_timeout_mins,omitempty"`        // max minutes for a single agent turn; 0 = disabled; default 45
+	Echo                  EchoConfig          `toml:"echo"`
 }
 
 // CronConfig controls cron job behavior.

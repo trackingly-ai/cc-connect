@@ -179,6 +179,12 @@ cc-connect: 🔧 Tool: Bash(ls -la)
 cc-connect: Here's the project structure...
 ```
 
+## Reply Context
+
+If you reply to an existing Telegram message and mention the bot, cc-connect forwards the replied-to text or caption as extra context for the current prompt.
+
+This is useful in group chats when you want to continue from another bot's output without copying it into your new message.
+
 ---
 
 ## Architecture

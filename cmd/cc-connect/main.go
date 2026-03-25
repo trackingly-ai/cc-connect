@@ -295,6 +295,22 @@ func main() {
 				engine.SetEventIdleTimeout(time.Duration(mins) * time.Minute)
 			}
 		}
+		if cfg.FirstEventTimeoutSecs != nil {
+			secs := *cfg.FirstEventTimeoutSecs
+			if secs <= 0 {
+				engine.SetFirstEventTimeout(0)
+			} else {
+				engine.SetFirstEventTimeout(time.Duration(secs) * time.Second)
+			}
+		}
+		if cfg.TurnTimeoutMins != nil {
+			mins := *cfg.TurnTimeoutMins
+			if mins <= 0 {
+				engine.SetTurnTimeout(0)
+			} else {
+				engine.SetTurnTimeout(time.Duration(mins) * time.Minute)
+			}
+		}
 
 		// Wire default quiet mode: project-level overrides global
 		if proj.Quiet != nil {

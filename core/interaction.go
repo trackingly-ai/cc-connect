@@ -317,9 +317,5 @@ func normalizeChoiceText(s string) string {
 }
 
 func truncateChoiceLabel(s string) string {
-	runes := []rune(strings.TrimSpace(s))
-	if len(runes) <= 28 {
-		return string(runes)
-	}
-	return string(runes[:25]) + "..."
+	return strings.TrimSpace(s)
 }

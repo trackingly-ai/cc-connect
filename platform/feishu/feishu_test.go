@@ -133,6 +133,23 @@ func TestParsePostContent_PreservesMarkdownCodeBlock(t *testing.T) {
 	}
 }
 
+func TestExtractQuotedMessageContent_Text(t *testing.T) {
+	p := &Platform{}
+	got := p.extractQuotedMessageContent(nil, "text", `{"text":"hello @bot"}`, nil)
+	if got != "hello @bot" {
+		t.Fatalf("got %q, want plain text", got)
+	}
+}
+
+func TestExtractQuotedMessageContent_Post(t *testing.T) {
+	p := &Platform{}
+	raw := `{"title":"Snippet","content":[[{"tag":"text","text":"line 1"},{"tag":"code_block","code":"fmt.Println(\"hi\")","language":"go"}]]}`
+	got := p.extractQuotedMessageContent(nil, "post", raw, nil)
+	if !strings.Contains(got, "Snippet") || !strings.Contains(got, "fmt.Println(\"hi\")") {
+		t.Fatalf("unexpected quoted post content: %q", got)
+	}
+}
+
 func TestParseInlineMarkdown_Link(t *testing.T) {
 	elements := parseInlineMarkdown("visit [Google](https://google.com) now")
 	found := false

@@ -160,10 +160,12 @@ type Engine struct {
 
 	disabledCmds map[string]bool
 
-	rateLimiter      *RateLimiter
-	streamPreview    StreamPreviewCfg
-	relayManager     *RelayManager
-	eventIdleTimeout time.Duration
+	rateLimiter       *RateLimiter
+	streamPreview     StreamPreviewCfg
+	relayManager      *RelayManager
+	eventIdleTimeout  time.Duration
+	firstEventTimeout time.Duration
+	turnTimeout       time.Duration
 
 	// Interactive agent session management
 	interactiveMu     sync.Mutex
@@ -260,6 +262,8 @@ func NewEngine(name string, ag Agent, platforms []Platform, sessionStorePath str
 		startedAt:         time.Now(),
 		streamPreview:     DefaultStreamPreviewCfg(),
 		eventIdleTimeout:  defaultEventIdleTimeout,
+		firstEventTimeout: defaultFirstEventTimeout,
+		turnTimeout:       defaultTurnTimeout,
 	}
 
 	if cp, ok := ag.(CommandProvider); ok {
@@ -431,6 +435,18 @@ func (e *Engine) SetStreamPreviewCfg(cfg StreamPreviewCfg) {
 // 0 disables the timeout entirely.
 func (e *Engine) SetEventIdleTimeout(d time.Duration) {
 	e.eventIdleTimeout = d
+}
+
+// SetFirstEventTimeout sets the maximum time to wait for the first agent event in a turn.
+// 0 disables the timeout entirely.
+func (e *Engine) SetFirstEventTimeout(d time.Duration) {
+	e.firstEventTimeout = d
+}
+
+// SetTurnTimeout sets the maximum total time allowed for a single agent turn.
+// 0 disables the timeout entirely.
+func (e *Engine) SetTurnTimeout(d time.Duration) {
+	e.turnTimeout = d
 }
 
 func (e *Engine) SetRelayManager(rm *RelayManager) {
@@ -678,6 +694,7 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 		"platform", msg.Platform, "msg_id", msg.MessageID,
 		"session", msg.SessionKey, "user", msg.UserName,
 		"content_len", len(msg.Content),
+		"has_quote", msg.HasQuotedContent(),
 		"has_images", len(msg.Images) > 0, "has_files", len(msg.Files) > 0, "has_audio", msg.Audio != nil,
 	)
 
@@ -827,6 +844,25 @@ func cloneFiles(files []FileAttachment) []FileAttachment {
 		out = append(out, cp)
 	}
 	return out
+}
+
+func (e *Engine) buildAgentPrompt(msg *Message) string {
+	base := strings.TrimSpace(msg.Content)
+	quoted := strings.TrimSpace(msg.QuotedContent)
+	if quoted == "" {
+		return base
+	}
+
+	header := "Reply context"
+	if name := strings.TrimSpace(msg.QuotedUserName); name != "" {
+		header = fmt.Sprintf("Reply context from %s", name)
+	}
+
+	if base == "" {
+		return fmt.Sprintf("%s:\n%s", header, quoted)
+	}
+
+	return fmt.Sprintf("%s:\n%s\n\nUser message:\n%s", header, quoted, base)
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -1064,8 +1100,15 @@ func (e *Engine) replyWithInteraction(sessionKey string, p Platform, replyCtx an
 		Strict:  strict,
 	}
 
+	renderContent := content
+	useIndexedButtons := p.Name() == "feishu" && interactionNeedsExpandedList(rows)
+	if useIndexedButtons {
+		renderContent = appendInteractionOptionList(content, rows)
+	}
+
 	buttonRows := make([][]ButtonOption, 0, len(rows))
 	fallbackChoices := make([]string, 0, 4)
+	buttonIndex := 1
 	for _, row := range rows {
 		if len(row) == 0 {
 			continue
@@ -1073,8 +1116,13 @@ func (e *Engine) replyWithInteraction(sessionKey string, p Platform, replyCtx an
 		buttonRow := make([]ButtonOption, 0, len(row))
 		for _, choice := range row {
 			prompt.Choices[choice.ID] = choice
+			label := choice.Label
+			if useIndexedButtons {
+				label = fmt.Sprintf("%d", buttonIndex)
+				buttonIndex++
+			}
 			buttonRow = append(buttonRow, ButtonOption{
-				Text: choice.Label,
+				Text: label,
 				Data: buildInteractionCallbackData(prompt.Token, choice.ID),
 			})
 			fallbackChoices = append(fallbackChoices, choice.SendText)
@@ -1087,15 +1135,51 @@ func (e *Engine) replyWithInteraction(sessionKey string, p Platform, replyCtx an
 	e.promptMu.Unlock()
 
 	if bs, ok := p.(InlineButtonSender); ok {
-		if err := bs.SendWithButtons(e.ctx, replyCtx, content, buttonRows); err == nil {
+		if err := bs.SendWithButtons(e.ctx, replyCtx, renderContent, buttonRows); err == nil {
 			return
 		}
 	}
 
 	if len(fallbackChoices) > 0 {
-		content += "\n\nReply with: `" + strings.Join(fallbackChoices, "` / `") + "`"
+		renderContent += "\n\nReply with: `" + strings.Join(fallbackChoices, "` / `") + "`"
 	}
-	e.reply(p, replyCtx, content)
+	e.reply(p, replyCtx, renderContent)
+}
+
+func interactionNeedsExpandedList(rows [][]interactionChoice) bool {
+	for _, row := range rows {
+		for _, choice := range row {
+			if strings.TrimSpace(choice.SendText) != strings.TrimSpace(choice.Label) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func appendInteractionOptionList(content string, rows [][]interactionChoice) string {
+	var options []string
+	index := 1
+	for _, row := range rows {
+		for _, choice := range row {
+			label := strings.TrimSpace(choice.SendText)
+			if label == "" {
+				label = strings.TrimSpace(choice.Label)
+			}
+			if label == "" {
+				continue
+			}
+			options = append(options, fmt.Sprintf("%d. %s", index, label))
+			index++
+		}
+	}
+	if len(options) == 0 {
+		return content
+	}
+	if strings.TrimSpace(content) == "" {
+		return "Options:\n" + strings.Join(options, "\n")
+	}
+	return content + "\n\nOptions:\n" + strings.Join(options, "\n")
 }
 
 func (e *Engine) resolvePendingInteraction(sessionKey, content string) (string, bool) {
@@ -1284,9 +1368,10 @@ func (e *Engine) processInteractiveMessage(p Platform, msg *Message, session *Se
 	}
 
 	turnStart := time.Now()
+	prompt := e.buildAgentPrompt(msg)
 
 	e.i18n.DetectAndSet(msg.Content)
-	session.AddHistory("user", msg.Content)
+	session.AddHistory("user", prompt)
 
 	state := e.getOrCreateInteractiveState(msg.SessionKey, p, msg.ReplyCtx, session)
 
@@ -1321,7 +1406,7 @@ func (e *Engine) processInteractiveMessage(p Platform, msg *Message, session *Se
 	state.mu.Lock()
 	state.fromVoice = msg.FromVoice
 	state.mu.Unlock()
-	if err := state.agentSession.Send(msg.Content, msg.Images, msg.Files); err != nil {
+	if err := state.agentSession.Send(prompt, msg.Images, msg.Files); err != nil {
 		slog.Error("failed to send prompt", "error", err)
 
 		if !state.agentSession.Alive() {
@@ -1334,7 +1419,7 @@ func (e *Engine) processInteractiveMessage(p Platform, msg *Message, session *Se
 				return
 			}
 			sendStart = time.Now()
-			if err := state.agentSession.Send(msg.Content, msg.Images, msg.Files); err != nil {
+			if err := state.agentSession.Send(prompt, msg.Images, msg.Files); err != nil {
 				e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgError), err))
 				return
 			}
@@ -1431,6 +1516,8 @@ func (e *Engine) cleanupInteractiveState(sessionKey string) {
 }
 
 const defaultEventIdleTimeout = 2 * time.Hour
+const defaultFirstEventTimeout = 5 * time.Minute
+const defaultTurnTimeout = 45 * time.Minute
 
 func (e *Engine) processInteractiveEvents(state *interactiveState, session *Session, sessionKey string, msgID string, turnStart time.Time) {
 	var textParts []string
@@ -1451,6 +1538,22 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 		idleCh = idleTimer.C
 	}
 
+	var firstEventTimer *time.Timer
+	var firstEventCh <-chan time.Time
+	if e.firstEventTimeout > 0 {
+		firstEventTimer = time.NewTimer(e.firstEventTimeout)
+		defer firstEventTimer.Stop()
+		firstEventCh = firstEventTimer.C
+	}
+
+	var turnTimer *time.Timer
+	var turnCh <-chan time.Time
+	if e.turnTimeout > 0 {
+		turnTimer = time.NewTimer(e.turnTimeout)
+		defer turnTimer.Stop()
+		turnCh = turnTimer.C
+	}
+
 	events := state.agentSession.Events()
 	for {
 		var event Event
@@ -1462,6 +1565,28 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				goto channelClosed
 			}
 		case <-state.stopped:
+			return
+		case <-firstEventCh:
+			slog.Error("agent session first event timeout: no initial event received",
+				"session_key", sessionKey, "timeout", e.firstEventTimeout, "elapsed", time.Since(turnStart))
+			sp.finish("")
+			state.mu.Lock()
+			p := state.platform
+			replyCtx := state.replyCtx
+			state.mu.Unlock()
+			e.send(p, replyCtx, fmt.Sprintf(e.i18n.T(MsgError), "agent session timed out waiting for first response"))
+			e.cleanupInteractiveState(sessionKey)
+			return
+		case <-turnCh:
+			slog.Error("agent session turn timeout: turn exceeded maximum duration",
+				"session_key", sessionKey, "timeout", e.turnTimeout, "elapsed", time.Since(turnStart))
+			sp.finish("")
+			state.mu.Lock()
+			p := state.platform
+			replyCtx := state.replyCtx
+			state.mu.Unlock()
+			e.send(p, replyCtx, fmt.Sprintf(e.i18n.T(MsgError), "agent session timed out before completing the turn"))
+			e.cleanupInteractiveState(sessionKey)
 			return
 		case <-idleCh:
 			slog.Error("agent session idle timeout: no events for too long, killing session",
@@ -1491,6 +1616,15 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 
 		if !firstEventLogged {
 			firstEventLogged = true
+			if firstEventTimer != nil {
+				if !firstEventTimer.Stop() {
+					select {
+					case <-firstEventTimer.C:
+					default:
+					}
+				}
+				firstEventCh = nil
+			}
 			if elapsed := time.Since(waitStart); elapsed >= slowAgentFirstEvent {
 				slog.Warn("slow agent first event", "elapsed", elapsed, "session", sessionKey, "event_type", event.Type)
 			}

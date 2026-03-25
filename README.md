@@ -40,6 +40,7 @@ cc-connect bridges AI agents running on your machine to the messaging platforms 
 - **Agent Memory** — Read and write agent instruction files (`/memory`) without touching the terminal.
 - **Scheduled Tasks** — Set up cron jobs in natural language. "Every day at 6am, summarize GitHub trending" just works.
 - **Voice & Images** — Send voice messages or screenshots; cc-connect handles STT/TTS and multimodal forwarding.
+- **Reply Context** — In Feishu and Telegram, reply to an existing message and mention the bot; cc-connect forwards the replied-to text as extra context.
 - **Multi-Project** — One process, multiple projects, each with its own agent + platform combo.
 
 <p align="center">

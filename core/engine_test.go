@@ -224,6 +224,50 @@ func TestProcessInteractiveEvents_BindsSessionIDFromResultEvent(t *testing.T) {
 	}
 }
 
+func TestProcessInteractiveMessage_IncludesQuotedContextInPrompt(t *testing.T) {
+	agent := &recordingSendAgent{}
+	p := &stubPlatformEngine{n: "test"}
+	e := NewEngine("test", agent, []Platform{p}, "", LangEnglish)
+
+	msg := &Message{
+		SessionKey:      "test:user1",
+		Platform:        "test",
+		UserID:          "user1",
+		UserName:        "Alice",
+		Content:         "Can you act on this?",
+		QuotedUserName:  "Codex",
+		QuotedContent:   "Please update the deployment script and keep the current env vars.",
+		QuotedMessageID: "m-1",
+	}
+
+	session := e.sessions.GetOrCreateActive(msg.SessionKey)
+	if !session.TryLock() {
+		t.Fatal("expected session lock")
+	}
+
+	e.processInteractiveMessage(p, msg, session)
+
+	sends := agent.session.Sends()
+	if len(sends) != 1 {
+		t.Fatalf("expected 1 send, got %d", len(sends))
+	}
+	got := sends[0].prompt
+	if !strings.Contains(got, "Reply context from Codex:") {
+		t.Fatalf("prompt missing quoted header: %q", got)
+	}
+	if !strings.Contains(got, "Please update the deployment script") {
+		t.Fatalf("prompt missing quoted content: %q", got)
+	}
+	if !strings.Contains(got, "User message:\nCan you act on this?") {
+		t.Fatalf("prompt missing user message section: %q", got)
+	}
+
+	history := session.GetHistory(2)
+	if len(history) < 2 || history[0].Role != "user" || history[0].Content != got {
+		t.Fatalf("history content = %#v, want enriched prompt as user entry", history)
+	}
+}
+
 func TestProcessInteractiveEvents_StripsOptionsXMLFromDisplayedReply(t *testing.T) {
 	p := &stubButtonPlatform{n: "test"}
 	tts := &stubTTS{audio: []byte("audio"), format: "mp3"}
@@ -266,6 +310,62 @@ func TestProcessInteractiveEvents_StripsOptionsXMLFromDisplayedReply(t *testing.
 	history := session.GetHistory(0)
 	if len(history) != 1 || history[0].Content != "我建议下一步先做这两件事。" {
 		t.Fatalf("expected sanitized assistant history, got %#v", history)
+	}
+}
+
+func TestProcessInteractiveEvents_FirstEventTimeout(t *testing.T) {
+	e := newTestEngine()
+	e.SetFirstEventTimeout(20 * time.Millisecond)
+	e.SetEventIdleTimeout(0)
+	e.SetTurnTimeout(0)
+
+	p := &stubPlatformEngine{n: "test"}
+	session := e.sessions.GetOrCreateActive("test:user1")
+	state := newInteractiveState(&eventfulStubAgentSession{events: make(chan Event)}, p, "ctx", false)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		e.processInteractiveEvents(state, session, "test:user1", "msg-1", time.Now())
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected first-event timeout to stop processInteractiveEvents")
+	}
+
+	if len(p.sent) == 0 || !strings.Contains(p.sent[len(p.sent)-1], "timed out waiting for first response") {
+		t.Fatalf("expected timeout reply, got %#v", p.sent)
+	}
+}
+
+func TestProcessInteractiveEvents_TurnTimeout(t *testing.T) {
+	e := newTestEngine()
+	e.SetFirstEventTimeout(0)
+	e.SetEventIdleTimeout(0)
+	e.SetTurnTimeout(30 * time.Millisecond)
+
+	p := &stubPlatformEngine{n: "test"}
+	events := make(chan Event, 1)
+	events <- Event{Type: EventThinking, Content: "still working"}
+	session := e.sessions.GetOrCreateActive("test:user1")
+	state := newInteractiveState(&eventfulStubAgentSession{events: events}, p, "ctx", false)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		e.processInteractiveEvents(state, session, "test:user1", "msg-1", time.Now())
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected turn timeout to stop processInteractiveEvents")
+	}
+
+	if len(p.sent) == 0 || !strings.Contains(p.sent[len(p.sent)-1], "timed out before completing the turn") {
+		t.Fatalf("expected timeout reply, got %#v", p.sent)
 	}
 }
 

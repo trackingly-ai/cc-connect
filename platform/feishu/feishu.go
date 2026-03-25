@@ -31,6 +31,13 @@ type replyContext struct {
 	chatID    string
 }
 
+type quotedMessage struct {
+	messageID string
+	userID    string
+	userName  string
+	content   string
+}
+
 type Platform struct {
 	appID                 string
 	appSecret             string
@@ -177,6 +184,17 @@ func (p *Platform) removeReaction(messageID, reactionID string) {
 	}
 }
 
+func applyQuotedMessage(m *core.Message, quoted *quotedMessage) *core.Message {
+	if m == nil || quoted == nil {
+		return m
+	}
+	m.QuotedMessageID = quoted.messageID
+	m.QuotedUserID = quoted.userID
+	m.QuotedUserName = quoted.userName
+	m.QuotedContent = quoted.content
+	return m
+}
+
 // StartTyping adds an emoji reaction to the user's message and returns a stop
 // function that removes the reaction when processing is complete.
 func (p *Platform) StartTyping(ctx context.Context, rctx any) (stop func()) {
@@ -261,6 +279,7 @@ func (p *Platform) onMessage(event *larkim.P2MessageReceiveV1) error {
 		sessionKey = fmt.Sprintf("feishu:%s:%s", chatID, userID)
 	}
 	rctx := replyContext{messageID: messageID, chatID: chatID}
+	quoted := p.fetchQuotedMessage(msg.ParentId, msg.RootId)
 
 	switch msgType {
 	case "text":
@@ -275,12 +294,12 @@ func (p *Platform) onMessage(event *larkim.P2MessageReceiveV1) error {
 		if text == "" {
 			return nil
 		}
-		p.handler(p, &core.Message{
+		p.handler(p, applyQuotedMessage(&core.Message{
 			SessionKey: sessionKey, Platform: "feishu",
 			MessageID: messageID,
 			UserID:    userID, UserName: userName,
 			Content: text, ReplyCtx: rctx,
-		})
+		}, quoted))
 
 	case "image":
 		var imgBody struct {
@@ -295,13 +314,13 @@ func (p *Platform) onMessage(event *larkim.P2MessageReceiveV1) error {
 			slog.Error("feishu: download image failed", "error", err)
 			return nil
 		}
-		p.handler(p, &core.Message{
+		p.handler(p, applyQuotedMessage(&core.Message{
 			SessionKey: sessionKey, Platform: "feishu",
 			MessageID: messageID,
 			UserID:    userID, UserName: userName,
 			Images:   []core.ImageAttachment{{MimeType: mimeType, Data: imgData}},
 			ReplyCtx: rctx,
-		})
+		}, quoted))
 
 	case "audio":
 		var audioBody struct {
@@ -318,7 +337,7 @@ func (p *Platform) onMessage(event *larkim.P2MessageReceiveV1) error {
 			slog.Error("feishu: download audio failed", "error", err)
 			return nil
 		}
-		p.handler(p, &core.Message{
+		p.handler(p, applyQuotedMessage(&core.Message{
 			SessionKey: sessionKey, Platform: "feishu",
 			MessageID: messageID,
 			UserID:    userID, UserName: userName,
@@ -329,7 +348,7 @@ func (p *Platform) onMessage(event *larkim.P2MessageReceiveV1) error {
 				Duration: audioBody.Duration / 1000,
 			},
 			ReplyCtx: rctx,
-		})
+		}, quoted))
 
 	case "file":
 		var fileBody struct {
@@ -345,7 +364,7 @@ func (p *Platform) onMessage(event *larkim.P2MessageReceiveV1) error {
 			slog.Error("feishu: download file failed", "error", err)
 			return nil
 		}
-		p.handler(p, &core.Message{
+		p.handler(p, applyQuotedMessage(&core.Message{
 			SessionKey: sessionKey, Platform: "feishu",
 			MessageID: messageID,
 			UserID:    userID, UserName: userName,
@@ -355,7 +374,7 @@ func (p *Platform) onMessage(event *larkim.P2MessageReceiveV1) error {
 				FileName: fileBody.FileName,
 			}},
 			ReplyCtx: rctx,
-		})
+		}, quoted))
 
 	case "media":
 		var mediaBody struct {
@@ -376,7 +395,7 @@ func (p *Platform) onMessage(event *larkim.P2MessageReceiveV1) error {
 			return nil
 		}
 		mimeType := detectMimeType(fileData)
-		p.handler(p, &core.Message{
+		p.handler(p, applyQuotedMessage(&core.Message{
 			SessionKey: sessionKey, Platform: "feishu",
 			MessageID: messageID,
 			UserID:    userID, UserName: userName,
@@ -386,7 +405,7 @@ func (p *Platform) onMessage(event *larkim.P2MessageReceiveV1) error {
 				FileName: defaultFileNameForMime("media", mimeType),
 			}},
 			ReplyCtx: rctx,
-		})
+		}, quoted))
 
 	case "post":
 		textParts, images := p.parsePostContent(messageID, *msg.Content)
@@ -394,13 +413,13 @@ func (p *Platform) onMessage(event *larkim.P2MessageReceiveV1) error {
 		if text == "" && len(images) == 0 {
 			return nil
 		}
-		p.handler(p, &core.Message{
+		p.handler(p, applyQuotedMessage(&core.Message{
 			SessionKey: sessionKey, Platform: "feishu",
 			MessageID: messageID,
 			UserID:    userID, UserName: userName,
 			Content: text, Images: images,
 			ReplyCtx: rctx,
-		})
+		}, quoted))
 
 	default:
 		slog.Debug("feishu: ignoring unsupported message type", "type", msgType)
@@ -866,12 +885,33 @@ func isBotMentioned(mentions []*larkim.MentionEvent, botOpenID string) bool {
 // so that group-chat messages like "@Bot /help" become "/help".
 func stripMentions(text string, mentions []*larkim.MentionEvent) string {
 	if len(mentions) == 0 {
-		return text
+		return strings.TrimSpace(text)
 	}
+	keys := make([]string, 0, len(mentions))
 	for _, m := range mentions {
 		if m.Key != nil {
-			text = strings.ReplaceAll(text, *m.Key, "")
+			keys = append(keys, *m.Key)
 		}
+	}
+	return stripMentionKeys(text, keys)
+}
+
+func stripMentionsMessage(text string, mentions []*larkim.Mention) string {
+	if len(mentions) == 0 {
+		return strings.TrimSpace(text)
+	}
+	keys := make([]string, 0, len(mentions))
+	for _, m := range mentions {
+		if m.Key != nil {
+			keys = append(keys, *m.Key)
+		}
+	}
+	return stripMentionKeys(text, keys)
+}
+
+func stripMentionKeys(text string, keys []string) string {
+	for _, key := range keys {
+		text = strings.ReplaceAll(text, key, "")
 	}
 	return strings.TrimSpace(text)
 }
@@ -1373,6 +1413,88 @@ func (p *Platform) parsePostContent(messageID, raw string) ([]string, []core.Ima
 	}
 	slog.Error("feishu: failed to parse post content", "raw", raw)
 	return nil, nil
+}
+
+func (p *Platform) fetchQuotedMessage(parentID, rootID *string) *quotedMessage {
+	refID := ""
+	switch {
+	case parentID != nil && strings.TrimSpace(*parentID) != "":
+		refID = strings.TrimSpace(*parentID)
+	case rootID != nil && strings.TrimSpace(*rootID) != "":
+		refID = strings.TrimSpace(*rootID)
+	}
+	if refID == "" {
+		return nil
+	}
+
+	resp, err := p.client.Im.Message.Get(context.Background(), larkim.NewGetMessageReqBuilder().
+		MessageId(refID).
+		Build())
+	if err != nil {
+		slog.Debug("feishu: fetch quoted message failed", "message_id", refID, "error", err)
+		return nil
+	}
+	if !resp.Success() {
+		slog.Debug("feishu: fetch quoted message unsuccessful", "message_id", refID, "code", resp.Code, "msg", resp.Msg)
+		return nil
+	}
+	if resp.Data == nil || len(resp.Data.Items) == 0 || resp.Data.Items[0] == nil {
+		return nil
+	}
+	return p.extractQuotedMessage(resp.Data.Items[0])
+}
+
+func (p *Platform) extractQuotedMessage(msg *larkim.Message) *quotedMessage {
+	if msg == nil || msg.Body == nil || msg.Body.Content == nil {
+		return nil
+	}
+
+	msgType := ""
+	if msg.MsgType != nil {
+		msgType = *msg.MsgType
+	}
+
+	content := p.extractQuotedMessageContent(msg.MessageId, msgType, *msg.Body.Content, msg.Mentions)
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return nil
+	}
+
+	quoted := &quotedMessage{content: content}
+	if msg.MessageId != nil {
+		quoted.messageID = *msg.MessageId
+	}
+	if msg.Sender != nil {
+		if msg.Sender.Id != nil {
+			quoted.userID = *msg.Sender.Id
+		}
+		if msg.Sender.SenderType != nil && *msg.Sender.SenderType != "user" {
+			quoted.userName = *msg.Sender.SenderType
+		}
+	}
+	return quoted
+}
+
+func (p *Platform) extractQuotedMessageContent(messageID *string, msgType, raw string, mentions []*larkim.Mention) string {
+	switch msgType {
+	case "text":
+		var textBody struct {
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal([]byte(raw), &textBody); err != nil {
+			return ""
+		}
+		return stripMentionsMessage(textBody.Text, mentions)
+	case "post":
+		id := ""
+		if messageID != nil {
+			id = *messageID
+		}
+		textParts, _ := p.parsePostContent(id, raw)
+		return stripMentionsMessage(strings.Join(textParts, "\n"), mentions)
+	default:
+		return ""
+	}
 }
 
 func (p *Platform) extractPostParts(messageID string, post *postLang) ([]string, []core.ImageAttachment) {

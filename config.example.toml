@@ -74,6 +74,16 @@ level = "info" # debug, info, warn, error
 # Agent 空闲超时：两次 agent 事件之间的最大等待分钟数，超时则认为会话卡住。设为 0 禁用。
 # idle_timeout_mins = 120  # default: 120 (2 hours) / 默认 120（2 小时）
 
+# Agent first-event timeout: max seconds to wait for the first event of a turn.
+# Useful when the CLI hangs before streaming anything at all. Set to 0 to disable.
+# Agent 首事件超时：一轮开始后等待首个事件的最大秒数。适合处理 CLI 在首个输出前卡住。设为 0 禁用。
+# first_event_timeout_secs = 300  # default: 300 (5 minutes) / 默认 300（5 分钟）
+
+# Agent turn timeout: max total minutes for a single turn before force cleanup.
+# Set to 0 to disable. This complements idle_timeout_mins.
+# Agent 单轮超时：单轮处理允许的最大分钟数，超过后强制回收。设为 0 禁用。
+# turn_timeout_mins = 45  # default: 45 / 默认 45
+
 # =============================================================================
 # Streaming Preview / 流式预览
 # =============================================================================

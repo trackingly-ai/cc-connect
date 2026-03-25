@@ -25,6 +25,13 @@ type replyContext struct {
 	messageID int
 }
 
+type quotedMessage struct {
+	messageID string
+	userID    string
+	userName  string
+	content   string
+}
+
 type Platform struct {
 	token                 string
 	allowFrom             string
@@ -144,6 +151,7 @@ func (p *Platform) Start(handler core.MessageHandler) error {
 				}
 
 				rctx := replyContext{chatID: msg.Chat.ID, messageID: msg.MessageID}
+				quoted := extractQuotedMessage(msg.ReplyToMessage)
 
 				// Handle photo messages
 				if len(msg.Photo) > 0 {
@@ -166,6 +174,7 @@ func (p *Platform) Start(handler core.MessageHandler) error {
 						Images:    []core.ImageAttachment{{MimeType: "image/jpeg", Data: imgData}},
 						ReplyCtx:  rctx,
 					}
+					applyQuotedMessage(coreMsg, quoted)
 					p.handler(p, coreMsg)
 					continue
 				}
@@ -190,6 +199,7 @@ func (p *Platform) Start(handler core.MessageHandler) error {
 						},
 						ReplyCtx: rctx,
 					}
+					applyQuotedMessage(coreMsg, quoted)
 					p.handler(p, coreMsg)
 					continue
 				}
@@ -221,6 +231,7 @@ func (p *Platform) Start(handler core.MessageHandler) error {
 						},
 						ReplyCtx: rctx,
 					}
+					applyQuotedMessage(coreMsg, quoted)
 					p.handler(p, coreMsg)
 					continue
 				}
@@ -249,6 +260,7 @@ func (p *Platform) Start(handler core.MessageHandler) error {
 						}},
 						ReplyCtx: rctx,
 					}
+					applyQuotedMessage(coreMsg, quoted)
 					p.handler(p, coreMsg)
 					continue
 				}
@@ -285,6 +297,7 @@ func (p *Platform) Start(handler core.MessageHandler) error {
 						}},
 						ReplyCtx: rctx,
 					}
+					applyQuotedMessage(coreMsg, quoted)
 					p.handler(p, coreMsg)
 					continue
 				}
@@ -306,6 +319,7 @@ func (p *Platform) Start(handler core.MessageHandler) error {
 					MessageID: strconv.Itoa(msg.MessageID),
 					ReplyCtx:  rctx,
 				}
+				applyQuotedMessage(coreMsg, quoted)
 
 				slog.Debug("telegram: message received", "user", userName, "chat", msg.Chat.ID)
 				p.handler(p, coreMsg)
@@ -314,6 +328,42 @@ func (p *Platform) Start(handler core.MessageHandler) error {
 	}()
 
 	return nil
+}
+
+func extractQuotedMessage(msg *tgbotapi.Message) *quotedMessage {
+	if msg == nil {
+		return nil
+	}
+	content := strings.TrimSpace(msg.Text)
+	if content == "" {
+		content = strings.TrimSpace(msg.Caption)
+	}
+	if content == "" {
+		return nil
+	}
+
+	q := &quotedMessage{
+		messageID: strconv.Itoa(msg.MessageID),
+		content:   content,
+	}
+	if msg.From != nil {
+		q.userID = strconv.FormatInt(msg.From.ID, 10)
+		q.userName = msg.From.UserName
+		if q.userName == "" {
+			q.userName = strings.TrimSpace(msg.From.FirstName + " " + msg.From.LastName)
+		}
+	}
+	return q
+}
+
+func applyQuotedMessage(dst *core.Message, quoted *quotedMessage) {
+	if dst == nil || quoted == nil {
+		return
+	}
+	dst.QuotedMessageID = quoted.messageID
+	dst.QuotedUserID = quoted.userID
+	dst.QuotedUserName = quoted.userName
+	dst.QuotedContent = quoted.content
 }
 
 func (p *Platform) handleCallbackQuery(cb *tgbotapi.CallbackQuery) {
