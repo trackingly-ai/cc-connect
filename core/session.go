@@ -16,6 +16,7 @@ type Session struct {
 	ID             string         `json:"id"`
 	Name           string         `json:"name"`
 	AgentSessionID string         `json:"agent_session_id"`
+	NeedsReplay    bool           `json:"needs_replay,omitempty"`
 	History        []HistoryEntry `json:"history"`
 	CreatedAt      time.Time      `json:"created_at"`
 	UpdatedAt      time.Time      `json:"updated_at"`

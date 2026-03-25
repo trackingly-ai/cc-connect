@@ -35,6 +35,19 @@ func (a *recordingResumeAgent) ListSessions(_ context.Context) ([]AgentSessionIn
 }
 func (a *recordingResumeAgent) Stop() error { return nil }
 
+type namedStubAgent struct {
+	name string
+}
+
+func (a *namedStubAgent) Name() string { return a.name }
+func (a *namedStubAgent) StartSession(_ context.Context, _ string) (AgentSession, error) {
+	return &stubAgentSession{}, nil
+}
+func (a *namedStubAgent) ListSessions(_ context.Context) ([]AgentSessionInfo, error) {
+	return nil, nil
+}
+func (a *namedStubAgent) Stop() error { return nil }
+
 type stubAgentSession struct{}
 
 func (s *stubAgentSession) Send(_ string, _ []ImageAttachment, _ []FileAttachment) error {
@@ -122,6 +135,47 @@ func (s *recordingSendSession) Sends() []recordedSend {
 	out := make([]recordedSend, len(s.sends))
 	copy(out, s.sends)
 	return out
+}
+
+func TestShouldResetAgentSessionOnResult(t *testing.T) {
+	e := NewEngine("test", &namedStubAgent{name: "claudecode"}, nil, filepath.Join(t.TempDir(), "sessions.json"), LangEnglish)
+
+	if !e.shouldResetAgentSessionOnResult("API Error: 400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Could not process image\"}}") {
+		t.Fatal("expected Claude image failure to trigger reset")
+	}
+	if e.shouldResetAgentSessionOnResult("normal response") {
+		t.Fatal("did not expect normal response to trigger reset")
+	}
+
+	e.agent = &namedStubAgent{name: "codex"}
+	if e.shouldResetAgentSessionOnResult("API Error: 400 {\"message\":\"Could not process image\"}") {
+		t.Fatal("did not expect non-Claude agent to trigger reset")
+	}
+}
+
+func TestBuildAgentPrompt_IncludesReplayContextAfterReset(t *testing.T) {
+	e := NewEngine("test", &namedStubAgent{name: "claudecode"}, nil, filepath.Join(t.TempDir(), "sessions.json"), LangEnglish)
+	session := &Session{NeedsReplay: true}
+	session.AddHistory("user", "Please review the image set in SocialOps.")
+	session.AddHistory("assistant", "I checked the folder and found a few suspicious files.")
+	session.AddHistory("assistant", "API Error: 400 {\"type\":\"error\",\"error\":{\"message\":\"Could not process image\"}}")
+
+	got := e.buildAgentPrompt(session, &Message{Content: "Continue with the cleanup plan."})
+	if !strings.Contains(got, "Previous conversation context:") {
+		t.Fatalf("prompt missing replay header: %q", got)
+	}
+	if !strings.Contains(got, "User: Please review the image set in SocialOps.") {
+		t.Fatalf("prompt missing user history: %q", got)
+	}
+	if !strings.Contains(got, "Assistant: I checked the folder and found a few suspicious files.") {
+		t.Fatalf("prompt missing assistant history: %q", got)
+	}
+	if strings.Contains(got, "Could not process image") {
+		t.Fatalf("prompt should exclude fatal image error history: %q", got)
+	}
+	if !strings.Contains(got, "Continue from that context.") || !strings.Contains(got, "Continue with the cleanup plan.") {
+		t.Fatalf("prompt missing current turn continuation: %q", got)
+	}
 }
 
 type stubWorkDirAgent struct {
@@ -310,6 +364,34 @@ func TestProcessInteractiveEvents_StripsOptionsXMLFromDisplayedReply(t *testing.
 	history := session.GetHistory(0)
 	if len(history) != 1 || history[0].Content != "我建议下一步先做这两件事。" {
 		t.Fatalf("expected sanitized assistant history, got %#v", history)
+	}
+}
+
+func TestProcessInteractiveEvents_FatalClaudeImageErrorCleansInteractiveState(t *testing.T) {
+	e := NewEngine("test", &namedStubAgent{name: "claudecode"}, nil, filepath.Join(t.TempDir(), "sessions.json"), LangEnglish)
+	p := &stubPlatformEngine{n: "test"}
+	events := make(chan Event, 1)
+	events <- Event{
+		Type:    EventResult,
+		Content: "API Error: 400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Could not process image\"}}",
+		Done:    true,
+	}
+	close(events)
+
+	session := &Session{ID: "s14", AgentSessionID: "bad-session"}
+	state := newInteractiveState(&eventfulStubAgentSession{events: events}, p, "ctx", false)
+	e.interactiveStates["test:user1"] = state
+
+	e.processInteractiveEvents(state, session, "test:user1", "msg-1", time.Now())
+
+	if session.AgentSessionID != "" {
+		t.Fatalf("AgentSessionID = %q, want empty", session.AgentSessionID)
+	}
+	if !session.NeedsReplay {
+		t.Fatal("expected session to require replay after fatal image error")
+	}
+	if _, ok := e.interactiveStates["test:user1"]; ok {
+		t.Fatal("expected interactive state to be cleaned up after fatal image error")
 	}
 }
 

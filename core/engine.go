@@ -846,23 +846,36 @@ func cloneFiles(files []FileAttachment) []FileAttachment {
 	return out
 }
 
-func (e *Engine) buildAgentPrompt(msg *Message) string {
+func (e *Engine) buildAgentPrompt(session *Session, msg *Message) string {
 	base := strings.TrimSpace(msg.Content)
 	quoted := strings.TrimSpace(msg.QuotedContent)
-	if quoted == "" {
+	if quoted != "" {
+		header := "Reply context"
+		if name := strings.TrimSpace(msg.QuotedUserName); name != "" {
+			header = fmt.Sprintf("Reply context from %s", name)
+		}
+
+		if base == "" {
+			base = fmt.Sprintf("%s:\n%s", header, quoted)
+		} else {
+			base = fmt.Sprintf("%s:\n%s\n\nUser message:\n%s", header, quoted, base)
+		}
+	}
+
+	if session == nil || !session.NeedsReplay {
 		return base
 	}
 
-	header := "Reply context"
-	if name := strings.TrimSpace(msg.QuotedUserName); name != "" {
-		header = fmt.Sprintf("Reply context from %s", name)
+	replay := e.formatSessionReplay(session, 8)
+	if replay == "" {
+		return base
 	}
 
 	if base == "" {
-		return fmt.Sprintf("%s:\n%s", header, quoted)
+		return fmt.Sprintf("Previous conversation context:\n%s", replay)
 	}
 
-	return fmt.Sprintf("%s:\n%s\n\nUser message:\n%s", header, quoted, base)
+	return fmt.Sprintf("Previous conversation context:\n%s\n\nContinue from that context.\n\n%s", replay, base)
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -1368,7 +1381,7 @@ func (e *Engine) processInteractiveMessage(p Platform, msg *Message, session *Se
 	}
 
 	turnStart := time.Now()
-	prompt := e.buildAgentPrompt(msg)
+	prompt := e.buildAgentPrompt(session, msg)
 
 	e.i18n.DetectAndSet(msg.Content)
 	session.AddHistory("user", prompt)
@@ -1427,6 +1440,12 @@ func (e *Engine) processInteractiveMessage(p Platform, msg *Message, session *Se
 			e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgError), err))
 			return
 		}
+	}
+	if session.NeedsReplay {
+		session.mu.Lock()
+		session.NeedsReplay = false
+		session.mu.Unlock()
+		e.sessions.Save()
 	}
 	if elapsed := time.Since(sendStart); elapsed >= slowAgentSend {
 		slog.Warn("slow agent send", "elapsed", elapsed, "session", msg.SessionKey, "content_len", len(msg.Content))
@@ -1524,6 +1543,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 	toolCount := 0
 	waitStart := time.Now()
 	firstEventLogged := false
+	resetAgentSession := false
 
 	state.mu.Lock()
 	sp := newStreamPreview(e.streamPreview, state.platform, state.replyCtx, e.ctx)
@@ -1762,6 +1782,16 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				e.sessions.Save()
 			}
 
+			if e.shouldResetAgentSessionOnResult(displayResponse) {
+				slog.Warn("resetting agent session after fatal result", "agent", e.agent.Name(), "session", session.ID, "agent_session", session.AgentSessionID)
+				session.mu.Lock()
+				session.AgentSessionID = ""
+				session.NeedsReplay = true
+				session.mu.Unlock()
+				e.sessions.Save()
+				resetAgentSession = true
+			}
+
 			turnDuration := time.Since(turnStart)
 			slog.Info("turn complete",
 				"session", session.ID,
@@ -1818,6 +1848,11 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				}
 			}
 
+			if resetAgentSession {
+				slog.Info("cleaning up interactive state after fatal result", "session_key", sessionKey, "session", session.ID)
+				e.cleanupInteractiveState(sessionKey)
+			}
+
 			return
 
 		case EventError:
@@ -1852,6 +1887,45 @@ channelClosed:
 			}
 		}
 	}
+}
+
+func (e *Engine) shouldResetAgentSessionOnResult(content string) bool {
+	if strings.TrimSpace(content) == "" {
+		return false
+	}
+	if e.agent == nil || e.agent.Name() != "claudecode" {
+		return false
+	}
+	lower := strings.ToLower(content)
+	return strings.Contains(lower, "could not process image") ||
+		(strings.Contains(lower, "api error: 400") && strings.Contains(lower, "image"))
+}
+
+func (e *Engine) formatSessionReplay(session *Session, limit int) string {
+	if session == nil {
+		return ""
+	}
+	history := session.GetHistory(limit)
+	if len(history) == 0 {
+		return ""
+	}
+
+	var lines []string
+	for _, entry := range history {
+		content := strings.TrimSpace(entry.Content)
+		if content == "" {
+			continue
+		}
+		if e.shouldResetAgentSessionOnResult(content) {
+			continue
+		}
+		role := "User"
+		if entry.Role == "assistant" {
+			role = "Assistant"
+		}
+		lines = append(lines, fmt.Sprintf("%s: %s", role, truncateIf(content, 1200)))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (e *Engine) bindAgentSessionID(session *Session, agentSessionID string) {

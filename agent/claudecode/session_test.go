@@ -181,3 +181,41 @@ func TestNormalizeClaudeImage_UsesHEICConverter(t *testing.T) {
 		t.Fatalf("expected converted PNG, got %#v", img.Data)
 	}
 }
+
+func TestContainsClaudeImageError(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{name: "plain text", content: "all good", want: false},
+		{name: "could not process image", content: "API Error: 400 {\"message\":\"Could not process image\"}", want: true},
+		{name: "api error unrelated", content: "API Error: 400 bad request", want: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := containsClaudeImageError(tc.content); got != tc.want {
+				t.Fatalf("containsClaudeImageError(%q) = %v, want %v", tc.content, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRecordToolUseKeepsRecentTail(t *testing.T) {
+	var cs claudeSession
+	for i := 0; i < 20; i++ {
+		cs.recordToolUse("Bash", strings.Repeat("x", i+1))
+	}
+
+	got := cs.snapshotRecentTools()
+	if len(got) != 12 {
+		t.Fatalf("recent tool count = %d, want 12", len(got))
+	}
+	if !strings.Contains(got[0], strings.Repeat("x", 9)) {
+		t.Fatalf("unexpected oldest retained entry: %q", got[0])
+	}
+	if !strings.Contains(got[len(got)-1], strings.Repeat("x", 20)) {
+		t.Fatalf("unexpected newest retained entry: %q", got[len(got)-1])
+	}
+}

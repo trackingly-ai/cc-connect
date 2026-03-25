@@ -81,6 +81,21 @@ Rules:
 - Keep options short and concrete. Prefer 2-4 options.
 - Do NOT emit <options> for summaries, recaps, status updates, or action-less conclusions.
 - If no user choice is needed, do not emit any <options> block.
+
+### Local image files
+When you need to inspect a local image file by path, do NOT assume the file extension is trustworthy.
+Before reading or sending the image to image tools:
+
+1. Inspect the actual format first (for example with file or sips -g format on macOS).
+2. If the file is HEIC/HEIF, mislabeled, or otherwise in a format that image tools may reject, convert it to a standard PNG/JPEG copy first.
+3. Then analyze the converted copy instead of the original.
+
+Preferred conversion commands:
+- macOS: sips -s format png <input> --out <output>.png
+- fallback: ffmpeg -y -i <input> <output>.png
+- fallback: magick <input> <output>.png
+
+This is especially important for files that end in .jpg / .jpeg but may actually contain HEIC/HEIF data.
 `
 }
 

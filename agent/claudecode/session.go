@@ -36,6 +36,8 @@ type claudeSession struct {
 	stdin       io.WriteCloser
 	stdinMu     sync.Mutex
 	events      chan core.Event
+	recentMu    sync.Mutex
+	recentTools []string
 	sessionID   atomic.Value // stores string
 	autoApprove bool         // auto mode: approve all permission requests
 	workDir     string
@@ -267,6 +269,7 @@ func (cs *claudeSession) handleAssistant(raw map[string]any) {
 		case "tool_use":
 			toolName, _ := item["name"].(string)
 			inputSummary := summarizeInput(toolName, item["input"])
+			cs.recordToolUse(toolName, inputSummary)
 			evt := core.Event{Type: core.EventToolUse, ToolName: toolName, ToolInput: inputSummary}
 			select {
 			case cs.events <- evt:
@@ -314,7 +317,11 @@ func (cs *claudeSession) handleUser(raw map[string]any) {
 			isError, _ := item["is_error"].(bool)
 			if isError {
 				result, _ := item["content"].(string)
-				slog.Debug("claudeSession: tool error", "content", result)
+				if strings.Contains(strings.ToLower(result), "could not process image") {
+					slog.Warn("claudeSession: image tool error", "content", result)
+				} else {
+					slog.Debug("claudeSession: tool error", "content", result)
+				}
 			}
 		}
 	}
@@ -324,6 +331,9 @@ func (cs *claudeSession) handleResult(raw map[string]any) {
 	var content string
 	if result, ok := raw["result"].(string); ok {
 		content = result
+	}
+	if containsClaudeImageError(content) {
+		slog.Error("claudeSession: image failure result", "content", content, "recent_tools", strings.Join(cs.snapshotRecentTools(), " | "))
 	}
 	if sid, ok := raw["session_id"].(string); ok && sid != "" {
 		cs.sessionID.Store(sid)
@@ -381,14 +391,18 @@ func normalizeClaudeImage(img core.ImageAttachment) core.ImageAttachment {
 		return img
 	}
 
-	decoded, _, err := image.Decode(bytes.NewReader(img.Data))
+	decoded, format, err := image.Decode(bytes.NewReader(img.Data))
 	if err != nil {
 		if looksLikeHEIC(img) {
+			slog.Info("claudeSession: attempting HEIC conversion", "file", img.FileName, "mime", img.MimeType, "bytes", len(img.Data))
 			converted, convErr := heicImageConverter(img)
 			if convErr == nil {
+				slog.Info("claudeSession: HEIC conversion succeeded", "file", img.FileName, "out_file", converted.FileName, "out_mime", converted.MimeType, "out_bytes", len(converted.Data))
 				return converted
 			}
 			slog.Warn("claudeSession: HEIC conversion failed, using original image", "error", convErr, "file", img.FileName)
+		} else {
+			slog.Warn("claudeSession: image decode failed, using original image", "error", err, "file", img.FileName, "mime", img.MimeType, "bytes", len(img.Data))
 		}
 		return img
 	}
@@ -405,7 +419,36 @@ func normalizeClaudeImage(img core.ImageAttachment) core.ImageAttachment {
 		base := strings.TrimSuffix(normalized.FileName, filepath.Ext(normalized.FileName))
 		normalized.FileName = base + ".png"
 	}
+	slog.Debug("claudeSession: image normalized", "file", img.FileName, "mime", img.MimeType, "bytes", len(img.Data), "decoded_format", format, "out_file", normalized.FileName, "out_mime", normalized.MimeType, "out_bytes", len(normalized.Data))
 	return normalized
+}
+
+func containsClaudeImageError(content string) bool {
+	lower := strings.ToLower(content)
+	return strings.Contains(lower, "could not process image") ||
+		(strings.Contains(lower, "api error: 400") && strings.Contains(lower, "image"))
+}
+
+func (cs *claudeSession) recordToolUse(toolName, inputSummary string) {
+	entry := toolName
+	if strings.TrimSpace(inputSummary) != "" {
+		entry += ": " + inputSummary
+	}
+	cs.recentMu.Lock()
+	defer cs.recentMu.Unlock()
+	cs.recentTools = append(cs.recentTools, entry)
+	if len(cs.recentTools) > 12 {
+		cs.recentTools = append([]string(nil), cs.recentTools[len(cs.recentTools)-12:]...)
+	}
+}
+
+func (cs *claudeSession) snapshotRecentTools() []string {
+	cs.recentMu.Lock()
+	defer cs.recentMu.Unlock()
+	if len(cs.recentTools) == 0 {
+		return nil
+	}
+	return append([]string(nil), cs.recentTools...)
 }
 
 func looksLikeHEIC(img core.ImageAttachment) bool {
@@ -509,7 +552,9 @@ func (cs *claudeSession) Send(prompt string, images []core.ImageAttachment, file
 	var parts []map[string]any
 	normalizedImages := make([]core.ImageAttachment, 0, len(images))
 	for _, img := range images {
-		normalizedImages = append(normalizedImages, normalizeClaudeImage(img))
+		normalized := normalizeClaudeImage(img)
+		slog.Info("claudeSession: prepared image", "file", img.FileName, "mime", img.MimeType, "bytes", len(img.Data), "normalized_file", normalized.FileName, "normalized_mime", normalized.MimeType, "normalized_bytes", len(normalized.Data), "heic", looksLikeHEIC(img))
+		normalizedImages = append(normalizedImages, normalized)
 	}
 	savedPaths := core.SaveImagesToDisk(cs.workDir, normalizedImages)
 	for i, img := range normalizedImages {
