@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -43,6 +44,8 @@ type claudeSession struct {
 	done        chan struct{}
 	alive       atomic.Bool
 }
+
+var heicImageConverter = convertHEICImage
 
 func newClaudeSession(ctx context.Context, workDir, model, sessionID, mode string, allowedTools []string, extraEnv []string) (*claudeSession, error) {
 	sessionCtx, cancel := context.WithCancel(ctx)
@@ -380,6 +383,13 @@ func normalizeClaudeImage(img core.ImageAttachment) core.ImageAttachment {
 
 	decoded, _, err := image.Decode(bytes.NewReader(img.Data))
 	if err != nil {
+		if looksLikeHEIC(img) {
+			converted, convErr := heicImageConverter(img)
+			if convErr == nil {
+				return converted
+			}
+			slog.Warn("claudeSession: HEIC conversion failed, using original image", "error", convErr, "file", img.FileName)
+		}
 		return img
 	}
 
@@ -396,6 +406,85 @@ func normalizeClaudeImage(img core.ImageAttachment) core.ImageAttachment {
 		normalized.FileName = base + ".png"
 	}
 	return normalized
+}
+
+func looksLikeHEIC(img core.ImageAttachment) bool {
+	name := strings.ToLower(strings.TrimSpace(img.FileName))
+	if strings.HasSuffix(name, ".heic") || strings.HasSuffix(name, ".heif") {
+		return true
+	}
+
+	mimeType := strings.ToLower(strings.TrimSpace(img.MimeType))
+	if strings.Contains(mimeType, "heic") || strings.Contains(mimeType, "heif") {
+		return true
+	}
+
+	if len(img.Data) < 12 {
+		return false
+	}
+	if string(img.Data[4:8]) != "ftyp" {
+		return false
+	}
+	brand := string(img.Data[8:12])
+	switch brand {
+	case "heic", "heix", "hevc", "hevx", "heim", "heis", "hevm", "hevs", "mif1", "msf1":
+		return true
+	default:
+		return false
+	}
+}
+
+func convertHEICImage(img core.ImageAttachment) (core.ImageAttachment, error) {
+	tmpDir, err := os.MkdirTemp("", "cc-connect-heic-*")
+	if err != nil {
+		return img, err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	name := strings.TrimSpace(img.FileName)
+	if name == "" {
+		name = "image.heic"
+	}
+	if ext := strings.ToLower(filepath.Ext(name)); ext == "" || (ext != ".heic" && ext != ".heif") {
+		name = strings.TrimSuffix(name, filepath.Ext(name)) + ".heic"
+	}
+
+	inputPath := filepath.Join(tmpDir, filepath.Base(name))
+	outputPath := filepath.Join(tmpDir, strings.TrimSuffix(filepath.Base(name), filepath.Ext(name))+".png")
+	if err := os.WriteFile(inputPath, img.Data, 0o644); err != nil {
+		return img, err
+	}
+
+	var cmd *exec.Cmd
+	if runtime.GOOS == "darwin" {
+		if _, err := exec.LookPath("sips"); err == nil {
+			cmd = exec.Command("sips", "-s", "format", "png", inputPath, "--out", outputPath)
+		}
+	}
+	if cmd == nil {
+		if _, err := exec.LookPath("ffmpeg"); err == nil {
+			cmd = exec.Command("ffmpeg", "-y", "-i", inputPath, outputPath)
+		} else if _, err := exec.LookPath("magick"); err == nil {
+			cmd = exec.Command("magick", inputPath, outputPath)
+		}
+	}
+	if cmd == nil {
+		return img, fmt.Errorf("no HEIC converter available (tried sips, ffmpeg, magick)")
+	}
+
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return img, fmt.Errorf("%s: %w: %s", filepath.Base(cmd.Path), err, strings.TrimSpace(string(output)))
+	}
+
+	convertedData, err := os.ReadFile(outputPath)
+	if err != nil {
+		return img, err
+	}
+	converted := img
+	converted.Data = convertedData
+	converted.MimeType = "image/png"
+	converted.FileName = strings.TrimSuffix(filepath.Base(name), filepath.Ext(name)) + ".png"
+	return converted, nil
 }
 
 // Send writes a user message (with optional images) to the Claude process stdin.

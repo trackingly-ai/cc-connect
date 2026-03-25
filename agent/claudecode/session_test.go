@@ -137,3 +137,47 @@ func TestNormalizeClaudeImage_KeepsUndecodableBytes(t *testing.T) {
 		t.Fatalf("unexpected fallback image: %#v", img)
 	}
 }
+
+func TestLooksLikeHEICByHeaderAndName(t *testing.T) {
+	img := core.ImageAttachment{
+		FileName: "cover.jpg",
+		Data:     append([]byte{0, 0, 0, 24}, append([]byte("ftypheic"), []byte("rest")...)...),
+	}
+	if !looksLikeHEIC(img) {
+		t.Fatal("expected HEIC header to be detected")
+	}
+
+	img = core.ImageAttachment{FileName: "photo.heic"}
+	if !looksLikeHEIC(img) {
+		t.Fatal("expected .heic filename to be detected")
+	}
+}
+
+func TestNormalizeClaudeImage_UsesHEICConverter(t *testing.T) {
+	orig := heicImageConverter
+	t.Cleanup(func() { heicImageConverter = orig })
+
+	heicImageConverter = func(img core.ImageAttachment) (core.ImageAttachment, error) {
+		return core.ImageAttachment{
+			MimeType: "image/png",
+			Data:     []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a},
+			FileName: "cover.png",
+		}, nil
+	}
+
+	img := normalizeClaudeImage(core.ImageAttachment{
+		MimeType: "image/jpeg",
+		FileName: "cover.jpg",
+		Data:     append([]byte{0, 0, 0, 24}, append([]byte("ftypheic"), []byte("rest")...)...),
+	})
+
+	if img.MimeType != "image/png" {
+		t.Fatalf("mime = %q, want image/png", img.MimeType)
+	}
+	if img.FileName != "cover.png" {
+		t.Fatalf("fileName = %q, want cover.png", img.FileName)
+	}
+	if !bytes.HasPrefix(img.Data, []byte{0x89, 0x50, 0x4e, 0x47}) {
+		t.Fatalf("expected converted PNG, got %#v", img.Data)
+	}
+}
