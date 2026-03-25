@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
+
+	"github.com/chenhg5/cc-connect/core"
 )
 
 func TestReadJSONLines_AllowsLargeJSONLRecords(t *testing.T) {
@@ -88,5 +91,49 @@ func TestBuildClaudeSessionArgsDoesNotResumeSyntheticSessionKey(t *testing.T) {
 
 	if slices.Contains(args, "--resume") {
 		t.Fatalf("args unexpectedly resumed synthetic session key: %v", args)
+	}
+}
+
+func TestNormalizeClaudeImage_ReencodesToPNG(t *testing.T) {
+	// Valid 1x1 RGBA PNG that reproduces Claude's "Could not process image" error
+	// when sent without normalization.
+	raw := []byte{
+		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
+		0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+		0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00,
+		0x0d, 0x49, 0x44, 0x41, 0x54, 0x08, 0x63, 0xf8, 0xff, 0xff, 0xff, 0x19,
+		0x00, 0x09, 0xfb, 0x03, 0xff, 0xda, 0x13, 0x7c, 0x37, 0x00, 0x00, 0x00,
+		0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+	}
+
+	img := normalizeClaudeImage(core.ImageAttachment{
+		MimeType: "image/png",
+		Data:     raw,
+		FileName: "tiny.png",
+	})
+
+	if img.MimeType != "image/png" {
+		t.Fatalf("mime = %q, want image/png", img.MimeType)
+	}
+	if img.FileName != "tiny.png" {
+		t.Fatalf("fileName = %q, want tiny.png", img.FileName)
+	}
+	if len(img.Data) == 0 {
+		t.Fatal("normalized image data is empty")
+	}
+	if !bytes.HasPrefix(img.Data, []byte{0x89, 0x50, 0x4e, 0x47}) {
+		t.Fatalf("normalized image is not a PNG")
+	}
+}
+
+func TestNormalizeClaudeImage_KeepsUndecodableBytes(t *testing.T) {
+	img := normalizeClaudeImage(core.ImageAttachment{
+		MimeType: "image/webp",
+		Data:     []byte("not-an-image"),
+		FileName: "bad.webp",
+	})
+
+	if img.MimeType != "image/webp" || !bytes.Equal(img.Data, []byte("not-an-image")) || !strings.HasSuffix(img.FileName, ".webp") {
+		t.Fatalf("unexpected fallback image: %#v", img)
 	}
 }

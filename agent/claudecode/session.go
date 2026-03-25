@@ -8,10 +8,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	"image/png"
 	"io"
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -368,10 +373,36 @@ func (cs *claudeSession) handleControlRequest(raw map[string]any) {
 	}
 }
 
+func normalizeClaudeImage(img core.ImageAttachment) core.ImageAttachment {
+	if len(img.Data) == 0 {
+		return img
+	}
+
+	decoded, _, err := image.Decode(bytes.NewReader(img.Data))
+	if err != nil {
+		return img
+	}
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, decoded); err != nil {
+		return img
+	}
+
+	normalized := img
+	normalized.Data = buf.Bytes()
+	normalized.MimeType = "image/png"
+	if normalized.FileName != "" {
+		base := strings.TrimSuffix(normalized.FileName, filepath.Ext(normalized.FileName))
+		normalized.FileName = base + ".png"
+	}
+	return normalized
+}
+
 // Send writes a user message (with optional images) to the Claude process stdin.
-// Images are saved to local temp files first, then sent as base64 in the
-// multimodal content array. File paths are also mentioned in the text prompt
-// as a fallback so Claude Code can read them with its built-in tools.
+// Images are normalized to a canonical PNG encoding first because some valid
+// image files still trigger "Could not process image" errors from Claude's API.
+// The normalized images are then sent as base64 in the multimodal content
+// array, with local file paths also mentioned in the text prompt as a fallback.
 func (cs *claudeSession) Send(prompt string, images []core.ImageAttachment, files []core.FileAttachment) error {
 	if !cs.alive.Load() {
 		return fmt.Errorf("session process is not running")
@@ -387,8 +418,12 @@ func (cs *claudeSession) Send(prompt string, images []core.ImageAttachment, file
 	}
 
 	var parts []map[string]any
-	savedPaths := core.SaveImagesToDisk(cs.workDir, images)
-	for i, img := range images {
+	normalizedImages := make([]core.ImageAttachment, 0, len(images))
+	for _, img := range images {
+		normalizedImages = append(normalizedImages, normalizeClaudeImage(img))
+	}
+	savedPaths := core.SaveImagesToDisk(cs.workDir, normalizedImages)
+	for i, img := range normalizedImages {
 		if i < len(savedPaths) {
 			slog.Debug("claudeSession: image saved", "path", savedPaths[i], "size", len(img.Data))
 		}
