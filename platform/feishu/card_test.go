@@ -104,3 +104,15 @@ func TestRenderDeleteModeCheckerCard_InvalidCardReturnsFalse(t *testing.T) {
 		t.Fatalf("got transformed=%#v ok=%v, want nil false", transformed, ok)
 	}
 }
+
+func TestExtractCardActionData_PrefersActionAndFallsBackToData(t *testing.T) {
+	if got := extractCardActionData(map[string]any{"action": "act:/cron enable job-1"}); got != "act:/cron enable job-1" {
+		t.Fatalf("got %q, want action value", got)
+	}
+	if got := extractCardActionData(map[string]any{"data": "perm:allow"}); got != "perm:allow" {
+		t.Fatalf("got %q, want data fallback", got)
+	}
+	if got := extractCardActionData(map[string]any{"other": "x"}); got != "" {
+		t.Fatalf("got %q, want empty", got)
+	}
+}

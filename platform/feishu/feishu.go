@@ -1090,8 +1090,9 @@ func (p *Platform) onCardAction(event *callback.CardActionTriggerEvent) (*callba
 		messageID = event.Event.Context.OpenMessageID
 	}
 
-	// Extract the callback data from the button's value map
-	data, _ := action.Value["data"].(string)
+	// Support both the legacy button payload key ("data") and the card framework
+	// payload key ("action") so old and new interactive cards keep working.
+	data := extractCardActionData(action.Value)
 	if data == "" {
 		slog.Debug("feishu: card action with no data value", "value", action.Value)
 		return nil, nil
@@ -1248,6 +1249,17 @@ func (p *Platform) buildCardActionResponseWithLabel(event *callback.CardActionTr
 		Toast: &callback.Toast{Type: "info", Content: label},
 		Card:  &callback.Card{Type: "raw", Data: card},
 	}
+}
+
+func extractCardActionData(value map[string]any) string {
+	if value == nil {
+		return ""
+	}
+	if data, _ := value["action"].(string); data != "" {
+		return data
+	}
+	data, _ := value["data"].(string)
+	return data
 }
 
 // SendWithButtons sends a card message with interactive buttons.
