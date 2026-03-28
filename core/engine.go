@@ -527,6 +527,16 @@ func (e *Engine) ExecuteCronJob(job *CronJob) error {
 		ReplyCtx:   replyCtx,
 	}
 
+	if job.UsesNewSessionPerRun() {
+		e.cleanupInteractiveState(sessionKey)
+		session := e.sessions.NewSession(sessionKey, "cron-"+job.ID)
+		if !session.TryLock() {
+			return fmt.Errorf("session %q is busy", sessionKey)
+		}
+		e.processInteractiveMessage(targetPlatform, msg, session)
+		return nil
+	}
+
 	session := e.sessions.GetOrCreateActive(sessionKey)
 	if !session.TryLock() {
 		return fmt.Errorf("session %q is busy", sessionKey)
@@ -547,7 +557,15 @@ func (e *Engine) executeCronShell(p Platform, replyCtx any, job *CronJob) error 
 		workDir, _ = os.Getwd()
 	}
 
-	ctx, cancel := context.WithTimeout(e.ctx, cronJobTimeout)
+	var (
+		ctx    context.Context
+		cancel context.CancelFunc
+	)
+	if timeout := job.ExecutionTimeout(); timeout > 0 {
+		ctx, cancel = context.WithTimeout(e.ctx, timeout)
+	} else {
+		ctx, cancel = context.WithCancel(e.ctx)
+	}
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", job.Exec)
@@ -1547,6 +1565,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 
 	state.mu.Lock()
 	sp := newStreamPreview(e.streamPreview, state.platform, state.replyCtx, e.ctx)
+	cp := newCompactProgressWriter(e.ctx, state.platform, state.replyCtx)
 	state.mu.Unlock()
 
 	// Idle timeout: 0 = disabled
@@ -1669,7 +1688,10 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			if !quiet && event.Content != "" {
 				sp.freeze()
 				preview := truncateIf(event.Content, e.display.ThinkingMaxLen)
-				e.send(p, replyCtx, fmt.Sprintf(e.i18n.T(MsgThinking), preview))
+				msg := fmt.Sprintf(e.i18n.T(MsgThinking), preview)
+				if !cp.Append(msg) {
+					e.send(p, replyCtx, msg)
+				}
 			}
 
 		case EventToolUse:
@@ -1685,7 +1707,10 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				} else {
 					formattedInput = fmt.Sprintf("`%s`", inputPreview)
 				}
-				e.send(p, replyCtx, fmt.Sprintf(e.i18n.T(MsgTool), toolCount, event.ToolName, formattedInput))
+				msg := fmt.Sprintf(e.i18n.T(MsgTool), toolCount, event.ToolName, formattedInput)
+				if !cp.Append(msg) {
+					e.send(p, replyCtx, msg)
+				}
 			}
 
 		case EventText:
@@ -1758,6 +1783,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			}
 
 		case EventResult:
+			cp.Finalize()
 			if event.SessionID != "" {
 				session.mu.Lock()
 				session.AgentSessionID = event.SessionID
@@ -1856,6 +1882,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			return
 
 		case EventError:
+			cp.Finalize()
 			sp.finish("") // clean up preview on error
 			if event.Error != nil {
 				slog.Error("agent error", "error", event.Error)
@@ -2976,7 +3003,7 @@ func (e *Engine) cmdMode(p Platform, msg *Message, args []string) {
 				sb.WriteString(fmt.Sprintf("%s**%s** — %s\n", marker, m.Name, m.Desc))
 			}
 		}
-		sb.WriteString(e.i18n.T(MsgModeUsage))
+		sb.WriteString(e.modeUsageText(modes))
 
 		var buttons [][]ButtonOption
 		var row []ButtonOption
@@ -5108,6 +5135,14 @@ func (e *Engine) cmdBind(p Platform, msg *Message, args []string) {
 	}
 
 	e.reply(p, msg.ReplyCtx, reply)
+}
+
+func (e *Engine) modeUsageText(modes []PermissionModeInfo) string {
+	keys := make([]string, 0, len(modes))
+	for _, mode := range modes {
+		keys = append(keys, "`"+mode.Key+"`")
+	}
+	return e.i18n.Tf(MsgModeUsage, strings.Join(keys, " / "))
 }
 
 func (e *Engine) cmdBindStatus(p Platform, replyCtx any, chatID string) {

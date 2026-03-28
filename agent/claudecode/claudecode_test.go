@@ -11,7 +11,7 @@ func TestNormalizePermissionMode(t *testing.T) {
 		"accept_edits":       "acceptEdits",
 		"plan":               "plan",
 		"yolo":               "bypassPermissions",
-		"auto":               "bypassPermissions",
+		"auto":               "auto",
 		"bypass-permissions": "bypassPermissions",
 		"bypass_permissions": "bypassPermissions",
 		"dontAsk":            "dontAsk",

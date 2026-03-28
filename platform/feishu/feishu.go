@@ -42,6 +42,7 @@ type Platform struct {
 	appID                 string
 	appSecret             string
 	reactionEmoji         string
+	progressStyle         string
 	allowFrom             string
 	groupReplyAll         bool
 	shareSessionInChannel bool
@@ -71,11 +72,23 @@ func New(opts map[string]any) (core.Platform, error) {
 	groupReplyAll, _ := opts["group_reply_all"].(bool)
 	shareSessionInChannel, _ := opts["share_session_in_channel"].(bool)
 	replyInThread, _ := opts["reply_in_thread"].(bool)
+	progressStyle := "legacy"
+	if v, ok := opts["progress_style"].(string); ok {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "", "legacy":
+			progressStyle = "legacy"
+		case "compact", "card":
+			progressStyle = strings.ToLower(strings.TrimSpace(v))
+		default:
+			return nil, fmt.Errorf("feishu: invalid progress_style %q (want legacy, compact, or card)", v)
+		}
+	}
 
 	return &Platform{
 		appID:                 appID,
 		appSecret:             appSecret,
 		reactionEmoji:         reactionEmoji,
+		progressStyle:         progressStyle,
 		allowFrom:             allowFrom,
 		groupReplyAll:         groupReplyAll,
 		shareSessionInChannel: shareSessionInChannel,
@@ -85,6 +98,8 @@ func New(opts map[string]any) (core.Platform, error) {
 }
 
 func (p *Platform) Name() string { return "feishu" }
+
+func (p *Platform) ProgressStyle() string { return p.progressStyle }
 
 func (p *Platform) Start(handler core.MessageHandler) error {
 	p.handler = handler

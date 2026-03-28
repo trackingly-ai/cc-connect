@@ -358,7 +358,7 @@ type = "claudecode"
 
 [projects.agent.options]
 work_dir = "/path/to/backend"
-mode = "default" # "default" | "acceptEdits" (edit) | "plan" | "bypassPermissions" (yolo)
+mode = "default" # "default" | "acceptEdits" (edit) | "plan" | "auto" | "bypassPermissions" (yolo)
 
 # Optional: expose this project as an Echo worker lane.
 # 可选：把这个 project 暴露为 Echo 的一个 worker lane。
@@ -374,6 +374,7 @@ mode = "default" # "default" | "acceptEdits" (edit) | "plan" | "bypassPermission
 # - "default":            Every tool call requires user approval. / 每次工具调用都需要用户确认。
 # - "acceptEdits" (edit): File edit tools auto-approved; other tools still ask. / 文件编辑自动通过，其他仍需确认。
 # - "plan":               Claude only plans — no execution until you approve. / 只做规划不执行，审批后再执行。
+# - "auto":               Claude automatically decides when a permission prompt is needed. / Claude 自动判断何时需要确认。
 # - "bypassPermissions" (yolo): All tool calls auto-approved. Use with caution. / 全部自动通过，请谨慎使用。
 # - "dontAsk" (dont-ask): Auto-deny tools unless pre-approved via allowed_tools or settings allow rules. / 未预授权的工具自动拒绝，安全推荐。
 #
@@ -464,6 +465,8 @@ app_secret = "your-feishu-app-secret"
 #                                   # 设为 true 时，群聊内所有用户共享同一个 Agent 会话
 # reply_in_thread = false  # If true, all responses are threaded to the original message (helps trace which question triggered which reply)
 #                          # 设为 true 时，所有回复都会引用原消息（方便追踪每条回复对应哪条提问）
+# progress_style = "legacy" # "legacy" | "compact" | "card" for Feishu progress updates
+#                           # 飞书中思考/工具调用进度的展示样式
 
 # DingTalk / 钉钉 (uncomment to enable / 取消注释以启用)
 # 1. Create an app at https://open-dev.dingtalk.com / 在钉钉开放平台创建应用

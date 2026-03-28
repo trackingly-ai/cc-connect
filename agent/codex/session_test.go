@@ -49,7 +49,11 @@ func TestSend_HandlesLargeJSONLines(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newCodexSession: %v", err)
 	}
-	defer cs.Close()
+	defer func() {
+		if err := cs.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}()
 
 	if err := cs.Send("hello", nil, nil); err != nil {
 		t.Fatalf("Send: %v", err)
@@ -169,7 +173,11 @@ echo '{"type":"turn.completed"}'
 	if err != nil {
 		t.Fatalf("newCodexSession: %v", err)
 	}
-	defer cs.Close()
+	defer func() {
+		if err := cs.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}()
 
 	if err := cs.Send("", []core.ImageAttachment{{
 		MimeType: "image/png",
@@ -213,7 +221,85 @@ done:
 	if !strings.HasPrefix(args[imageIdx+1], filepath.Join(workDir, ".cc-connect", "images")+string(os.PathSeparator)) {
 		t.Fatalf("image arg = %q, want saved image path in work dir", args[imageIdx+1])
 	}
-	if got := args[len(args)-1]; got != "Please analyze the attached image(s)." {
-		t.Fatalf("final prompt = %q, want fallback image prompt", got)
+	if got := args[len(args)-1]; got != "-" {
+		t.Fatalf("last arg = %q, want stdin marker '-'", got)
 	}
+}
+
+func TestSend_UsesStdinForMultilinePrompt(t *testing.T) {
+	workDir := t.TempDir()
+	binDir := filepath.Join(workDir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+
+	argsFile := filepath.Join(workDir, "args.txt")
+	stdinFile := filepath.Join(workDir, "stdin.txt")
+	script := "#!/bin/sh\n" +
+		"printf '%s\\n' \"$@\" > \"$CODEX_ARGS_FILE\"\n" +
+		"cat > \"$CODEX_STDIN_FILE\"\n" +
+		"printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"thread-stdin\"}'\n" +
+		"printf '%s\\n' '{\"type\":\"turn.completed\"}'\n"
+	scriptPath := filepath.Join(binDir, "codex")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake codex: %v", err)
+	}
+
+	t.Setenv("CODEX_ARGS_FILE", argsFile)
+	t.Setenv("CODEX_STDIN_FILE", stdinFile)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	cs, err := newCodexSession(context.Background(), workDir, "", "", "", nil)
+	if err != nil {
+		t.Fatalf("newCodexSession: %v", err)
+	}
+	defer func() {
+		if err := cs.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}()
+
+	prompt := "line1\nline2"
+	if err := cs.Send(prompt, nil, nil); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	argsBytes, err := waitForFileContent(argsFile)
+	if err != nil {
+		t.Fatalf("wait for args: %v", err)
+	}
+	args := strings.Split(strings.TrimSpace(string(argsBytes)), "\n")
+	if len(args) == 0 || args[len(args)-1] != "-" {
+		t.Fatalf("args last element = %q, want stdin marker '-'; args=%v", args[len(args)-1], args)
+	}
+	foundJSON := false
+	for _, arg := range args {
+		if arg == "--json" {
+			foundJSON = true
+			break
+		}
+	}
+	if !foundJSON {
+		t.Fatalf("args missing --json: %v", args)
+	}
+
+	data, err := waitForFileContent(stdinFile)
+	if err != nil {
+		t.Fatalf("wait for stdin: %v", err)
+	}
+	if !strings.Contains(string(data), prompt) {
+		t.Fatalf("stdin content = %q, want to contain %q", string(data), prompt)
+	}
+}
+
+func waitForFileContent(path string) ([]byte, error) {
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			return data, nil
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return nil, os.ErrNotExist
 }

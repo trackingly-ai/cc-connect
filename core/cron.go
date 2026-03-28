@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +28,9 @@ type CronJob struct {
 	Description string    `json:"description"`
 	Enabled     bool      `json:"enabled"`
 	Silent      *bool     `json:"silent,omitempty"` // suppress start notification; nil = use global default
+	Mute        bool      `json:"mute,omitempty"`   // suppress all outbound messages for this job
+	SessionMode string    `json:"session_mode,omitempty"`
+	TimeoutMins *int      `json:"timeout_mins,omitempty"` // nil=30m, 0=unlimited, >0=minutes
 	CreatedAt   time.Time `json:"created_at"`
 	LastRun     time.Time `json:"last_run,omitempty"`
 	LastError   string    `json:"last_error,omitempty"`
@@ -35,6 +39,45 @@ type CronJob struct {
 // IsShellJob returns true if the job executes a shell command directly.
 func (j *CronJob) IsShellJob() bool {
 	return strings.TrimSpace(j.Exec) != ""
+}
+
+const defaultCronJobTimeout = 30 * time.Minute
+
+func (j *CronJob) ExecutionTimeout() time.Duration {
+	if j.TimeoutMins == nil {
+		return defaultCronJobTimeout
+	}
+	if *j.TimeoutMins <= 0 {
+		return 0
+	}
+	return time.Duration(*j.TimeoutMins) * time.Minute
+}
+
+func NormalizeCronSessionMode(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	switch s {
+	case "", "reuse":
+		return ""
+	case "new_per_run", "new-per-run":
+		return "new_per_run"
+	default:
+		return s
+	}
+}
+
+func (j *CronJob) UsesNewSessionPerRun() bool {
+	return NormalizeCronSessionMode(j.SessionMode) == "new_per_run"
+}
+
+func validateCronJob(j *CronJob) error {
+	mode := NormalizeCronSessionMode(j.SessionMode)
+	if mode != "" && mode != "new_per_run" {
+		return fmt.Errorf("invalid session_mode %q (want reuse, new_per_run, or new-per-run)", j.SessionMode)
+	}
+	if j.TimeoutMins != nil && *j.TimeoutMins < 0 {
+		return fmt.Errorf("timeout_mins must be >= 0")
+	}
+	return nil
 }
 
 // CronStore persists cron jobs to a JSON file.
@@ -172,6 +215,143 @@ func (s *CronStore) Get(id string) *CronJob {
 	return nil
 }
 
+func (s *CronStore) SetMute(id string, mute bool) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, j := range s.jobs {
+		if j.ID == id {
+			j.Mute = mute
+			if err := s.save(); err != nil {
+				slog.Error("cron: failed to save jobs after mute toggle", "id", id, "mute", mute, "error", err)
+			}
+			return true
+		}
+	}
+	return false
+}
+
+func (s *CronStore) Update(id, field string, value any) bool {
+	readOnly := map[string]bool{
+		"id": true, "created_at": true, "last_run": true, "last_error": true,
+	}
+	if readOnly[field] {
+		return false
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, j := range s.jobs {
+		if j.ID == id {
+			if err := updateCronJobField(j, field, value); err != nil {
+				return false
+			}
+			if err := s.save(); err != nil {
+				slog.Error("cron: failed to save jobs after update", "id", id, "field", field, "error", err)
+			}
+			return true
+		}
+	}
+	return false
+}
+
+func updateCronJobField(job *CronJob, field string, value any) error {
+	switch field {
+	case "project":
+		if v, ok := value.(string); ok {
+			job.Project = v
+			return nil
+		}
+	case "session_key":
+		if v, ok := value.(string); ok {
+			job.SessionKey = v
+			return nil
+		}
+	case "cron_expr":
+		if v, ok := value.(string); ok {
+			job.CronExpr = v
+			return nil
+		}
+	case "prompt":
+		if v, ok := value.(string); ok {
+			job.Prompt = v
+			return nil
+		}
+	case "exec":
+		if v, ok := value.(string); ok {
+			job.Exec = v
+			return nil
+		}
+	case "work_dir":
+		if v, ok := value.(string); ok {
+			job.WorkDir = v
+			return nil
+		}
+	case "description":
+		if v, ok := value.(string); ok {
+			job.Description = v
+			return nil
+		}
+	case "enabled":
+		if v, ok := value.(bool); ok {
+			job.Enabled = v
+			return nil
+		}
+	case "silent":
+		if v, ok := value.(bool); ok {
+			job.Silent = &v
+			return nil
+		}
+	case "mute":
+		if v, ok := value.(bool); ok {
+			job.Mute = v
+			return nil
+		}
+	case "session_mode":
+		if v, ok := value.(string); ok {
+			job.SessionMode = NormalizeCronSessionMode(v)
+			return nil
+		}
+	case "timeout_mins":
+		switch v := value.(type) {
+		case int:
+			job.TimeoutMins = &v
+			return nil
+		case float64:
+			n := int(v)
+			job.TimeoutMins = &n
+			return nil
+		}
+	}
+
+	if v, ok := value.(string); ok {
+		rv := reflect.ValueOf(job).Elem()
+		f := rv.FieldByName(toExportedFieldName(field))
+		if f.IsValid() && f.Kind() == reflect.String && f.CanSet() {
+			f.SetString(v)
+			return nil
+		}
+	}
+	return fmt.Errorf("unknown or invalid field: %s", field)
+}
+
+func toExportedFieldName(s string) string {
+	var b strings.Builder
+	upper := true
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '_' {
+			upper = true
+			continue
+		}
+		if upper && c >= 'a' && c <= 'z' {
+			c -= 32
+		}
+		upper = false
+		b.WriteByte(c)
+	}
+	return b.String()
+}
+
 // CronScheduler runs cron jobs by injecting synthetic messages into engines.
 type CronScheduler struct {
 	store         *CronStore
@@ -228,6 +408,10 @@ func (cs *CronScheduler) Stop() {
 }
 
 func (cs *CronScheduler) AddJob(job *CronJob) error {
+	if err := validateCronJob(job); err != nil {
+		return err
+	}
+	job.SessionMode = NormalizeCronSessionMode(job.SessionMode)
 	if _, err := cron.ParseStandard(job.CronExpr); err != nil {
 		return fmt.Errorf("invalid cron expression %q: %w", job.CronExpr, err)
 	}
@@ -274,6 +458,51 @@ func (cs *CronScheduler) DisableJob(id string) error {
 	return nil
 }
 
+func (cs *CronScheduler) UpdateJob(id, field string, value any) error {
+	job := cs.store.Get(id)
+	if job == nil {
+		return fmt.Errorf("job %q not found", id)
+	}
+	if field == "cron_expr" {
+		expr, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("cron_expr must be a string")
+		}
+		if _, err := cron.ParseStandard(expr); err != nil {
+			return fmt.Errorf("invalid cron expression %q: %w", expr, err)
+		}
+	}
+
+	needsReschedule := field == "cron_expr" || field == "enabled"
+	if needsReschedule {
+		cs.mu.Lock()
+		if entryID, ok := cs.entries[id]; ok {
+			cs.cron.Remove(entryID)
+			delete(cs.entries, id)
+		}
+		cs.mu.Unlock()
+	}
+
+	if !cs.store.Update(id, field, value) {
+		return fmt.Errorf("failed to update field %q (may be read-only or invalid type)", field)
+	}
+
+	updated := cs.store.Get(id)
+	if updated != nil {
+		if err := validateCronJob(updated); err != nil {
+			return err
+		}
+		updated.SessionMode = NormalizeCronSessionMode(updated.SessionMode)
+	}
+
+	if needsReschedule && updated != nil && updated.Enabled {
+		if err := cs.scheduleJob(updated); err != nil {
+			return fmt.Errorf("reschedule failed: %w", err)
+		}
+	}
+	return nil
+}
+
 func (cs *CronScheduler) Store() *CronStore {
 	return cs.store
 }
@@ -314,8 +543,6 @@ func (cs *CronScheduler) scheduleJob(job *CronJob) error {
 	return nil
 }
 
-const cronJobTimeout = 30 * time.Minute
-
 func (cs *CronScheduler) executeJob(jobID string) {
 	job := cs.store.Get(jobID)
 	if job == nil || !job.Enabled {
@@ -340,10 +567,15 @@ func (cs *CronScheduler) executeJob(jobID string) {
 	}()
 
 	var err error
-	select {
-	case err = <-done:
-	case <-time.After(cronJobTimeout):
-		err = fmt.Errorf("job timed out after %v", cronJobTimeout)
+	timeout := job.ExecutionTimeout()
+	if timeout <= 0 {
+		err = <-done
+	} else {
+		select {
+		case err = <-done:
+		case <-time.After(timeout):
+			err = fmt.Errorf("job timed out after %v", timeout)
+		}
 	}
 
 	cs.store.MarkRun(jobID, err)

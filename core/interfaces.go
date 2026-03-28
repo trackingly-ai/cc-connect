@@ -134,6 +134,13 @@ type MessageUpdater interface {
 	UpdateMessage(ctx context.Context, replyCtx any, content string) error
 }
 
+// ProgressStyleProvider is an optional interface for platforms that expose a
+// preferred style for intermediate progress rendering.
+// Supported styles in core today: "legacy", "compact", "card".
+type ProgressStyleProvider interface {
+	ProgressStyle() string
+}
+
 // ButtonOption represents a clickable inline button.
 type ButtonOption struct {
 	Text string // display text on the button

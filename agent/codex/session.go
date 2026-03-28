@@ -110,9 +110,9 @@ func (cs *codexSession) Send(prompt string, images []core.ImageAttachment, files
 	}
 
 	if isResume {
-		args = append(args, tid, prompt)
+		args = append(args, tid, "-")
 	} else {
-		args = append(args, "--cd", cs.workDir, prompt)
+		args = append(args, "--cd", cs.workDir, "-")
 	}
 
 	slog.Debug("codexSession: launching", "resume", isResume, "args", core.RedactArgs(args))
@@ -123,6 +123,7 @@ func (cs *codexSession) Send(prompt string, images []core.ImageAttachment, files
 	if len(cs.extraEnv) > 0 {
 		cmd.Env = core.MergeEnv(os.Environ(), cs.extraEnv)
 	}
+	cmd.Stdin = strings.NewReader(prompt)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

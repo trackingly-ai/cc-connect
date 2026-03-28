@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -23,6 +24,10 @@ func runCron(args []string) {
 		runCronAdd(args[1:])
 	case "list":
 		runCronList(args[1:])
+	case "info":
+		runCronInfo(args[1:])
+	case "edit":
+		runCronEdit(args[1:])
 	case "del", "delete", "rm", "remove":
 		runCronDel(args[1:])
 	case "--help", "-h", "help":
@@ -35,7 +40,8 @@ func runCron(args []string) {
 }
 
 func runCronAdd(args []string) {
-	var project, sessionKey, cronExpr, prompt, execCmd, desc, dataDir string
+	var project, sessionKey, cronExpr, prompt, execCmd, desc, dataDir, sessionMode string
+	var timeoutMins *int
 
 	var positional []string
 	for i := 0; i < len(args); i++ {
@@ -74,6 +80,21 @@ func runCronAdd(args []string) {
 			if i+1 < len(args) {
 				i++
 				dataDir = args[i]
+			}
+		case "--session-mode":
+			if i+1 < len(args) {
+				i++
+				sessionMode = args[i]
+			}
+		case "--timeout-mins":
+			if i+1 < len(args) {
+				i++
+				n, err := strconv.Atoi(args[i])
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error: invalid --timeout-mins: %v\n", err)
+					os.Exit(1)
+				}
+				timeoutMins = &n
 			}
 		case "--help", "-h":
 			printCronAddUsage()
@@ -117,30 +138,37 @@ func runCronAdd(args []string) {
 		os.Exit(1)
 	}
 
-	payload, _ := json.Marshal(map[string]string{
+	body := map[string]any{
 		"project":     project,
 		"session_key": sessionKey,
 		"cron_expr":   cronExpr,
 		"prompt":      prompt,
 		"exec":        execCmd,
 		"description": desc,
-	})
+	}
+	if sessionMode != "" {
+		body["session_mode"] = sessionMode
+	}
+	if timeoutMins != nil {
+		body["timeout_mins"] = *timeoutMins
+	}
+	payload, _ := json.Marshal(body)
 
 	resp, err := apiPost(sockPath, "/cron/add", payload)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
-	body, _ := io.ReadAll(resp.Body)
+	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		fmt.Fprintf(os.Stderr, "Error: %s\n", strings.TrimSpace(string(body)))
+		fmt.Fprintf(os.Stderr, "Error: %s\n", strings.TrimSpace(string(respBody)))
 		os.Exit(1)
 	}
 
 	var result map[string]any
-	if err := json.Unmarshal(body, &result); err != nil {
+	if err := json.Unmarshal(respBody, &result); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: invalid cron add response: %v\n", err)
 		os.Exit(1)
 	}
@@ -198,7 +226,7 @@ func runCronList(args []string) {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
@@ -276,7 +304,7 @@ func runCronDel(args []string) {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
@@ -285,6 +313,105 @@ func runCronDel(args []string) {
 	}
 
 	fmt.Printf("Cron job %s deleted.\n", id)
+}
+
+func runCronInfo(args []string) {
+	var dataDir, id string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--data-dir":
+			if i+1 < len(args) {
+				i++
+				dataDir = args[i]
+			}
+		default:
+			id = args[i]
+		}
+	}
+	if id == "" {
+		fmt.Fprintln(os.Stderr, "Error: job ID is required")
+		os.Exit(1)
+	}
+
+	sockPath := resolveSocketPath(dataDir)
+	client := &http.Client{Transport: &http.Transport{
+		DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+			return net.Dial("unix", sockPath)
+		},
+	}}
+	resp, err := client.Get("http://unix/cron/info?id=" + id)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "Error: %s\n", strings.TrimSpace(string(body)))
+		os.Exit(1)
+	}
+	fmt.Println(string(body))
+}
+
+func runCronEdit(args []string) {
+	var dataDir string
+	pos := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--data-dir":
+			if i+1 < len(args) {
+				i++
+				dataDir = args[i]
+			}
+		case "--help", "-h":
+			printCronEditUsage()
+			return
+		default:
+			pos = append(pos, args[i])
+		}
+	}
+	if len(pos) < 3 {
+		fmt.Fprintln(os.Stderr, "Error: usage: cc-connect cron edit <id> <field> <value>")
+		printCronEditUsage()
+		os.Exit(1)
+	}
+	id, field, rawValue := pos[0], pos[1], strings.Join(pos[2:], " ")
+	var value any = rawValue
+	switch field {
+	case "enabled", "mute", "silent":
+		b, err := strconv.ParseBool(rawValue)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: invalid bool for %s: %v\n", field, err)
+			os.Exit(1)
+		}
+		value = b
+	case "timeout_mins":
+		n, err := strconv.Atoi(rawValue)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: invalid int for timeout_mins: %v\n", err)
+			os.Exit(1)
+		}
+		value = n
+	}
+
+	sockPath := resolveSocketPath(dataDir)
+	payload, _ := json.Marshal(map[string]any{
+		"id":    id,
+		"field": field,
+		"value": value,
+	})
+	resp, err := apiPost(sockPath, "/cron/edit", payload)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "Error: %s\n", strings.TrimSpace(string(body)))
+		os.Exit(1)
+	}
+	fmt.Println(string(body))
 }
 
 func apiPost(sockPath, path string, payload []byte) (*http.Response, error) {
@@ -305,6 +432,8 @@ Commands:
   add       Create a new scheduled task
   addexec   Create a scheduled shell task
   list      List all scheduled tasks
+  info <id> Show full JSON for one task
+  edit      Modify one task field
   del <id>  Delete a scheduled task
 
 Run 'cc-connect cron <command> --help' for details.`)
@@ -322,6 +451,8 @@ Options:
       --prompt <text>        Task prompt
       --exec <command>       Shell command to execute
       --desc <text>          Short description
+      --session-mode <mode>  reuse | new_per_run
+      --timeout-mins <mins>  nil=30m, 0=unlimited
       --data-dir <path>      Data directory (default: ~/.cc-connect)
   -h, --help                 Show this help
 
@@ -329,4 +460,18 @@ Examples:
   cc-connect cron add --cron "0 6 * * *" --prompt "Collect GitHub trending data" --desc "Daily Trending"
   cc-connect cron add --cron "0 6 * * *" --exec "git status --short" --desc "Daily Git Check"
   cc-connect cron add 0 6 * * * Collect GitHub trending data and send me a summary`)
+}
+
+func printCronEditUsage() {
+	fmt.Println(`Usage: cc-connect cron edit <id> <field> <value>
+
+Editable fields:
+  project session_key cron_expr prompt exec work_dir description
+  enabled silent mute session_mode timeout_mins
+
+Examples:
+  cc-connect cron edit abc123 description Nightly sync
+  cc-connect cron edit abc123 enabled false
+  cc-connect cron edit abc123 session_mode new_per_run
+  cc-connect cron edit abc123 timeout_mins 10`)
 }
