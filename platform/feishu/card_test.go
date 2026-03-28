@@ -41,6 +41,35 @@ func TestRenderCardMap_EqualColumnsActionsUseColumnSet(t *testing.T) {
 	}
 }
 
+func TestRenderCardMap_SplitsEqualColumnActionsIntoTwoPerRow(t *testing.T) {
+	buttons := []core.CardButton{
+		core.PrimaryBtn("One", "act:/one"),
+		core.DefaultBtn("Two", "act:/two"),
+		core.DefaultBtn("Three", "act:/three"),
+		core.DefaultBtn("Four", "act:/four"),
+	}
+	card := core.NewCard().ButtonsEqual(buttons...).Build()
+	got := decodeRenderedCard(t, card)
+
+	elements, ok := got["elements"].([]any)
+	if !ok || len(elements) != 2 {
+		t.Fatalf("elements = %#v, want 2 rows", got["elements"])
+	}
+	for i, elem := range elements {
+		columnSet, ok := elem.(map[string]any)
+		if !ok {
+			t.Fatalf("element %d = %#v, want object", i, elem)
+		}
+		if tag := columnSet["tag"]; tag != "column_set" {
+			t.Fatalf("element %d tag = %#v, want column_set", i, tag)
+		}
+		columns, ok := columnSet["columns"].([]any)
+		if !ok || len(columns) != 2 {
+			t.Fatalf("element %d columns = %#v, want 2 columns", i, columnSet["columns"])
+		}
+	}
+}
+
 func TestRenderCardMap_DefaultActionsStayActionRow(t *testing.T) {
 	card := core.NewCard().
 		Buttons(core.PrimaryBtn("Yes", "act:/yes"), core.DefaultBtn("No", "act:/no")).
@@ -57,6 +86,30 @@ func TestRenderCardMap_DefaultActionsStayActionRow(t *testing.T) {
 	}
 	if tag := actionRow["tag"]; tag != "action" {
 		t.Fatalf("tag = %#v, want action", tag)
+	}
+}
+
+func TestRenderCardMap_SplitsDefaultActionsIntoTwoPerRow(t *testing.T) {
+	card := core.NewCard().
+		Buttons(
+			core.PrimaryBtn("One", "act:/one"),
+			core.DefaultBtn("Two", "act:/two"),
+			core.DefaultBtn("Three", "act:/three"),
+		).
+		Build()
+	got := decodeRenderedCard(t, card)
+
+	elements, ok := got["elements"].([]any)
+	if !ok || len(elements) != 2 {
+		t.Fatalf("elements = %#v, want 2 rows", got["elements"])
+	}
+	firstRow := elements[0].(map[string]any)
+	secondRow := elements[1].(map[string]any)
+	if len(firstRow["actions"].([]any)) != 2 {
+		t.Fatalf("first row actions = %#v, want 2", firstRow["actions"])
+	}
+	if len(secondRow["actions"].([]any)) != 1 {
+		t.Fatalf("second row actions = %#v, want 1", secondRow["actions"])
 	}
 }
 

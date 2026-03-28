@@ -12,6 +12,21 @@ func plainText(content string) map[string]any {
 	return map[string]any{"tag": "plain_text", "content": content}
 }
 
+func chunkButtonActions(actions []map[string]any, size int) [][]map[string]any {
+	if size <= 0 || len(actions) == 0 {
+		return nil
+	}
+	out := make([][]map[string]any, 0, (len(actions)+size-1)/size)
+	for i := 0; i < len(actions); i += size {
+		end := i + size
+		if end > len(actions) {
+			end = len(actions)
+		}
+		out = append(out, actions[i:end])
+	}
+	return out
+}
+
 // renderCardMap converts a core.Card into the Feishu Interactive Card map.
 func renderCardMap(card *core.Card, sessionKey string) map[string]any {
 	result := map[string]any{
@@ -75,30 +90,32 @@ func renderCardMap(card *core.Card, sessionKey string) map[string]any {
 				actions = append(actions, action)
 			}
 			if len(actions) > 0 {
-				if e.Layout == core.CardActionLayoutEqualColumns {
-					columns := make([]map[string]any, 0, len(actions))
-					for _, action := range actions {
-						columns = append(columns, map[string]any{
-							"tag":              "column",
-							"width":            "weighted",
-							"weight":           1,
-							"vertical_align":   "center",
-							"horizontal_align": "center",
-							"elements":         []map[string]any{action},
-						})
+				for _, row := range chunkButtonActions(actions, 2) {
+					if e.Layout == core.CardActionLayoutEqualColumns {
+						columns := make([]map[string]any, 0, len(row))
+						for _, action := range row {
+							columns = append(columns, map[string]any{
+								"tag":              "column",
+								"width":            "weighted",
+								"weight":           1,
+								"vertical_align":   "center",
+								"horizontal_align": "center",
+								"elements":         []map[string]any{action},
+							})
+						}
+						columnSet := map[string]any{
+							"tag":     "column_set",
+							"columns": columns,
+						}
+						if len(row) == 2 {
+							columnSet["flex_mode"] = "bisect"
+						}
+						elements = append(elements, columnSet)
+						continue
 					}
-					columnSet := map[string]any{
-						"tag":     "column_set",
-						"columns": columns,
-					}
-					if len(actions) == 2 {
-						columnSet["flex_mode"] = "bisect"
-					}
-					elements = append(elements, columnSet)
-				} else {
 					elements = append(elements, map[string]any{
 						"tag":     "action",
-						"actions": actions,
+						"actions": row,
 					})
 				}
 			}

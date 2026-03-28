@@ -348,6 +348,52 @@ func TestCmdCronList_FeishuUsesCardButtons(t *testing.T) {
 	}
 }
 
+func TestRenderCronCard_UsesTwoButtonsPerRow(t *testing.T) {
+	store, err := NewCronStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewCronStore: %v", err)
+	}
+	scheduler := NewCronScheduler(store)
+	e := NewEngine("test", &stubAgent{}, nil, "", LangEnglish)
+	e.SetCronScheduler(scheduler)
+
+	job := &CronJob{
+		ID:         "job-1",
+		Project:    "test",
+		SessionKey: "feishu:chat:user",
+		CronExpr:   "* * * * *",
+		Prompt:     "Collect daily updates",
+		Enabled:    true,
+		CreatedAt:  time.Now(),
+	}
+	if err := scheduler.AddJob(job); err != nil {
+		t.Fatalf("AddJob: %v", err)
+	}
+
+	card := e.renderCronCard(job.SessionKey, "")
+	if card == nil {
+		t.Fatal("expected cron card")
+	}
+
+	rows := 0
+	for _, el := range card.Elements {
+		actions, ok := el.(CardActions)
+		if !ok {
+			continue
+		}
+		if len(actions.Buttons) == 0 {
+			continue
+		}
+		rows++
+		if len(actions.Buttons) > 2 {
+			t.Fatalf("button row size = %d, want <= 2", len(actions.Buttons))
+		}
+	}
+	if rows < 2 {
+		t.Fatalf("button rows = %d, want at least 2", rows)
+	}
+}
+
 func TestHandlePendingCronPromptEditUpdatesPrompt(t *testing.T) {
 	store, err := NewCronStore(t.TempDir())
 	if err != nil {

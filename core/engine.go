@@ -4451,7 +4451,13 @@ func (e *Engine) renderCronCard(sessionKey string, notice string) *Card {
 			btns = append(btns, DefaultBtn("Mute", fmt.Sprintf("act:/cron mute %s", j.ID)))
 		}
 		btns = append(btns, DangerBtn("Delete", fmt.Sprintf("act:/cron delete %s", j.ID)))
-		cb.ButtonsEqual(btns...)
+		for i := 0; i < len(btns); i += 2 {
+			end := i + 2
+			if end > len(btns) {
+				end = len(btns)
+			}
+			cb.ButtonsEqual(btns[i:end]...)
+		}
 	}
 
 	cb.Divider()
