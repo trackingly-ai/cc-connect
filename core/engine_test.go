@@ -257,6 +257,92 @@ func TestCmdDir_ChangesWorkDirAndClearsSession(t *testing.T) {
 	}
 }
 
+func TestCmdCronList_FeishuUsesCardButtons(t *testing.T) {
+	store, err := NewCronStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewCronStore: %v", err)
+	}
+	scheduler := NewCronScheduler(store)
+	e := NewEngine("test", &stubAgent{}, nil, "", LangEnglish)
+	e.SetCronScheduler(scheduler)
+	p := &stubButtonPlatform{n: "feishu"}
+
+	job := &CronJob{
+		ID:         "job-1",
+		Project:    "test",
+		SessionKey: "feishu:chat:user",
+		CronExpr:   "* * * * *",
+		Prompt:     "Collect daily updates",
+		Enabled:    true,
+		CreatedAt:  time.Now(),
+	}
+	if err := scheduler.AddJob(job); err != nil {
+		t.Fatalf("AddJob: %v", err)
+	}
+
+	e.cmdCronList(p, &Message{SessionKey: job.SessionKey, ReplyCtx: "ctx"})
+
+	buttons := p.buttonDataSnapshot()
+	if !slices.Contains(buttons, "act:/cron editprompt job-1") {
+		t.Fatalf("button data = %#v, want editprompt action", buttons)
+	}
+	sent := p.sentSnapshot()
+	if len(sent) == 0 || !strings.Contains(sent[0], "job-1") {
+		t.Fatalf("sent = %#v, want cron card content with job id", sent)
+	}
+}
+
+func TestHandlePendingCronPromptEditUpdatesPrompt(t *testing.T) {
+	store, err := NewCronStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewCronStore: %v", err)
+	}
+	scheduler := NewCronScheduler(store)
+	e := NewEngine("test", &stubAgent{}, nil, "", LangEnglish)
+	e.SetCronScheduler(scheduler)
+	p := &stubButtonPlatform{n: "feishu"}
+
+	job := &CronJob{
+		ID:         "job-1",
+		Project:    "test",
+		SessionKey: "feishu:chat:user",
+		CronExpr:   "* * * * *",
+		Prompt:     "Old prompt",
+		Enabled:    true,
+		CreatedAt:  time.Now(),
+	}
+	if err := scheduler.AddJob(job); err != nil {
+		t.Fatalf("AddJob: %v", err)
+	}
+
+	card := e.handleCardNav("act:/cron editprompt job-1", job.SessionKey)
+	if card == nil || !strings.Contains(card.RenderText(), "replace the prompt") {
+		t.Fatalf("card = %#v, want edit prompt notice", card)
+	}
+	if edit := e.getPendingCronPromptEdit(job.SessionKey); edit == nil || edit.JobID != "job-1" {
+		t.Fatalf("pending edit = %#v, want job-1", edit)
+	}
+
+	e.handleMessage(p, &Message{
+		SessionKey: job.SessionKey,
+		Platform:   "feishu",
+		UserID:     "user",
+		Content:    "New prompt from follow-up message",
+		ReplyCtx:   "ctx",
+	})
+
+	got := store.Get(job.ID)
+	if got == nil || got.Prompt != "New prompt from follow-up message" {
+		t.Fatalf("prompt = %#v, want updated prompt", got)
+	}
+	if e.getPendingCronPromptEdit(job.SessionKey) != nil {
+		t.Fatal("expected pending edit to be cleared")
+	}
+	if !slices.Contains(p.buttonDataSnapshot(), "act:/cron editprompt job-1") {
+		t.Fatalf("expected refreshed cron card buttons, got %#v", p.buttonDataSnapshot())
+	}
+}
+
 func TestProcessInteractiveEvents_BindsSessionIDFromResultEvent(t *testing.T) {
 	e := newTestEngine()
 	p := &stubPlatformEngine{n: "test"}

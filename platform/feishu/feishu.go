@@ -50,6 +50,7 @@ type Platform struct {
 	client                *lark.Client
 	wsClient              *larkws.Client
 	handler               core.MessageHandler
+	cardNavHandler        core.CardNavigationHandler
 	cancel                context.CancelFunc
 	dedup                 core.MessageDedup
 	botOpenID             string
@@ -100,6 +101,10 @@ func New(opts map[string]any) (core.Platform, error) {
 func (p *Platform) Name() string { return "feishu" }
 
 func (p *Platform) ProgressStyle() string { return p.progressStyle }
+
+func (p *Platform) SetCardNavigationHandler(fn core.CardNavigationHandler) {
+	p.cardNavHandler = fn
+}
 
 func (p *Platform) Start(handler core.MessageHandler) error {
 	p.handler = handler
@@ -1100,6 +1105,12 @@ func (p *Platform) onCardAction(event *callback.CardActionTriggerEvent) (*callba
 	}
 	rctx := replyContext{messageID: messageID, chatID: chatID}
 
+	if (strings.HasPrefix(data, "nav:") || strings.HasPrefix(data, "act:")) && p.cardNavHandler != nil {
+		if card := p.cardNavHandler(data, sessionKey); card != nil {
+			return p.buildCardActionCardResponse(card), nil
+		}
+	}
+
 	// Handle command callbacks (cmd:/lang en, cmd:/mode yolo, etc.)
 	if strings.HasPrefix(data, "cmd:") {
 		command := strings.TrimPrefix(data, "cmd:")
@@ -1194,6 +1205,17 @@ func (p *Platform) onCardAction(event *callback.CardActionTriggerEvent) (*callba
 	return p.buildCardActionResponseWithLabel(event, choiceLabel), nil
 }
 
+func (p *Platform) buildCardActionCardResponse(card *core.Card) *callback.CardActionTriggerResponse {
+	if card == nil {
+		return nil
+	}
+	data := renderCardMap(card, "")
+	return &callback.CardActionTriggerResponse{
+		Toast: &callback.Toast{Type: "info", Content: "Updated"},
+		Card:  &callback.Card{Type: "raw", Data: data},
+	}
+}
+
 // buildCardActionResponse returns a card update that shows the chosen command.
 func (p *Platform) buildCardActionResponse(event *callback.CardActionTriggerEvent, command string) *callback.CardActionTriggerResponse {
 	card := map[string]any{
@@ -1236,7 +1258,7 @@ func (p *Platform) SendWithButtons(ctx context.Context, rctx any, content string
 		return fmt.Errorf("feishu: invalid reply context type %T", rctx)
 	}
 
-	cardJSON := buildCardWithButtonsJSON(content, buttons)
+	cardJSON := renderCard(cardFromButtons(content, buttons), "")
 
 	if p.replyInThread && rc.messageID != "" {
 		resp, err := p.client.Im.Message.Reply(ctx, larkim.NewReplyMessageReqBuilder().
@@ -1274,6 +1296,68 @@ func (p *Platform) SendWithButtons(ctx context.Context, rctx any, content string
 		return fmt.Errorf("feishu: sendWithButtons code=%d msg=%s", resp.Code, resp.Msg)
 	}
 	return nil
+}
+
+func (p *Platform) ReplyCard(ctx context.Context, rctx any, card *core.Card) error {
+	rc, ok := rctx.(replyContext)
+	if !ok {
+		return fmt.Errorf("feishu: invalid reply context type %T", rctx)
+	}
+
+	cardJSON := renderCard(card, "")
+	if p.replyInThread && rc.messageID != "" {
+		resp, err := p.client.Im.Message.Reply(ctx, larkim.NewReplyMessageReqBuilder().
+			MessageId(rc.messageID).
+			Body(larkim.NewReplyMessageReqBodyBuilder().
+				MsgType(larkim.MsgTypeInteractive).
+				Content(cardJSON).
+				Build()).
+			Build())
+		if err != nil {
+			return fmt.Errorf("feishu: reply card: %w", err)
+		}
+		if !resp.Success() {
+			return fmt.Errorf("feishu: reply card code=%d msg=%s", resp.Code, resp.Msg)
+		}
+		return nil
+	}
+	if rc.chatID == "" {
+		return fmt.Errorf("feishu: chatID is empty, cannot send card")
+	}
+	resp, err := p.client.Im.Message.Create(ctx, larkim.NewCreateMessageReqBuilder().
+		ReceiveIdType(larkim.ReceiveIdTypeChatId).
+		Body(larkim.NewCreateMessageReqBodyBuilder().
+			ReceiveId(rc.chatID).
+			MsgType(larkim.MsgTypeInteractive).
+			Content(cardJSON).
+			Build()).
+		Build())
+	if err != nil {
+		return fmt.Errorf("feishu: reply card create: %w", err)
+	}
+	if !resp.Success() {
+		return fmt.Errorf("feishu: reply card code=%d msg=%s", resp.Code, resp.Msg)
+	}
+	return nil
+}
+
+func (p *Platform) SendCard(ctx context.Context, rctx any, card *core.Card) error {
+	return p.ReplyCard(ctx, rctx, card)
+}
+
+func cardFromButtons(content string, buttons [][]core.ButtonOption) *core.Card {
+	cb := core.NewCard().Markdown(content)
+	for _, row := range buttons {
+		if len(row) == 0 {
+			continue
+		}
+		cardButtons := make([]core.CardButton, 0, len(row))
+		for _, btn := range row {
+			cardButtons = append(cardButtons, core.DefaultBtn(btn.Text, btn.Data))
+		}
+		cb.Buttons(cardButtons...)
+	}
+	return cb.Build()
 }
 
 // buildCardWithButtonsJSON builds a Feishu interactive card with markdown content and action buttons.

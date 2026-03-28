@@ -86,7 +86,7 @@ func TestReplyWithInteractionKeepsFullOptionLabels(t *testing.T) {
 	if len(sent) == 0 {
 		t.Fatal("expected interaction content to be sent")
 	}
-	if sent[0] != "Choose an action" {
+	if !strings.Contains(sent[0], "Choose an action") {
 		t.Fatalf("unexpected interaction content: %q", sent[0])
 	}
 

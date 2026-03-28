@@ -176,6 +176,8 @@ type Engine struct {
 	voiceConfirms     map[string]*pendingVoiceConfirmation
 	pendingAttachMu   sync.Mutex
 	pendingAttach     map[string]*pendingAttachments
+	cronEditMu        sync.Mutex
+	pendingCronEdits  map[string]*pendingCronPromptEdit
 
 	quietMu sync.RWMutex
 	quiet   bool // when true, suppress thinking and tool progress messages globally
@@ -236,6 +238,10 @@ type pendingAttachments struct {
 	Files  []FileAttachment
 }
 
+type pendingCronPromptEdit struct {
+	JobID string
+}
+
 // resolve safely closes the Resolved channel exactly once.
 func (pp *pendingPermission) resolve() {
 	pp.resolveOnce.Do(func() { close(pp.Resolved) })
@@ -259,6 +265,7 @@ func NewEngine(name string, ag Agent, platforms []Platform, sessionStorePath str
 		prompts:           make(map[string]*pendingInteractionPrompt),
 		voiceConfirms:     make(map[string]*pendingVoiceConfirmation),
 		pendingAttach:     make(map[string]*pendingAttachments),
+		pendingCronEdits:  make(map[string]*pendingCronPromptEdit),
 		startedAt:         time.Now(),
 		streamPreview:     DefaultStreamPreviewCfg(),
 		eventIdleTimeout:  defaultEventIdleTimeout,
@@ -271,6 +278,11 @@ func NewEngine(name string, ag Agent, platforms []Platform, sessionStorePath str
 	}
 	if sp, ok := ag.(SkillProvider); ok {
 		e.skills.SetDirs(sp.SkillDirs())
+	}
+	for _, p := range platforms {
+		if nav, ok := p.(CardNavigable); ok {
+			nav.SetCardNavigationHandler(e.handleCardNav)
+		}
 	}
 
 	return e
@@ -762,6 +774,10 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 		return
 	}
 
+	if e.handlePendingCronPromptEdit(p, msg, content) {
+		return
+	}
+
 	// Resolve aliases: check if the first word (or whole content) matches an alias
 	content = e.resolveAlias(content)
 	msg.Content = content
@@ -848,6 +864,62 @@ func (e *Engine) clearPendingAttachments(sessionKey string) {
 	e.pendingAttachMu.Lock()
 	defer e.pendingAttachMu.Unlock()
 	delete(e.pendingAttach, sessionKey)
+}
+
+func (e *Engine) setPendingCronPromptEdit(sessionKey, jobID string) {
+	e.cronEditMu.Lock()
+	defer e.cronEditMu.Unlock()
+	e.pendingCronEdits[sessionKey] = &pendingCronPromptEdit{JobID: jobID}
+}
+
+func (e *Engine) getPendingCronPromptEdit(sessionKey string) *pendingCronPromptEdit {
+	e.cronEditMu.Lock()
+	defer e.cronEditMu.Unlock()
+	edit := e.pendingCronEdits[sessionKey]
+	if edit == nil {
+		return nil
+	}
+	cp := *edit
+	return &cp
+}
+
+func (e *Engine) clearPendingCronPromptEdit(sessionKey string) {
+	e.cronEditMu.Lock()
+	defer e.cronEditMu.Unlock()
+	delete(e.pendingCronEdits, sessionKey)
+}
+
+func (e *Engine) handlePendingCronPromptEdit(p Platform, msg *Message, content string) bool {
+	edit := e.getPendingCronPromptEdit(msg.SessionKey)
+	if edit == nil {
+		return false
+	}
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return true
+	}
+	if trimmed == "/cancel" {
+		e.clearPendingCronPromptEdit(msg.SessionKey)
+		e.reply(p, msg.ReplyCtx, "Cancelled cron prompt editing.")
+		e.replyCronCardIfSupported(p, msg, "Cancelled cron prompt editing.")
+		return true
+	}
+	if strings.HasPrefix(trimmed, "/") {
+		return false
+	}
+	if e.cronScheduler == nil {
+		e.clearPendingCronPromptEdit(msg.SessionKey)
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgCronNotAvailable))
+		return true
+	}
+	if err := e.cronScheduler.UpdateJob(edit.JobID, "prompt", trimmed); err != nil {
+		e.reply(p, msg.ReplyCtx, fmt.Sprintf("❌ update cron prompt failed: %v", err))
+		return true
+	}
+	e.clearPendingCronPromptEdit(msg.SessionKey)
+	e.reply(p, msg.ReplyCtx, fmt.Sprintf("✅ Updated cron `%s` prompt.", edit.JobID))
+	e.replyCronCardIfSupported(p, msg, fmt.Sprintf("Updated `%s`.", edit.JobID))
+	return true
 }
 
 func cloneImages(images []ImageAttachment) []ImageAttachment {
@@ -1181,6 +1253,11 @@ func (e *Engine) replyWithInteraction(sessionKey string, p Platform, replyCtx an
 	e.prompts[sessionKey] = prompt
 	e.promptMu.Unlock()
 
+	if supportsCards(p) {
+		e.replyWithCard(p, replyCtx, interactionCard(renderContent, rows, useIndexedButtons, prompt.Token))
+		return
+	}
+
 	if bs, ok := p.(InlineButtonSender); ok {
 		if err := bs.SendWithButtons(e.ctx, replyCtx, renderContent, buttonRows); err == nil {
 			return
@@ -1191,6 +1268,27 @@ func (e *Engine) replyWithInteraction(sessionKey string, p Platform, replyCtx an
 		renderContent += "\n\nReply with: `" + strings.Join(fallbackChoices, "` / `") + "`"
 	}
 	e.reply(p, replyCtx, renderContent)
+}
+
+func interactionCard(content string, rows [][]interactionChoice, useIndexedButtons bool, token string) *Card {
+	cb := NewCard().Markdown(content)
+	buttonIndex := 1
+	for _, row := range rows {
+		if len(row) == 0 {
+			continue
+		}
+		buttons := make([]CardButton, 0, len(row))
+		for _, choice := range row {
+			label := choice.Label
+			if useIndexedButtons {
+				label = fmt.Sprintf("%d", buttonIndex)
+				buttonIndex++
+			}
+			buttons = append(buttons, DefaultBtn(label, buildInteractionCallbackData(token, choice.ID)))
+		}
+		cb.Buttons(buttons...)
+	}
+	return cb.Build()
 }
 
 func interactionNeedsExpandedList(rows [][]interactionChoice) bool {
@@ -2852,7 +2950,61 @@ func langDisplayName(lang Language) string {
 }
 
 func (e *Engine) cmdHelp(p Platform, msg *Message) {
+	if supportsCards(p) {
+		e.replyWithCard(p, msg.ReplyCtx, e.renderHelpCard())
+		return
+	}
 	e.reply(p, msg.ReplyCtx, e.i18n.T(MsgHelp))
+}
+
+func supportsCards(p Platform) bool {
+	if p == nil {
+		return false
+	}
+	if _, ok := p.(CardSender); ok {
+		return true
+	}
+	if _, ok := p.(InlineButtonSender); ok {
+		return true
+	}
+	return false
+}
+
+func (e *Engine) replyWithCard(p Platform, replyCtx any, card *Card) {
+	if card == nil {
+		slog.Error("replyWithCard: nil card", "platform", p.Name())
+		return
+	}
+	if cs, ok := p.(CardSender); ok {
+		if err := cs.ReplyCard(e.ctx, replyCtx, card); err != nil {
+			slog.Error("card reply failed", "platform", p.Name(), "error", err)
+		}
+		return
+	}
+	if bs, ok := p.(InlineButtonSender); ok && card.HasButtons() {
+		if err := bs.SendWithButtons(e.ctx, replyCtx, card.RenderText(), card.CollectButtons()); err == nil {
+			return
+		}
+	}
+	e.reply(p, replyCtx, card.RenderText())
+}
+
+func (e *Engine) cardBackButton() CardButton {
+	return DefaultBtn("Back", "nav:/help")
+}
+
+func (e *Engine) simpleCard(title, color, content string) *Card {
+	return NewCard().Title(title, color).Markdown(content).Buttons(e.cardBackButton()).Build()
+}
+
+func (e *Engine) renderHelpCard() *Card {
+	return NewCard().
+		Title("Help", "blue").
+		Markdown(e.i18n.T(MsgHelp)).
+		ButtonsEqual(
+			DefaultBtn("/cron", "nav:/cron"),
+		).
+		Build()
 }
 
 // GetAllCommands returns all available commands for bot menu registration.
@@ -3774,6 +3926,154 @@ func (e *Engine) appendMemoryFile(p Platform, msg *Message, filePath, text strin
 // /cron command
 // ──────────────────────────────────────────────────────────────
 
+func (e *Engine) handleCardNav(action, sessionKey string) *Card {
+	var prefix, body string
+	if i := strings.Index(action, ":"); i >= 0 {
+		prefix = action[:i]
+		body = action[i+1:]
+	} else {
+		return nil
+	}
+
+	cmd, args := body, ""
+	if i := strings.IndexByte(body, ' '); i >= 0 {
+		cmd = body[:i]
+		args = strings.TrimSpace(body[i+1:])
+	}
+
+	var notice string
+	if prefix == "act" {
+		notice = e.executeCardAction(cmd, args, sessionKey)
+	}
+
+	switch cmd {
+	case "/help":
+		return e.renderHelpCard()
+	case "/cron":
+		return e.renderCronCard(sessionKey, notice)
+	}
+	return nil
+}
+
+func (e *Engine) executeCardAction(cmd, args, sessionKey string) string {
+	switch cmd {
+	case "/cron":
+		if e.cronScheduler == nil {
+			return ""
+		}
+		fields := strings.Fields(args)
+		if len(fields) < 2 {
+			return ""
+		}
+		sub, id := fields[0], fields[1]
+		switch sub {
+		case "enable":
+			_ = e.cronScheduler.EnableJob(id)
+			return fmt.Sprintf("Enabled `%s`.", id)
+		case "disable":
+			_ = e.cronScheduler.DisableJob(id)
+			return fmt.Sprintf("Disabled `%s`.", id)
+		case "delete":
+			e.cronScheduler.RemoveJob(id)
+			return fmt.Sprintf("Deleted `%s`.", id)
+		case "mute":
+			_ = e.cronScheduler.UpdateJob(id, "mute", true)
+			return fmt.Sprintf("Muted `%s`.", id)
+		case "unmute":
+			_ = e.cronScheduler.UpdateJob(id, "mute", false)
+			return fmt.Sprintf("Unmuted `%s`.", id)
+		case "editprompt":
+			e.setPendingCronPromptEdit(sessionKey, id)
+			return fmt.Sprintf("Send your next message to replace the prompt for `%s`. Send /cancel to abort.", id)
+		}
+	}
+	return ""
+}
+
+func (e *Engine) renderCronCard(sessionKey string, notice string) *Card {
+	if e.cronScheduler == nil {
+		return e.simpleCard("Cron Jobs", "orange", e.i18n.T(MsgCronNotAvailable))
+	}
+	jobs := e.cronScheduler.Store().ListBySessionKey(sessionKey)
+	if len(jobs) == 0 {
+		return e.simpleCard("Cron Jobs", "orange", e.i18n.T(MsgCronEmpty))
+	}
+
+	lang := e.i18n.CurrentLang()
+	now := time.Now()
+	cb := NewCard().Title("Cron Jobs", "orange")
+	cb.Markdownf(e.i18n.T(MsgCronListTitle), len(jobs))
+	if strings.TrimSpace(notice) != "" {
+		cb.Markdown(notice)
+	}
+
+	for _, j := range jobs {
+		status := "✅"
+		if !j.Enabled {
+			status = "⏸"
+		}
+		desc := j.Description
+		if desc == "" {
+			if j.IsShellJob() {
+				desc = "🖥 " + truncateStr(j.Exec, 60)
+			} else {
+				desc = truncateStr(j.Prompt, 60)
+			}
+		}
+		if j.Mute {
+			desc += " [mute]"
+		}
+		human := CronExprToHuman(j.CronExpr, lang)
+
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "%s %s\n", status, desc)
+		fmt.Fprintf(&sb, "ID: `%s`\n", j.ID)
+		sb.WriteString(e.i18n.Tf(MsgCronScheduleLabel, human, j.CronExpr))
+		nextRun := e.cronScheduler.NextRun(j.ID)
+		if !nextRun.IsZero() {
+			fmtStr := cronTimeFormat(nextRun, now)
+			sb.WriteString(e.i18n.Tf(MsgCronNextRunLabel, nextRun.Format(fmtStr)))
+		}
+		if !j.LastRun.IsZero() {
+			fmtStr := cronTimeFormat(j.LastRun, now)
+			sb.WriteString(e.i18n.Tf(MsgCronLastRunLabel, j.LastRun.Format(fmtStr)))
+			if j.LastError != "" {
+				fmt.Fprintf(&sb, " (failed: %s)", truncateStr(j.LastError, 40))
+			}
+			sb.WriteString("\n")
+		}
+		cb.Markdown(sb.String())
+
+		var btns []CardButton
+		btns = append(btns, DefaultBtn("Edit Prompt", fmt.Sprintf("act:/cron editprompt %s", j.ID)))
+		if j.Enabled {
+			btns = append(btns, DefaultBtn("Disable", fmt.Sprintf("act:/cron disable %s", j.ID)))
+		} else {
+			btns = append(btns, PrimaryBtn("Enable", fmt.Sprintf("act:/cron enable %s", j.ID)))
+		}
+		if j.Mute {
+			btns = append(btns, DefaultBtn("Unmute", fmt.Sprintf("act:/cron unmute %s", j.ID)))
+		} else {
+			btns = append(btns, DefaultBtn("Mute", fmt.Sprintf("act:/cron mute %s", j.ID)))
+		}
+		btns = append(btns, DangerBtn("Delete", fmt.Sprintf("act:/cron delete %s", j.ID)))
+		cb.ButtonsEqual(btns...)
+	}
+
+	cb.Divider()
+	cb.Note("Tip: tap Edit Prompt, then send your next message as the new prompt.")
+	cb.Buttons(e.cardBackButton())
+	return cb.Build()
+}
+
+func (e *Engine) replyCronCardIfSupported(p Platform, msg *Message, notice string) bool {
+	if p == nil || msg == nil || !supportsCards(p) {
+		return false
+	}
+	e.replyWithCard(p, msg.ReplyCtx, e.renderCronCard(msg.SessionKey, notice))
+	return true
+}
+
 func (e *Engine) cmdCron(p Platform, msg *Message, args []string) {
 	if e.cronScheduler == nil {
 		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgCronNotAvailable))
@@ -3863,6 +4163,9 @@ func (e *Engine) cmdCronAddExec(p Platform, msg *Message, args []string) {
 }
 
 func (e *Engine) cmdCronList(p Platform, msg *Message) {
+	if e.replyCronCardIfSupported(p, msg, "") {
+		return
+	}
 	jobs := e.cronScheduler.Store().ListBySessionKey(msg.SessionKey)
 	if len(jobs) == 0 {
 		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgCronEmpty))

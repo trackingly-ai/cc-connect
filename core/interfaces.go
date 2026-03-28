@@ -154,6 +154,24 @@ type InlineButtonSender interface {
 	SendWithButtons(ctx context.Context, replyCtx any, content string, buttons [][]ButtonOption) error
 }
 
+// CardSender is an optional interface for platforms that support sending
+// structured rich cards. Platforms that do not implement this interface will
+// receive a plain-text or inline-button fallback via Card.RenderText.
+type CardSender interface {
+	SendCard(ctx context.Context, replyCtx any, card *Card) error
+	ReplyCard(ctx context.Context, replyCtx any, card *Card) error
+}
+
+// CardNavigationHandler is called by platforms to render a card for in-place
+// card updates (e.g. Feishu card action callbacks).
+type CardNavigationHandler func(action string, sessionKey string) *Card
+
+// CardNavigable is an optional interface for platforms that support in-place
+// card navigation.
+type CardNavigable interface {
+	SetCardNavigationHandler(h CardNavigationHandler)
+}
+
 // MessageHandler is called by platforms when a new message arrives.
 type MessageHandler func(p Platform, msg *Message)
 
