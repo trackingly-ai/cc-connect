@@ -343,6 +343,93 @@ func TestHandlePendingCronPromptEditUpdatesPrompt(t *testing.T) {
 	}
 }
 
+func TestExecuteCardAction_RejectsForeignCronJob(t *testing.T) {
+	store, err := NewCronStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewCronStore: %v", err)
+	}
+	scheduler := NewCronScheduler(store)
+	e := NewEngine("test", &stubAgent{}, nil, "", LangEnglish)
+	e.SetCronScheduler(scheduler)
+
+	job := &CronJob{
+		ID:         "job-1",
+		Project:    "test",
+		SessionKey: "feishu:chat:owner",
+		CronExpr:   "* * * * *",
+		Prompt:     "Old prompt",
+		Enabled:    true,
+		CreatedAt:  time.Now(),
+	}
+	if err := scheduler.AddJob(job); err != nil {
+		t.Fatalf("AddJob: %v", err)
+	}
+
+	notice := e.executeCardAction("/cron", "delete job-1", "feishu:chat:other")
+	if !strings.Contains(notice, "not found for this session") {
+		t.Fatalf("notice = %q, want ownership failure", notice)
+	}
+	if got := store.Get("job-1"); got == nil {
+		t.Fatal("job should not be deleted")
+	}
+}
+
+func TestHandleCardNav_InvalidFormatReturnsNil(t *testing.T) {
+	e := NewEngine("test", &stubAgent{}, nil, "", LangEnglish)
+	if card := e.handleCardNav("not-a-card-action", "feishu:chat:user"); card != nil {
+		t.Fatalf("card = %#v, want nil", card)
+	}
+}
+
+func TestExecuteCardAction_NilSchedulerReturnsEmpty(t *testing.T) {
+	e := NewEngine("test", &stubAgent{}, nil, "", LangEnglish)
+	if notice := e.executeCardAction("/cron", "enable job-1", "feishu:chat:user"); notice != "" {
+		t.Fatalf("notice = %q, want empty", notice)
+	}
+}
+
+func TestHandlePendingCronPromptEditRejectsTooLongPrompt(t *testing.T) {
+	store, err := NewCronStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewCronStore: %v", err)
+	}
+	scheduler := NewCronScheduler(store)
+	e := NewEngine("test", &stubAgent{}, nil, "", LangEnglish)
+	e.SetCronScheduler(scheduler)
+	p := &stubButtonPlatform{n: "feishu"}
+
+	job := &CronJob{
+		ID:         "job-1",
+		Project:    "test",
+		SessionKey: "feishu:chat:user",
+		CronExpr:   "* * * * *",
+		Prompt:     "Old prompt",
+		Enabled:    true,
+		CreatedAt:  time.Now(),
+	}
+	if err := scheduler.AddJob(job); err != nil {
+		t.Fatalf("AddJob: %v", err)
+	}
+	e.setPendingCronPromptEdit(job.SessionKey, job.ID)
+
+	e.handleMessage(p, &Message{
+		SessionKey: job.SessionKey,
+		Platform:   "feishu",
+		UserID:     "user",
+		Content:    strings.Repeat("x", maxCronPromptLen+1),
+		ReplyCtx:   "ctx",
+	})
+
+	got := store.Get(job.ID)
+	if got == nil || got.Prompt != "Old prompt" {
+		t.Fatalf("prompt = %#v, want unchanged", got)
+	}
+	sent := p.sentSnapshot()
+	if len(sent) == 0 || !strings.Contains(sent[0], "prompt too long") {
+		t.Fatalf("sent = %#v, want prompt too long error", sent)
+	}
+}
+
 func TestProcessInteractiveEvents_BindsSessionIDFromResultEvent(t *testing.T) {
 	e := newTestEngine()
 	p := &stubPlatformEngine{n: "test"}

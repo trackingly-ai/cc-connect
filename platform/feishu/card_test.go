@@ -93,3 +93,14 @@ func TestRenderCardMap_InjectsSessionKeyIntoCallbacks(t *testing.T) {
 		t.Fatalf("button session_key = %#v, want thread session key", value["session_key"])
 	}
 }
+
+func TestRenderDeleteModeCheckerCard_InvalidCardReturnsFalse(t *testing.T) {
+	card := core.NewCard().
+		Markdown("plain markdown should not be transformed").
+		Build()
+
+	base := map[string]any{"config": map[string]any{"wide_screen_mode": true}}
+	if transformed, ok := renderDeleteModeCheckerCard(card, base); ok || transformed != nil {
+		t.Fatalf("got transformed=%#v ok=%v, want nil false", transformed, ok)
+	}
+}

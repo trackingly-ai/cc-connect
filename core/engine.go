@@ -242,6 +242,8 @@ type pendingCronPromptEdit struct {
 	JobID string
 }
 
+const maxCronPromptLen = 10000
+
 // resolve safely closes the Resolved channel exactly once.
 func (pp *pendingPermission) resolve() {
 	pp.resolveOnce.Do(func() { close(pp.Resolved) })
@@ -889,6 +891,15 @@ func (e *Engine) clearPendingCronPromptEdit(sessionKey string) {
 	delete(e.pendingCronEdits, sessionKey)
 }
 
+func (e *Engine) clearPendingCronPromptEditIfMatch(sessionKey, jobID string) {
+	e.cronEditMu.Lock()
+	defer e.cronEditMu.Unlock()
+	edit := e.pendingCronEdits[sessionKey]
+	if edit != nil && edit.JobID == jobID {
+		delete(e.pendingCronEdits, sessionKey)
+	}
+}
+
 func (e *Engine) handlePendingCronPromptEdit(p Platform, msg *Message, content string) bool {
 	edit := e.getPendingCronPromptEdit(msg.SessionKey)
 	if edit == nil {
@@ -907,16 +918,26 @@ func (e *Engine) handlePendingCronPromptEdit(p Platform, msg *Message, content s
 	if strings.HasPrefix(trimmed, "/") {
 		return false
 	}
+	if len(trimmed) > maxCronPromptLen {
+		e.reply(p, msg.ReplyCtx, fmt.Sprintf("❌ prompt too long (max %d characters)", maxCronPromptLen))
+		return true
+	}
 	if e.cronScheduler == nil {
 		e.clearPendingCronPromptEdit(msg.SessionKey)
 		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgCronNotAvailable))
+		return true
+	}
+	job := e.cronScheduler.Store().Get(edit.JobID)
+	if job == nil || job.SessionKey != msg.SessionKey {
+		e.clearPendingCronPromptEditIfMatch(msg.SessionKey, edit.JobID)
+		e.reply(p, msg.ReplyCtx, "❌ cron job not found for this session")
 		return true
 	}
 	if err := e.cronScheduler.UpdateJob(edit.JobID, "prompt", trimmed); err != nil {
 		e.reply(p, msg.ReplyCtx, fmt.Sprintf("❌ update cron prompt failed: %v", err))
 		return true
 	}
-	e.clearPendingCronPromptEdit(msg.SessionKey)
+	e.clearPendingCronPromptEditIfMatch(msg.SessionKey, edit.JobID)
 	e.reply(p, msg.ReplyCtx, fmt.Sprintf("✅ Updated cron `%s` prompt.", edit.JobID))
 	e.replyCronCardIfSupported(p, msg, fmt.Sprintf("Updated `%s`.", edit.JobID))
 	return true
@@ -3966,21 +3987,35 @@ func (e *Engine) executeCardAction(cmd, args, sessionKey string) string {
 			return ""
 		}
 		sub, id := fields[0], fields[1]
+		job := e.cronScheduler.Store().Get(id)
+		if job == nil || job.SessionKey != sessionKey {
+			return "Cron job not found for this session."
+		}
 		switch sub {
 		case "enable":
-			_ = e.cronScheduler.EnableJob(id)
+			if err := e.cronScheduler.EnableJob(id); err != nil {
+				return fmt.Sprintf("Failed to enable `%s`: %v", id, err)
+			}
 			return fmt.Sprintf("Enabled `%s`.", id)
 		case "disable":
-			_ = e.cronScheduler.DisableJob(id)
+			if err := e.cronScheduler.DisableJob(id); err != nil {
+				return fmt.Sprintf("Failed to disable `%s`: %v", id, err)
+			}
 			return fmt.Sprintf("Disabled `%s`.", id)
 		case "delete":
-			e.cronScheduler.RemoveJob(id)
+			if ok := e.cronScheduler.RemoveJob(id); !ok {
+				return fmt.Sprintf("Failed to delete `%s`.", id)
+			}
 			return fmt.Sprintf("Deleted `%s`.", id)
 		case "mute":
-			_ = e.cronScheduler.UpdateJob(id, "mute", true)
+			if err := e.cronScheduler.UpdateJob(id, "mute", true); err != nil {
+				return fmt.Sprintf("Failed to mute `%s`: %v", id, err)
+			}
 			return fmt.Sprintf("Muted `%s`.", id)
 		case "unmute":
-			_ = e.cronScheduler.UpdateJob(id, "mute", false)
+			if err := e.cronScheduler.UpdateJob(id, "mute", false); err != nil {
+				return fmt.Sprintf("Failed to unmute `%s`: %v", id, err)
+			}
 			return fmt.Sprintf("Unmuted `%s`.", id)
 		case "editprompt":
 			e.setPendingCronPromptEdit(sessionKey, id)
@@ -3993,6 +4028,9 @@ func (e *Engine) executeCardAction(cmd, args, sessionKey string) string {
 func (e *Engine) renderCronCard(sessionKey string, notice string) *Card {
 	if e.cronScheduler == nil {
 		return e.simpleCard("Cron Jobs", "orange", e.i18n.T(MsgCronNotAvailable))
+	}
+	if strings.TrimSpace(sessionKey) == "" {
+		return e.simpleCard("Cron Jobs", "orange", "Invalid session")
 	}
 	jobs := e.cronScheduler.Store().ListBySessionKey(sessionKey)
 	if len(jobs) == 0 {
