@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -8,7 +9,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -215,26 +215,11 @@ func (s *CronStore) Get(id string) *CronJob {
 	return nil
 }
 
-func (s *CronStore) SetMute(id string, mute bool) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, j := range s.jobs {
-		if j.ID == id {
-			j.Mute = mute
-			if err := s.save(); err != nil {
-				slog.Error("cron: failed to save jobs after mute toggle", "id", id, "mute", mute, "error", err)
-			}
-			return true
-		}
-	}
-	return false
-}
-
 func (s *CronStore) Update(id, field string, value any) bool {
 	readOnly := map[string]bool{
 		"id": true, "created_at": true, "last_run": true, "last_error": true,
 	}
-	if readOnly[field] {
+	if readOnly[strings.ToLower(strings.TrimSpace(field))] {
 		return false
 	}
 
@@ -323,33 +308,7 @@ func updateCronJobField(job *CronJob, field string, value any) error {
 		}
 	}
 
-	if v, ok := value.(string); ok {
-		rv := reflect.ValueOf(job).Elem()
-		f := rv.FieldByName(toExportedFieldName(field))
-		if f.IsValid() && f.Kind() == reflect.String && f.CanSet() {
-			f.SetString(v)
-			return nil
-		}
-	}
 	return fmt.Errorf("unknown or invalid field: %s", field)
-}
-
-func toExportedFieldName(s string) string {
-	var b strings.Builder
-	upper := true
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c == '_' {
-			upper = true
-			continue
-		}
-		if upper && c >= 'a' && c <= 'z' {
-			c -= 32
-		}
-		upper = false
-		b.WriteByte(c)
-	}
-	return b.String()
 }
 
 // CronScheduler runs cron jobs by injecting synthetic messages into engines.
@@ -463,6 +422,7 @@ func (cs *CronScheduler) UpdateJob(id, field string, value any) error {
 	if job == nil {
 		return fmt.Errorf("job %q not found", id)
 	}
+	proposed := cloneCronJob(job)
 	if field == "cron_expr" {
 		expr, ok := value.(string)
 		if !ok {
@@ -471,6 +431,12 @@ func (cs *CronScheduler) UpdateJob(id, field string, value any) error {
 		if _, err := cron.ParseStandard(expr); err != nil {
 			return fmt.Errorf("invalid cron expression %q: %w", expr, err)
 		}
+	}
+	if err := updateCronJobField(proposed, field, value); err != nil {
+		return fmt.Errorf("failed to update field %q (may be read-only or invalid type)", field)
+	}
+	if err := validateCronJob(proposed); err != nil {
+		return err
 	}
 
 	needsReschedule := field == "cron_expr" || field == "enabled"
@@ -488,19 +454,28 @@ func (cs *CronScheduler) UpdateJob(id, field string, value any) error {
 	}
 
 	updated := cs.store.Get(id)
-	if updated != nil {
-		if err := validateCronJob(updated); err != nil {
-			return err
-		}
-		updated.SessionMode = NormalizeCronSessionMode(updated.SessionMode)
-	}
-
 	if needsReschedule && updated != nil && updated.Enabled {
 		if err := cs.scheduleJob(updated); err != nil {
 			return fmt.Errorf("reschedule failed: %w", err)
 		}
 	}
 	return nil
+}
+
+func cloneCronJob(job *CronJob) *CronJob {
+	if job == nil {
+		return nil
+	}
+	clone := *job
+	if job.TimeoutMins != nil {
+		v := *job.TimeoutMins
+		clone.TimeoutMins = &v
+	}
+	if job.Silent != nil {
+		v := *job.Silent
+		clone.Silent = &v
+	}
+	return &clone
 }
 
 func (cs *CronScheduler) Store() *CronStore {
@@ -561,21 +536,21 @@ func (cs *CronScheduler) executeJob(jobID string) {
 
 	slog.Info("cron: executing job", "id", jobID, "project", job.Project, "prompt", truncateStr(job.Prompt, 60))
 
+	jobCtx := context.Background()
+	cancel := func() {}
 	done := make(chan error, 1)
+	timeout := job.ExecutionTimeout()
+	if timeout > 0 {
+		jobCtx, cancel = context.WithTimeout(context.Background(), timeout)
+	}
+	defer cancel()
 	go func() {
-		done <- engine.ExecuteCronJob(job)
+		done <- engine.ExecuteCronJob(jobCtx, job)
 	}()
 
-	var err error
-	timeout := job.ExecutionTimeout()
-	if timeout <= 0 {
-		err = <-done
-	} else {
-		select {
-		case err = <-done:
-		case <-time.After(timeout):
-			err = fmt.Errorf("job timed out after %v", timeout)
-		}
+	err := <-done
+	if timeout > 0 && err == context.DeadlineExceeded {
+		err = fmt.Errorf("job timed out after %v", timeout)
 	}
 
 	cs.store.MarkRun(jobID, err)

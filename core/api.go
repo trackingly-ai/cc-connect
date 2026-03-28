@@ -453,6 +453,10 @@ func (s *APIServer) handleCronDel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *APIServer) handleCronInfo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
 	if s.cron == nil {
 		http.Error(w, "cron scheduler not available", http.StatusServiceUnavailable)
 		return

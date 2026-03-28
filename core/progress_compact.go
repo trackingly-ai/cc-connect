@@ -26,6 +26,7 @@ type compactProgressWriter struct {
 	lastSent string
 	enabled  bool
 	failed   bool
+	closed   bool
 }
 
 func newCompactProgressWriter(ctx context.Context, p Platform, replyCtx any) *compactProgressWriter {
@@ -92,9 +93,29 @@ func (w *compactProgressWriter) Append(entry string) bool {
 	return true
 }
 
-func (w *compactProgressWriter) Finalize() {}
+func (w *compactProgressWriter) Finalize(status string) {
+	if !w.enabled || w.handle == nil || w.closed {
+		return
+	}
+	content := w.renderWithStatus(status)
+	if content == "" || content == w.lastSent {
+		w.closed = true
+		return
+	}
+	if err := w.updater.UpdateMessage(w.ctx, w.handle, content); err != nil {
+		slog.Warn("progress writer: finalize failed", "platform", w.platform.Name(), "style", w.style, "error", err)
+		w.failed = true
+		return
+	}
+	w.lastSent = content
+	w.closed = true
+}
 
 func (w *compactProgressWriter) render() string {
+	return w.renderWithStatus("")
+}
+
+func (w *compactProgressWriter) renderWithStatus(status string) string {
 	switch w.style {
 	case progressStyleCard:
 		var b strings.Builder
@@ -102,9 +123,33 @@ func (w *compactProgressWriter) render() string {
 		for i, entry := range w.entries {
 			fmt.Fprintf(&b, "\n\n%d. %s", i+1, strings.ReplaceAll(entry, "\n", "\n   "))
 		}
+		if statusLine := compactProgressStatusLine(status); statusLine != "" {
+			b.WriteString("\n\n")
+			b.WriteString(statusLine)
+		}
 		return trimCompactProgressText(b.String(), maxPlatformMessageLen-200)
 	case progressStyleCompact:
-		return trimCompactProgressText(strings.Join(w.entries, "\n\n"), maxPlatformMessageLen-200)
+		content := strings.Join(w.entries, "\n\n")
+		if statusLine := compactProgressStatusLine(status); statusLine != "" {
+			if content != "" {
+				content += "\n\n"
+			}
+			content += statusLine
+		}
+		return trimCompactProgressText(content, maxPlatformMessageLen-200)
+	default:
+		return ""
+	}
+}
+
+func compactProgressStatusLine(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "done":
+		return "Status: done"
+	case "error":
+		return "Status: error"
+	case "stopped", "closed":
+		return "Status: stopped"
 	default:
 		return ""
 	}

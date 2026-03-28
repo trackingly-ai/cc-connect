@@ -469,7 +469,10 @@ func (e *Engine) ProjectName() string {
 // ExecuteCronJob runs a cron job by injecting a synthetic message into the engine.
 // It finds the platform that owns the session key, reconstructs a reply context,
 // and processes the message as if the user sent it.
-func (e *Engine) ExecuteCronJob(job *CronJob) error {
+func (e *Engine) ExecuteCronJob(ctx context.Context, job *CronJob) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	sessionKey := job.SessionKey
 	platformName := ""
 	if idx := strings.Index(sessionKey, ":"); idx > 0 {
@@ -527,14 +530,27 @@ func (e *Engine) ExecuteCronJob(job *CronJob) error {
 		ReplyCtx:   replyCtx,
 	}
 
+	cancelDone := make(chan struct{})
+	defer close(cancelDone)
+	go func() {
+		select {
+		case <-ctx.Done():
+			slog.Warn("cron: cancelling interactive job", "project", e.name, "session", sessionKey, "error", ctx.Err())
+			e.cleanupInteractiveState(sessionKey)
+		case <-cancelDone:
+		}
+	}()
+
 	if job.UsesNewSessionPerRun() {
 		e.cleanupInteractiveState(sessionKey)
 		session := e.sessions.NewSession(sessionKey, "cron-"+job.ID)
 		if !session.TryLock() {
 			return fmt.Errorf("session %q is busy", sessionKey)
 		}
+		// Intentionally synchronous: the scheduler waits for this turn to
+		// finish, so timeout/cancellation is enforced via ctx and cleanup.
 		e.processInteractiveMessage(targetPlatform, msg, session)
-		return nil
+		return ctx.Err()
 	}
 
 	session := e.sessions.GetOrCreateActive(sessionKey)
@@ -543,7 +559,7 @@ func (e *Engine) ExecuteCronJob(job *CronJob) error {
 	}
 
 	e.processInteractiveMessage(targetPlatform, msg, session)
-	return nil
+	return ctx.Err()
 }
 
 func (e *Engine) executeCronShell(p Platform, replyCtx any, job *CronJob) error {
@@ -1783,7 +1799,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			}
 
 		case EventResult:
-			cp.Finalize()
+			cp.Finalize("done")
 			if event.SessionID != "" {
 				session.mu.Lock()
 				session.AgentSessionID = event.SessionID
@@ -1882,7 +1898,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			return
 
 		case EventError:
-			cp.Finalize()
+			cp.Finalize("error")
 			sp.finish("") // clean up preview on error
 			if event.Error != nil {
 				slog.Error("agent error", "error", event.Error)
@@ -1895,6 +1911,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 channelClosed:
 	// Channel closed - process exited unexpectedly
 	slog.Warn("agent process exited", "session_key", sessionKey)
+	cp.Finalize("stopped")
 	e.cleanupInteractiveState(sessionKey)
 
 	if len(textParts) > 0 {

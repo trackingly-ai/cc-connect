@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -339,7 +340,8 @@ func runCronInfo(args []string) {
 			return net.Dial("unix", sockPath)
 		},
 	}}
-	resp, err := client.Get("http://unix/cron/info?id=" + id)
+	values := url.Values{"id": {id}}
+	resp, err := client.Get("http://unix/cron/info?" + values.Encode())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
@@ -452,7 +454,7 @@ Options:
       --exec <command>       Shell command to execute
       --desc <text>          Short description
       --session-mode <mode>  reuse | new_per_run
-      --timeout-mins <mins>  nil=30m, 0=unlimited
+      --timeout-mins <mins>  omit for default (30m), 0=unlimited
       --data-dir <path>      Data directory (default: ~/.cc-connect)
   -h, --help                 Show this help
 
