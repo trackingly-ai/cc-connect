@@ -59,12 +59,12 @@ func TestFinalReplyOffersReadAloudButton(t *testing.T) {
 	}
 
 	buttonData := p.buttonDataSnapshot()
-	if len(buttonData) != 1 || buttonData[0] != "tts:read_last" {
-		t.Fatalf("expected read-aloud button, got %#v", buttonData)
+	if len(buttonData) != 2 || buttonData[0] != "tts:read_last" || buttonData[1] != "act:/review open" {
+		t.Fatalf("expected read/review buttons, got %#v", buttonData)
 	}
 	buttonTexts := p.buttonTextsSnapshot()
-	if len(buttonTexts) != 1 || buttonTexts[0] != "Read Aloud" {
-		t.Fatalf("expected read-aloud button label, got %#v", buttonTexts)
+	if len(buttonTexts) != 2 || buttonTexts[0] != "Read Aloud" || buttonTexts[1] != "Review" {
+		t.Fatalf("expected read/review button labels, got %#v", buttonTexts)
 	}
 }
 

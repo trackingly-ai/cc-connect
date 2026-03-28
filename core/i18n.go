@@ -191,15 +191,27 @@ const (
 	MsgVoiceBtnModify        MsgKey = "voice_btn_modify"
 	MsgAttachmentsBuffered   MsgKey = "attachments_buffered"
 
-	MsgTTSNotEnabled MsgKey = "tts_not_enabled"
-	MsgTTSStatus     MsgKey = "tts_status"
-	MsgTTSSwitched   MsgKey = "tts_switched"
-	MsgTTSUsage      MsgKey = "tts_usage"
-	MsgTTSReadButton MsgKey = "tts_read_button"
-	MsgTTSReadPrompt MsgKey = "tts_read_prompt"
-	MsgTTSGenerating MsgKey = "tts_generating"
-	MsgTTSNoContent  MsgKey = "tts_no_content"
-	MsgSetupNative   MsgKey = "setup_native"
+	MsgTTSNotEnabled             MsgKey = "tts_not_enabled"
+	MsgTTSStatus                 MsgKey = "tts_status"
+	MsgTTSSwitched               MsgKey = "tts_switched"
+	MsgTTSUsage                  MsgKey = "tts_usage"
+	MsgTTSReadButton             MsgKey = "tts_read_button"
+	MsgTTSReadPrompt             MsgKey = "tts_read_prompt"
+	MsgTTSGenerating             MsgKey = "tts_generating"
+	MsgTTSNoContent              MsgKey = "tts_no_content"
+	MsgReviewButton              MsgKey = "review_button"
+	MsgReviewActionsTitle        MsgKey = "review_actions_title"
+	MsgReviewChooseTitle         MsgKey = "review_choose_title"
+	MsgReviewChoosePrompt        MsgKey = "review_choose_prompt"
+	MsgReviewNoCandidates        MsgKey = "review_no_candidates"
+	MsgReviewStarted             MsgKey = "review_started"
+	MsgReviewAlreadyRunning      MsgKey = "review_already_running"
+	MsgReviewReviewerNotFound    MsgKey = "review_reviewer_not_found"
+	MsgReviewReviewerUnavailable MsgKey = "review_reviewer_unavailable"
+	MsgReviewReviewerBusy        MsgKey = "review_reviewer_busy"
+	MsgReviewNoContent           MsgKey = "review_no_content"
+	MsgReviewPromptTooLong       MsgKey = "review_prompt_too_long"
+	MsgSetupNative               MsgKey = "setup_native"
 
 	MsgCronNotAvailable MsgKey = "cron_not_available"
 	MsgCronUsage        MsgKey = "cron_usage"
@@ -1118,6 +1130,90 @@ var messages = map[MsgKey]map[Language]string{
 		LangTraditionalChinese: "目前還沒有可朗讀的最近回覆。",
 		LangJapanese:           "読み上げ可能な直近の返信がまだありません。",
 		LangSpanish:            "Todavía no hay una respuesta reciente para leer en voz alta.",
+	},
+	MsgReviewButton: {
+		LangEnglish:            "Review",
+		LangChinese:            "评审",
+		LangTraditionalChinese: "審閱",
+		LangJapanese:           "レビュー",
+		LangSpanish:            "Revisar",
+	},
+	MsgReviewActionsTitle: {
+		LangEnglish:            "Actions",
+		LangChinese:            "后续操作",
+		LangTraditionalChinese: "後續操作",
+		LangJapanese:           "次の操作",
+		LangSpanish:            "Acciones",
+	},
+	MsgReviewChooseTitle: {
+		LangEnglish:            "Choose Reviewer",
+		LangChinese:            "选择 Reviewer",
+		LangTraditionalChinese: "選擇 Reviewer",
+		LangJapanese:           "Reviewer を選択",
+		LangSpanish:            "Elegir revisor",
+	},
+	MsgReviewChoosePrompt: {
+		LangEnglish:            "Which agent should review this summary?",
+		LangChinese:            "用哪个 agent review 这次总结？",
+		LangTraditionalChinese: "用哪個 agent review 這次總結？",
+		LangJapanese:           "どのエージェントにこの要約をレビューさせますか？",
+		LangSpanish:            "¿Qué agente debería revisar este resumen?",
+	},
+	MsgReviewNoCandidates: {
+		LangEnglish:            "No reviewer agents are available.",
+		LangChinese:            "当前没有可用的 reviewer agent。",
+		LangTraditionalChinese: "目前沒有可用的 reviewer agent。",
+		LangJapanese:           "利用可能な reviewer agent がありません。",
+		LangSpanish:            "No hay agentes revisores disponibles.",
+	},
+	MsgReviewStarted: {
+		LangEnglish:            "Started review with `%s`.",
+		LangChinese:            "已开始由 `%s` 进行 review。",
+		LangTraditionalChinese: "已開始由 `%s` 進行 review。",
+		LangJapanese:           "`%s` でレビューを開始しました。",
+		LangSpanish:            "Revisión iniciada con `%s`.",
+	},
+	MsgReviewAlreadyRunning: {
+		LangEnglish:            "A review cycle is already running for this session.",
+		LangChinese:            "当前 session 已有一轮 review 正在运行。",
+		LangTraditionalChinese: "目前 session 已有一輪 review 正在執行。",
+		LangJapanese:           "このセッションではすでにレビュー処理が進行中です。",
+		LangSpanish:            "Ya hay un ciclo de revisión en ejecución para esta sesión.",
+	},
+	MsgReviewReviewerNotFound: {
+		LangEnglish:            "Reviewer `%s` is not available for this session.",
+		LangChinese:            "当前 session 不能使用 reviewer `%s`。",
+		LangTraditionalChinese: "目前 session 不能使用 reviewer `%s`。",
+		LangJapanese:           "Reviewer `%s` はこのセッションでは利用できません。",
+		LangSpanish:            "El reviewer `%s` no está disponible para esta sesión.",
+	},
+	MsgReviewReviewerUnavailable: {
+		LangEnglish:            "Reviewer engine `%s` is not running.",
+		LangChinese:            "reviewer engine `%s` 当前未运行。",
+		LangTraditionalChinese: "reviewer engine `%s` 目前未運行。",
+		LangJapanese:           "reviewer engine `%s` は現在実行されていません。",
+		LangSpanish:            "El engine reviewer `%s` no está en ejecución.",
+	},
+	MsgReviewReviewerBusy: {
+		LangEnglish:            "Reviewer `%s` is busy with another review session.",
+		LangChinese:            "reviewer `%s` 当前正忙于另一轮 review。",
+		LangTraditionalChinese: "reviewer `%s` 目前正忙於另一輪 review。",
+		LangJapanese:           "reviewer `%s` は別のレビュー処理で使用中です。",
+		LangSpanish:            "El reviewer `%s` está ocupado con otra revisión.",
+	},
+	MsgReviewNoContent: {
+		LangEnglish:            "There is no recent summary to review yet.",
+		LangChinese:            "当前还没有可用于 review 的最近总结。",
+		LangTraditionalChinese: "目前還沒有可用於 review 的最近總結。",
+		LangJapanese:           "レビュー対象となる直近の要約がまだありません。",
+		LangSpanish:            "Todavía no hay un resumen reciente para revisar.",
+	},
+	MsgReviewPromptTooLong: {
+		LangEnglish:            "The latest summary is too long to start a review cycle (max %d characters).",
+		LangChinese:            "最近总结过长，无法启动 review 周期（最大 %d 字符）。",
+		LangTraditionalChinese: "最近總結過長，無法啟動 review 週期（最大 %d 字元）。",
+		LangJapanese:           "直近の要約が長すぎるため、レビューを開始できません（最大 %d 文字）。",
+		LangSpanish:            "El resumen reciente es demasiado largo para iniciar una revisión (máx. %d caracteres).",
 	},
 	MsgSetupNative: {
 		LangEnglish:            "✅ This agent already supports cc-connect instructions natively. No extra setup is needed.",

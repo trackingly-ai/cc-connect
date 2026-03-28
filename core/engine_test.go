@@ -76,6 +76,24 @@ func (s *eventfulStubAgentSession) CurrentSessionID() string {
 func (s *eventfulStubAgentSession) Alive() bool  { return true }
 func (s *eventfulStubAgentSession) Close() error { return nil }
 
+type scriptedAgentSession struct {
+	events chan Event
+	queue  []Event
+}
+
+func (s *scriptedAgentSession) Send(_ string, _ []ImageAttachment, _ []FileAttachment) error {
+	for _, evt := range s.queue {
+		s.events <- evt
+	}
+	close(s.events)
+	return nil
+}
+func (s *scriptedAgentSession) RespondPermission(_ string, _ PermissionResult) error { return nil }
+func (s *scriptedAgentSession) Events() <-chan Event                                 { return s.events }
+func (s *scriptedAgentSession) CurrentSessionID() string                             { return "" }
+func (s *scriptedAgentSession) Alive() bool                                          { return true }
+func (s *scriptedAgentSession) Close() error                                         { return nil }
+
 type recordedSend struct {
 	prompt string
 	images []ImageAttachment
@@ -202,6 +220,44 @@ func (p *stubPlatformEngine) Send(_ context.Context, _ any, content string) erro
 	return nil
 }
 func (p *stubPlatformEngine) Stop() error { return nil }
+
+type stubCardPlatform struct {
+	mu    sync.Mutex
+	n     string
+	sent  []string
+	cards []*Card
+}
+
+func (p *stubCardPlatform) Name() string               { return p.n }
+func (p *stubCardPlatform) Start(MessageHandler) error { return nil }
+func (p *stubCardPlatform) Reply(_ context.Context, _ any, content string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.sent = append(p.sent, content)
+	return nil
+}
+func (p *stubCardPlatform) Send(_ context.Context, _ any, content string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.sent = append(p.sent, content)
+	return nil
+}
+func (p *stubCardPlatform) Stop() error { return nil }
+func (p *stubCardPlatform) ReconstructReplyCtx(sessionKey string) (any, error) {
+	return sessionKey, nil
+}
+func (p *stubCardPlatform) SendCard(_ context.Context, _ any, card *Card) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.cards = append(p.cards, card)
+	return nil
+}
+func (p *stubCardPlatform) ReplyCard(_ context.Context, _ any, card *Card) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.cards = append(p.cards, card)
+	return nil
+}
 
 func newTestEngine() *Engine {
 	return NewEngine("test", &stubAgent{}, []Platform{&stubPlatformEngine{n: "test"}}, "", LangEnglish)
@@ -427,6 +483,231 @@ func TestHandlePendingCronPromptEditRejectsTooLongPrompt(t *testing.T) {
 	sent := p.sentSnapshot()
 	if len(sent) == 0 || !strings.Contains(sent[0], "prompt too long") {
 		t.Fatalf("sent = %#v, want prompt too long error", sent)
+	}
+}
+
+func TestResultActionCardContainsReviewButton(t *testing.T) {
+	e := NewEngine("codex", &stubAgent{}, nil, "", LangEnglish)
+	card := e.resultActionCard()
+	if card == nil {
+		t.Fatal("expected result action card")
+	}
+	text := card.RenderText()
+	if !strings.Contains(text, "Read Aloud") || !strings.Contains(text, "Review") {
+		t.Fatalf("card text = %q, want read and review actions", text)
+	}
+}
+
+func TestReviewerSelectorCardExcludesCurrentProject(t *testing.T) {
+	rm := NewRelayManager("")
+	e := NewEngine("codex", &stubAgent{}, nil, "", LangEnglish)
+	other1 := NewEngine("qoder", &stubAgent{}, nil, "", LangEnglish)
+	other2 := NewEngine("gemini", &stubAgent{}, nil, "", LangEnglish)
+	rm.RegisterEngine(e.name, e)
+	rm.RegisterEngine(other1.name, other1)
+	rm.RegisterEngine(other2.name, other2)
+	e.SetRelayManager(rm)
+
+	card := e.reviewerSelectorCard()
+	text := card.RenderText()
+	if strings.Contains(text, "codex") {
+		t.Fatalf("selector should exclude current project, got %q", text)
+	}
+	if !strings.Contains(text, "qoder") || !strings.Contains(text, "gemini") {
+		t.Fatalf("selector missing reviewer projects: %q", text)
+	}
+}
+
+func TestStartReviewCycleRunsReviewerAndOriginRevision(t *testing.T) {
+	rm := NewRelayManager("")
+	originAgent := &recordingSendAgent{}
+	reviewerAgent := &recordingSendAgent{}
+	originPlatform := &stubCardPlatform{n: "feishu"}
+	reviewerPlatform := &stubCardPlatform{n: "worker"}
+	origin := NewEngine("codex", originAgent, []Platform{originPlatform}, "", LangEnglish)
+	reviewer := NewEngine("qoder", reviewerAgent, []Platform{reviewerPlatform}, "", LangEnglish)
+	rm.RegisterEngine(origin.name, origin)
+	rm.RegisterEngine(reviewer.name, reviewer)
+	origin.SetRelayManager(rm)
+	reviewer.SetRelayManager(rm)
+
+	sessionKey := "feishu:chat:user"
+	originSession := origin.sessions.GetOrCreateActive(sessionKey)
+	originSession.AddHistory("assistant", "Original summary from codex.")
+
+	if err := origin.startReviewCycle(sessionKey, "qoder"); err != nil {
+		t.Fatalf("startReviewCycle: %v", err)
+	}
+
+	reviewerSends := reviewerAgent.session.Sends()
+	if len(reviewerSends) != 1 {
+		t.Fatalf("reviewer send count = %d, want 1", len(reviewerSends))
+	}
+	if !strings.Contains(reviewerSends[0].prompt, "Original summary from codex.") {
+		t.Fatalf("reviewer prompt = %q, want original summary", reviewerSends[0].prompt)
+	}
+
+	originSends := originAgent.session.Sends()
+	if len(originSends) != 1 {
+		t.Fatalf("origin send count = %d, want 1 revision prompt", len(originSends))
+	}
+	if !strings.Contains(originSends[0].prompt, "Reviewer feedback from qoder:") {
+		t.Fatalf("origin revision prompt = %q, want reviewer feedback section", originSends[0].prompt)
+	}
+	if !strings.Contains(originSends[0].prompt, "ok") {
+		t.Fatalf("origin revision prompt = %q, want reviewer summary text", originSends[0].prompt)
+	}
+
+	originPlatform.mu.Lock()
+	if len(originPlatform.cards) == 0 {
+		originPlatform.mu.Unlock()
+		t.Fatal("expected follow-up action card after revision turn")
+	}
+	lastCardText := originPlatform.cards[len(originPlatform.cards)-1].RenderText()
+	originPlatform.mu.Unlock()
+	if !strings.Contains(lastCardText, "Read Aloud") || !strings.Contains(lastCardText, "Review") {
+		t.Fatalf("follow-up card = %q, want result actions", lastCardText)
+	}
+
+	flow := origin.getReviewFlow(sessionKey)
+	if flow == nil || flow.ReviewerProject != "qoder" {
+		t.Fatalf("flow = %#v, want qoder reviewer", flow)
+	}
+	if flow.LastOriginSummary != "Original summary from codex." {
+		t.Fatalf("origin summary = %q", flow.LastOriginSummary)
+	}
+	if flow.LastReviewSummary != "ok" {
+		t.Fatalf("review summary = %q, want ok", flow.LastReviewSummary)
+	}
+	if flow.Running {
+		t.Fatal("expected flow to be marked not running after completion")
+	}
+}
+
+func TestStartReviewCycle_UsesOriginPlatformForReviewerOutput(t *testing.T) {
+	rm := NewRelayManager("")
+	originAgent := &recordingSendAgent{}
+	reviewerAgent := &recordingSendAgent{}
+	originPlatform := &stubCardPlatform{n: "feishu"}
+	reviewerPlatform := &stubCardPlatform{n: "worker"}
+	origin := NewEngine("codex", originAgent, []Platform{originPlatform}, "", LangEnglish)
+	reviewer := NewEngine("qoder", reviewerAgent, []Platform{reviewerPlatform}, "", LangEnglish)
+	rm.RegisterEngine(origin.name, origin)
+	rm.RegisterEngine(reviewer.name, reviewer)
+	origin.SetRelayManager(rm)
+	reviewer.SetRelayManager(rm)
+
+	sessionKey := "feishu:chat:user"
+	originSession := origin.sessions.GetOrCreateActive(sessionKey)
+	originSession.AddHistory("assistant", "Original summary from codex.")
+
+	if err := origin.startReviewCycle(sessionKey, "qoder"); err != nil {
+		t.Fatalf("startReviewCycle: %v", err)
+	}
+
+	originPlatform.mu.Lock()
+	defer originPlatform.mu.Unlock()
+	if len(originPlatform.sent) == 0 {
+		t.Fatal("expected reviewer output to be sent via origin platform")
+	}
+	if !strings.Contains(strings.Join(originPlatform.sent, "\n"), "qoder: ok") {
+		t.Fatalf("origin platform sent = %#v, want prefixed reviewer output", originPlatform.sent)
+	}
+}
+
+func TestHandleCardNav_ReviewOpenSendsSelectorCard(t *testing.T) {
+	rm := NewRelayManager("")
+	originPlatform := &stubCardPlatform{n: "feishu"}
+	origin := NewEngine("codex", &stubAgent{}, []Platform{originPlatform}, "", LangEnglish)
+	reviewer := NewEngine("qoder", &stubAgent{}, []Platform{&stubCardPlatform{n: "worker"}}, "", LangEnglish)
+	rm.RegisterEngine(origin.name, origin)
+	rm.RegisterEngine(reviewer.name, reviewer)
+	origin.SetRelayManager(rm)
+	reviewer.SetRelayManager(rm)
+
+	card := origin.handleCardNav("act:/review open", "feishu:chat:user")
+	if card == nil {
+		t.Fatal("expected original action card to be returned")
+	}
+
+	originPlatform.mu.Lock()
+	defer originPlatform.mu.Unlock()
+	if len(originPlatform.cards) == 0 {
+		t.Fatal("expected reviewer selector card to be sent")
+	}
+	if got := originPlatform.cards[len(originPlatform.cards)-1].RenderText(); !strings.Contains(got, "qoder") {
+		t.Fatalf("selector card = %q, want reviewer option", got)
+	}
+}
+
+func TestReviewerSelectorCard_GroupsButtonsByRow(t *testing.T) {
+	rm := NewRelayManager("")
+	origin := NewEngine("codex", &stubAgent{}, nil, "", LangEnglish)
+	rm.RegisterEngine("codex", origin)
+	rm.RegisterEngine("claude", NewEngine("claude", &stubAgent{}, nil, "", LangEnglish))
+	rm.RegisterEngine("gemini", NewEngine("gemini", &stubAgent{}, nil, "", LangEnglish))
+	rm.RegisterEngine("qoder", NewEngine("qoder", &stubAgent{}, nil, "", LangEnglish))
+	origin.SetRelayManager(rm)
+
+	card := origin.reviewerSelectorCard()
+	if card == nil {
+		t.Fatal("expected selector card")
+	}
+
+	actionRows := 0
+	for _, el := range card.Elements {
+		if actions, ok := el.(CardActions); ok {
+			actionRows++
+			if len(actions.Buttons) > 2 {
+				t.Fatalf("row button count = %d, want <= 2", len(actions.Buttons))
+			}
+		}
+	}
+	if actionRows != 2 {
+		t.Fatalf("action rows = %d, want 2 for 3 reviewers", actionRows)
+	}
+}
+
+func TestRunManagedTurn_UsesToolResultContentAndHonorsQuiet(t *testing.T) {
+	p := &stubPlatformEngine{n: "test"}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	session := e.sessions.GetOrCreateActive("test:user1")
+	state := newInteractiveState(&scriptedAgentSession{
+		events: make(chan Event, 4),
+		queue: []Event{
+			{Type: EventToolResult, Content: "tool output from content field"},
+			{Type: EventText, Content: "final"},
+			{Type: EventResult, Done: true},
+		},
+	}, p, "ctx", false)
+
+	got, err := e.runManagedTurn(state, session, "test:user1", "prompt", managedTurnOpts{Prefix: "qoder: "})
+	if err != nil {
+		t.Fatalf("runManagedTurn: %v", err)
+	}
+	if got != "final" {
+		t.Fatalf("final = %q, want final", got)
+	}
+	if !strings.Contains(strings.Join(p.sent, "\n"), "qoder: tool output from content field") {
+		t.Fatalf("sent = %#v, want tool result content with prefix", p.sent)
+	}
+
+	quietPlatform := &stubPlatformEngine{n: "test"}
+	quietSession := e.sessions.GetOrCreateActive("test:user2")
+	quietState := newInteractiveState(&scriptedAgentSession{
+		events: make(chan Event, 3),
+		queue: []Event{
+			{Type: EventToolResult, Content: "hidden tool output"},
+			{Type: EventText, Content: "quiet final"},
+			{Type: EventResult, Done: true},
+		},
+	}, quietPlatform, "ctx", true)
+
+	if _, err := e.runManagedTurn(quietState, quietSession, "test:user2", "prompt", managedTurnOpts{Prefix: "qoder: "}); err != nil {
+		t.Fatalf("runManagedTurn quiet: %v", err)
+	}
+	if strings.Contains(strings.Join(quietPlatform.sent, "\n"), "hidden tool output") {
+		t.Fatalf("quiet sent = %#v, want tool output suppressed", quietPlatform.sent)
 	}
 }
 

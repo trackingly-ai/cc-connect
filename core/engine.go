@@ -178,6 +178,8 @@ type Engine struct {
 	pendingAttach     map[string]*pendingAttachments
 	cronEditMu        sync.Mutex
 	pendingCronEdits  map[string]*pendingCronPromptEdit
+	reviewMu          sync.Mutex
+	reviewFlows       map[string]*reviewFlow
 
 	quietMu sync.RWMutex
 	quiet   bool // when true, suppress thinking and tool progress messages globally
@@ -243,6 +245,20 @@ type pendingCronPromptEdit struct {
 }
 
 const maxCronPromptLen = 10000
+const maxReviewPromptLen = 10000
+
+type reviewFlow struct {
+	ReviewerProject   string
+	LastOriginSummary string
+	LastReviewSummary string
+	Running           bool
+}
+
+type managedTurnOpts struct {
+	Prefix            string
+	AutoApprove       bool
+	OfferFollowUpCard bool
+}
 
 // resolve safely closes the Resolved channel exactly once.
 func (pp *pendingPermission) resolve() {
@@ -268,6 +284,7 @@ func NewEngine(name string, ag Agent, platforms []Platform, sessionStorePath str
 		voiceConfirms:     make(map[string]*pendingVoiceConfirmation),
 		pendingAttach:     make(map[string]*pendingAttachments),
 		pendingCronEdits:  make(map[string]*pendingCronPromptEdit),
+		reviewFlows:       make(map[string]*reviewFlow),
 		startedAt:         time.Now(),
 		streamPreview:     DefaultStreamPreviewCfg(),
 		eventIdleTimeout:  defaultEventIdleTimeout,
@@ -897,6 +914,313 @@ func (e *Engine) clearPendingCronPromptEditIfMatch(sessionKey, jobID string) {
 	edit := e.pendingCronEdits[sessionKey]
 	if edit != nil && edit.JobID == jobID {
 		delete(e.pendingCronEdits, sessionKey)
+	}
+}
+
+func reviewFlowMapKey(project, sessionKey string) string {
+	return project + "|" + sessionKey
+}
+
+func reviewerSessionKey(originProject, reviewerProject, originSessionKey string) string {
+	return "review:" + originProject + ":" + reviewerProject + ":" + originSessionKey
+}
+
+func (e *Engine) getReviewFlow(sessionKey string) *reviewFlow {
+	e.reviewMu.Lock()
+	defer e.reviewMu.Unlock()
+	flow := e.reviewFlows[reviewFlowMapKey(e.name, sessionKey)]
+	if flow == nil {
+		return nil
+	}
+	cp := *flow
+	return &cp
+}
+
+func (e *Engine) reviewerProjects() []string {
+	if e.relayManager == nil {
+		return nil
+	}
+	names := e.relayManager.ListEngineNames()
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		if name == "" || name == e.name {
+			continue
+		}
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (e *Engine) reconstructPlatformReply(sessionKey string) (Platform, any, error) {
+	platformName, _, err := parseSessionKeyParts(sessionKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, p := range e.platforms {
+		if p.Name() != platformName {
+			continue
+		}
+		rc, ok := p.(ReplyContextReconstructor)
+		if !ok {
+			return nil, nil, fmt.Errorf("platform %q does not support reply context reconstruction", platformName)
+		}
+		replyCtx, err := rc.ReconstructReplyCtx(sessionKey)
+		if err != nil {
+			return nil, nil, err
+		}
+		return p, replyCtx, nil
+	}
+	return nil, nil, fmt.Errorf("platform %q not found", platformName)
+}
+
+func (e *Engine) sendCardToSession(sessionKey string, card *Card) error {
+	p, replyCtx, err := e.reconstructPlatformReply(sessionKey)
+	if err != nil {
+		return err
+	}
+	if cs, ok := p.(CardSender); ok {
+		return cs.SendCard(e.ctx, replyCtx, card)
+	}
+	return p.Send(e.ctx, replyCtx, card.RenderText())
+}
+
+func (e *Engine) sendTextToSession(sessionKey, content string) error {
+	p, replyCtx, err := e.reconstructPlatformReply(sessionKey)
+	if err != nil {
+		return err
+	}
+	return p.Send(e.ctx, replyCtx, content)
+}
+
+func (e *Engine) sendChunksWithPrefix(p Platform, replyCtx any, prefix, content string) error {
+	text := strings.TrimSpace(content)
+	if text == "" {
+		return nil
+	}
+	if prefix != "" {
+		text = prefix + text
+	}
+	for _, chunk := range splitMessage(text, maxPlatformMessageLen) {
+		if err := p.Send(e.ctx, replyCtx, chunk); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (e *Engine) runManagedTurn(state *interactiveState, session *Session, agentSessionKey string, prompt string, opts managedTurnOpts) (string, error) {
+	if state == nil || state.agentSession == nil {
+		return "", fmt.Errorf("failed to start agent session")
+	}
+
+	state.mu.Lock()
+	p := state.platform
+	replyCtx := state.replyCtx
+	state.approveAll = opts.AutoApprove
+	sessionQuiet := state.quiet
+	state.mu.Unlock()
+
+	e.quietMu.RLock()
+	globalQuiet := e.quiet
+	e.quietMu.RUnlock()
+	quiet := globalQuiet || sessionQuiet
+
+	session.AddHistory("user", prompt)
+	e.sessions.Save()
+
+	drainEvents(state.agentSession.Events())
+	if err := state.agentSession.Send(prompt, nil, nil); err != nil {
+		return "", err
+	}
+
+	var textParts []string
+	toolCount := 0
+	waitStart := time.Now()
+	firstEventLogged := false
+
+	var idleTimer *time.Timer
+	var idleCh <-chan time.Time
+	if e.eventIdleTimeout > 0 {
+		idleTimer = time.NewTimer(e.eventIdleTimeout)
+		defer idleTimer.Stop()
+		idleCh = idleTimer.C
+	}
+
+	var firstEventTimer *time.Timer
+	var firstEventCh <-chan time.Time
+	if e.firstEventTimeout > 0 {
+		firstEventTimer = time.NewTimer(e.firstEventTimeout)
+		defer firstEventTimer.Stop()
+		firstEventCh = firstEventTimer.C
+	}
+
+	var turnTimer *time.Timer
+	var turnCh <-chan time.Time
+	if e.turnTimeout > 0 {
+		turnTimer = time.NewTimer(e.turnTimeout)
+		defer turnTimer.Stop()
+		turnCh = turnTimer.C
+	}
+
+	events := state.agentSession.Events()
+	for {
+		var event Event
+		var ok bool
+
+		select {
+		case event, ok = <-events:
+			if !ok {
+				if len(textParts) > 0 {
+					final := strings.Join(textParts, "")
+					session.AddHistory("assistant", final)
+					e.sessions.Save()
+					return final, nil
+				}
+				return "", fmt.Errorf("agent process exited without response")
+			}
+		case <-state.stopped:
+			return "", fmt.Errorf("agent session stopped")
+		case <-firstEventCh:
+			e.cleanupInteractiveState(agentSessionKey)
+			return "", fmt.Errorf("agent session timed out waiting for first response")
+		case <-turnCh:
+			e.cleanupInteractiveState(agentSessionKey)
+			return "", fmt.Errorf("agent session timed out before completing the turn")
+		case <-idleCh:
+			e.cleanupInteractiveState(agentSessionKey)
+			return "", fmt.Errorf("agent session timed out (no response)")
+		case <-e.ctx.Done():
+			return "", e.ctx.Err()
+		}
+
+		if idleTimer != nil {
+			if !idleTimer.Stop() {
+				select {
+				case <-idleTimer.C:
+				default:
+				}
+			}
+			idleTimer.Reset(e.eventIdleTimeout)
+		}
+
+		if !firstEventLogged {
+			firstEventLogged = true
+			if firstEventTimer != nil {
+				if !firstEventTimer.Stop() {
+					select {
+					case <-firstEventTimer.C:
+					default:
+					}
+				}
+				firstEventCh = nil
+			}
+			if elapsed := time.Since(waitStart); elapsed >= slowAgentFirstEvent {
+				slog.Warn("slow managed turn first event", "elapsed", elapsed, "session", agentSessionKey, "event_type", event.Type)
+			}
+		}
+
+		e.bindAgentSessionID(session, event.SessionID)
+
+		switch event.Type {
+		case EventThinking:
+			if !quiet && event.Content != "" {
+				preview := truncateIf(event.Content, e.display.ThinkingMaxLen)
+				msg := fmt.Sprintf(e.i18n.T(MsgThinking), preview)
+				if err := e.sendChunksWithPrefix(p, replyCtx, opts.Prefix, msg); err != nil {
+					return "", err
+				}
+			}
+		case EventToolUse:
+			toolCount++
+			if !quiet {
+				inputPreview := truncateIf(event.ToolInput, e.display.ToolMaxLen)
+				lineCount := strings.Count(inputPreview, "\n") + 1
+				var formattedInput string
+				if lineCount > 5 || utf8.RuneCountInString(inputPreview) > 200 {
+					formattedInput = fmt.Sprintf("```\n%s\n```", inputPreview)
+				} else {
+					formattedInput = fmt.Sprintf("`%s`", inputPreview)
+				}
+				msg := fmt.Sprintf(e.i18n.T(MsgTool), toolCount, event.ToolName, formattedInput)
+				if err := e.sendChunksWithPrefix(p, replyCtx, opts.Prefix, msg); err != nil {
+					return "", err
+				}
+			}
+		case EventToolResult:
+			if quiet {
+				continue
+			}
+			result := strings.TrimSpace(event.ToolResult)
+			if result == "" {
+				result = strings.TrimSpace(event.Content)
+			}
+			if result != "" {
+				if err := e.sendChunksWithPrefix(p, replyCtx, opts.Prefix, result); err != nil {
+					return "", err
+				}
+			}
+		case EventText:
+			if event.Content != "" {
+				textParts = append(textParts, event.Content)
+			}
+		case EventPermissionRequest:
+			if !opts.AutoApprove {
+				return "", fmt.Errorf("permission request is not supported in automated review flow")
+			}
+			if err := state.agentSession.RespondPermission(event.RequestID, PermissionResult{
+				Behavior:     "allow",
+				UpdatedInput: event.ToolInputRaw,
+			}); err != nil {
+				return "", err
+			}
+		case EventResult:
+			fullResponse := event.Content
+			if fullResponse == "" && len(textParts) > 0 {
+				fullResponse = strings.Join(textParts, "")
+			}
+			prompt := detectTextInteractionPrompt(fullResponse)
+			displayResponse := fullResponse
+			if prompt != nil && strings.Contains(strings.ToLower(fullResponse), "<options>") {
+				displayResponse = strings.TrimSpace(prompt.Prompt)
+			}
+			if displayResponse == "" && prompt == nil {
+				displayResponse = e.i18n.T(MsgEmptyResponse)
+			}
+			if displayResponse != "" {
+				session.AddHistory("assistant", displayResponse)
+				e.sessions.Save()
+				if err := e.sendChunksWithPrefix(p, replyCtx, opts.Prefix, displayResponse); err != nil {
+					return "", err
+				}
+				if prompt != nil && opts.Prefix == "" {
+					followUp := prompt.Description
+					if strings.TrimSpace(followUp) == "" {
+						followUp = "Choose a reply below, or type your own response."
+					}
+					e.replyWithInteraction(agentSessionKey, p, replyCtx, followUp, prompt.Choices, false)
+				}
+				if opts.OfferFollowUpCard {
+					e.offerResultActionCard(p, replyCtx, displayResponse)
+				}
+			}
+			if e.shouldResetAgentSessionOnResult(displayResponse) {
+				slog.Warn("resetting agent session after fatal result", "agent", e.agent.Name(), "session", session.ID, "agent_session", session.AgentSessionID)
+				session.mu.Lock()
+				session.AgentSessionID = ""
+				session.NeedsReplay = true
+				session.mu.Unlock()
+				e.sessions.Save()
+				e.cleanupInteractiveState(agentSessionKey)
+			}
+			return displayResponse, nil
+		case EventError:
+			if event.Error != nil {
+				_ = e.sendChunksWithPrefix(p, replyCtx, opts.Prefix, fmt.Sprintf(e.i18n.T(MsgError), event.Error))
+				return "", event.Error
+			}
+			return "", fmt.Errorf("agent error")
+		}
 	}
 }
 
@@ -1995,7 +2319,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			}
 
 			if displayResponse != "" {
-				e.offerReadAloudButton(p, replyCtx, displayResponse)
+				e.offerResultActionCard(p, replyCtx, displayResponse)
 			}
 
 			// TTS: async voice reply if enabled
@@ -3972,6 +4296,11 @@ func (e *Engine) handleCardNav(action, sessionKey string) *Card {
 		return e.renderHelpCard()
 	case "/cron":
 		return e.renderCronCard(sessionKey, notice)
+	case "/review":
+		if strings.HasPrefix(strings.TrimSpace(args), "start ") {
+			return e.simpleCard(e.i18n.T(MsgReviewActionsTitle), "blue", notice)
+		}
+		return e.resultActionCard()
 	}
 	return nil
 }
@@ -4020,6 +4349,33 @@ func (e *Engine) executeCardAction(cmd, args, sessionKey string) string {
 		case "editprompt":
 			e.setPendingCronPromptEdit(sessionKey, id)
 			return fmt.Sprintf("Send your next message to replace the prompt for `%s`. Send /cancel to abort.", id)
+		}
+	case "/review":
+		fields := strings.Fields(args)
+		if len(fields) == 0 {
+			return ""
+		}
+		switch fields[0] {
+		case "open":
+			if err := e.sendCardToSession(sessionKey, e.reviewerSelectorCard()); err != nil {
+				slog.Warn("review: failed to send selector card", "session_key", sessionKey, "error", err)
+				return fmt.Sprintf(e.i18n.T(MsgError), err)
+			}
+			return ""
+		case "start":
+			if len(fields) < 2 {
+				return ""
+			}
+			reviewerProject := fields[1]
+			go func() {
+				if err := e.startReviewCycle(sessionKey, reviewerProject); err != nil {
+					slog.Error("review: cycle failed", "session_key", sessionKey, "reviewer", reviewerProject, "error", err)
+					if sendErr := e.sendTextToSession(sessionKey, fmt.Sprintf(e.i18n.T(MsgError), err)); sendErr != nil {
+						slog.Warn("review: failed to send error", "session_key", sessionKey, "error", sendErr)
+					}
+				}
+			}()
+			return e.i18n.Tf(MsgReviewStarted, reviewerProject)
 		}
 	}
 	return ""
@@ -5055,11 +5411,189 @@ func (e *Engine) sendTTSReply(p Platform, replyCtx any, text string) {
 	}
 }
 
-func (e *Engine) offerReadAloudButton(p Platform, replyCtx any, text string) {
-	if e.tts == nil || !e.tts.Enabled || e.tts.TTS == nil || !e.tts.OfferReadButton {
+func buildReviewPrompt(originProject, reviewerProject, summary string) string {
+	return fmt.Sprintf(
+		"Please review the following code or document summary.\n\nOriginal agent: %s\nReviewer: %s\n\nOriginal summary:\n%s\n\nReview it critically. Focus on bugs, regressions, risky assumptions, unclear implementation details, and missing validation or tests. If no major issue is found, say that explicitly.",
+		originProject,
+		reviewerProject,
+		strings.TrimSpace(summary),
+	)
+}
+
+func buildRevisionPrompt(originProject, reviewerProject, originSummary, reviewSummary string) string {
+	return fmt.Sprintf(
+		"Please revise your previous work based on the following review feedback.\n\nYour previous summary:\n%s\n\nReviewer feedback from %s:\n%s\n\nUpdate the work accordingly and provide an updated final summary.",
+		strings.TrimSpace(originSummary),
+		reviewerProject,
+		strings.TrimSpace(reviewSummary),
+	)
+}
+
+func (e *Engine) startReviewCycle(sessionKey, reviewerProject string) error {
+	allowed := false
+	for _, name := range e.reviewerProjects() {
+		if name == reviewerProject {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return fmt.Errorf(e.i18n.T(MsgReviewReviewerNotFound), reviewerProject)
+	}
+
+	e.reviewMu.Lock()
+	key := reviewFlowMapKey(e.name, sessionKey)
+	flow := e.reviewFlows[key]
+	if flow != nil && flow.Running {
+		e.reviewMu.Unlock()
+		return fmt.Errorf("%s", e.i18n.T(MsgReviewAlreadyRunning))
+	}
+	if flow == nil {
+		flow = &reviewFlow{}
+		e.reviewFlows[key] = flow
+	}
+	flow.ReviewerProject = reviewerProject
+	flow.LastOriginSummary = ""
+	flow.LastReviewSummary = ""
+	flow.Running = true
+	flowRef := flow
+	e.reviewMu.Unlock()
+
+	defer func() {
+		e.reviewMu.Lock()
+		if e.reviewFlows[key] == flowRef {
+			flowRef.Running = false
+		}
+		e.reviewMu.Unlock()
+	}()
+
+	reviewerEngine := (*Engine)(nil)
+	if e.relayManager != nil {
+		e.relayManager.mu.RLock()
+		reviewerEngine = e.relayManager.engines[reviewerProject]
+		e.relayManager.mu.RUnlock()
+	}
+	if reviewerEngine == nil {
+		return fmt.Errorf(e.i18n.T(MsgReviewReviewerUnavailable), reviewerProject)
+	}
+
+	originPlatform, originReplyCtx, err := e.reconstructPlatformReply(sessionKey)
+	if err != nil {
+		return fmt.Errorf("review reconstruct origin reply: %w", err)
+	}
+	originSession := e.sessions.GetOrCreateActive(sessionKey)
+	if !originSession.TryLock() {
+		return fmt.Errorf("%s", e.i18n.T(MsgPreviousProcessing))
+	}
+	defer func() {
+		originSession.mu.Lock()
+		locked := originSession.busy
+		originSession.mu.Unlock()
+		if locked {
+			originSession.Unlock()
+		}
+	}()
+
+	originSummary := strings.TrimSpace(originSession.LatestAssistantMessage())
+	if originSummary == "" {
+		return fmt.Errorf("%s", e.i18n.T(MsgReviewNoContent))
+	}
+	if utf8.RuneCountInString(originSummary) > maxReviewPromptLen {
+		return fmt.Errorf("%s", e.i18n.Tf(MsgReviewPromptTooLong, maxReviewPromptLen))
+	}
+
+	e.reviewMu.Lock()
+	if e.reviewFlows[key] == flowRef {
+		flowRef.LastOriginSummary = originSummary
+		flowRef.LastReviewSummary = ""
+	}
+	e.reviewMu.Unlock()
+
+	reviewKey := reviewerSessionKey(e.name, reviewerProject, sessionKey)
+	reviewerSession := reviewerEngine.sessions.GetOrCreateActive(reviewKey)
+	if !reviewerSession.TryLock() {
+		return fmt.Errorf("%s", e.i18n.Tf(MsgReviewReviewerBusy, reviewerProject))
+	}
+	defer reviewerSession.Unlock()
+
+	reviewState := reviewerEngine.getOrCreateInteractiveState(reviewKey, originPlatform, originReplyCtx, reviewerSession)
+	reviewState.mu.Lock()
+	reviewState.platform = originPlatform
+	reviewState.replyCtx = originReplyCtx
+	reviewState.mu.Unlock()
+	reviewPrompt := buildReviewPrompt(e.name, reviewerProject, originSummary)
+	reviewSummary, err := reviewerEngine.runManagedTurn(reviewState, reviewerSession, reviewKey, reviewPrompt, managedTurnOpts{
+		Prefix:      reviewerProject + ": ",
+		AutoApprove: true,
+	})
+	if err != nil {
+		return err
+	}
+
+	e.reviewMu.Lock()
+	if e.reviewFlows[key] == flowRef {
+		flowRef.LastReviewSummary = reviewSummary
+	}
+	e.reviewMu.Unlock()
+
+	revisionPrompt := buildRevisionPrompt(e.name, reviewerProject, originSummary, reviewSummary)
+	originState := e.getOrCreateInteractiveState(sessionKey, originPlatform, originReplyCtx, originSession)
+	if originState == nil || originState.agentSession == nil {
+		return fmt.Errorf("failed to restart origin agent session")
+	}
+	originState.mu.Lock()
+	originState.platform = originPlatform
+	originState.replyCtx = originReplyCtx
+	originState.mu.Unlock()
+	_, err = e.runManagedTurn(originState, originSession, sessionKey, revisionPrompt, managedTurnOpts{
+		AutoApprove:       true,
+		OfferFollowUpCard: true,
+	})
+	return err
+}
+
+func (e *Engine) resultActionCard() *Card {
+	buttons := []CardButton{
+		DefaultBtn(e.i18n.T(MsgTTSReadButton), "tts:read_last"),
+		PrimaryBtn(e.i18n.T(MsgReviewButton), "act:/review open"),
+	}
+	return NewCard().
+		Title(e.i18n.T(MsgReviewActionsTitle), "blue").
+		ButtonsEqual(buttons...).
+		Build()
+}
+
+func (e *Engine) reviewerSelectorCard() *Card {
+	reviewers := e.reviewerProjects()
+	cb := NewCard().
+		Title(e.i18n.T(MsgReviewChooseTitle), "orange").
+		Markdown(e.i18n.T(MsgReviewChoosePrompt))
+	if len(reviewers) == 0 {
+		return cb.Note(e.i18n.T(MsgReviewNoCandidates)).Build()
+	}
+	buttons := make([]CardButton, 0, len(reviewers))
+	for _, reviewer := range reviewers {
+		buttons = append(buttons, DefaultBtn(reviewer, "act:/review start "+reviewer))
+	}
+	for i := 0; i < len(buttons); i += 2 {
+		end := i + 2
+		if end > len(buttons) {
+			end = len(buttons)
+		}
+		cb.ButtonsEqual(buttons[i:end]...)
+	}
+	return cb.Build()
+}
+
+func (e *Engine) offerResultActionCard(p Platform, replyCtx any, text string) {
+	if strings.TrimSpace(text) == "" {
 		return
 	}
-	if strings.TrimSpace(text) == "" {
+	if supportsCards(p) {
+		e.replyWithCard(p, replyCtx, e.resultActionCard())
+		return
+	}
+	if e.tts == nil || !e.tts.Enabled || e.tts.TTS == nil || !e.tts.OfferReadButton {
 		return
 	}
 	if _, ok := p.(AudioSender); !ok {
