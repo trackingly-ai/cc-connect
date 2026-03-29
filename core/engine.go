@@ -2667,6 +2667,11 @@ func (e *Engine) cmdList(p Platform, msg *Message, args []string) {
 		page = totalPages
 	}
 
+	if supportsCards(p) {
+		e.replyWithCard(p, msg.ReplyCtx, e.renderSessionCard(msg.SessionKey, page, ""))
+		return
+	}
+
 	start := (page - 1) * listPageSize
 	end := start + listPageSize
 	if end > total {
@@ -2712,6 +2717,117 @@ func (e *Engine) cmdList(p Platform, msg *Message, args []string) {
 	e.reply(p, msg.ReplyCtx, sb.String())
 }
 
+func sessionDisplayName(sm *SessionManager, s AgentSessionInfo) string {
+	displayName := sm.GetSessionName(s.ID)
+	if displayName != "" {
+		return "📌 " + displayName
+	}
+	displayName = strings.ReplaceAll(s.Summary, "\n", " ")
+	displayName = strings.Join(strings.Fields(displayName), " ")
+	if displayName == "" {
+		displayName = "(empty)"
+	}
+	if len([]rune(displayName)) > 40 {
+		displayName = string([]rune(displayName)[:40]) + "…"
+	}
+	return displayName
+}
+
+func parseSessionCardPage(args string) int {
+	fields := strings.Fields(strings.TrimSpace(args))
+	if len(fields) == 0 {
+		return 1
+	}
+	if len(fields) == 1 {
+		if n, err := strconv.Atoi(fields[0]); err == nil && n > 0 {
+			return n
+		}
+		return 1
+	}
+	if len(fields) >= 3 && (fields[0] == "switch" || fields[0] == "delete") {
+		if n, err := strconv.Atoi(fields[2]); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 1
+}
+
+func (e *Engine) renderSessionCard(sessionKey string, page int, notice string) *Card {
+	agentSessions, err := e.agent.ListSessions(e.ctx)
+	if err != nil {
+		return e.simpleCard("Sessions", "orange", fmt.Sprintf(e.i18n.T(MsgListError), err))
+	}
+	if len(agentSessions) == 0 {
+		return e.simpleCard("Sessions", "blue", e.i18n.T(MsgListEmpty))
+	}
+
+	total := len(agentSessions)
+	totalPages := (total + listPageSize - 1) / listPageSize
+	if page < 1 {
+		page = 1
+	}
+	if page > totalPages {
+		page = totalPages
+	}
+
+	start := (page - 1) * listPageSize
+	end := start + listPageSize
+	if end > total {
+		end = total
+	}
+
+	activeSession := e.sessions.GetOrCreateActive(sessionKey)
+	activeAgentID := activeSession.AgentSessionID
+
+	title := fmt.Sprintf("%s Sessions", e.agent.Name())
+	if totalPages > 1 {
+		title = fmt.Sprintf("%s Sessions (%d/%d)", e.agent.Name(), page, totalPages)
+	}
+
+	cb := NewCard().Title(title, "blue")
+	if notice != "" {
+		cb.Note(notice)
+	}
+
+	for i := start; i < end; i++ {
+		s := agentSessions[i]
+		marker := "◻"
+		if s.ID == activeAgentID {
+			marker = "▶"
+		}
+		cb.Markdown(fmt.Sprintf("%s **%d.** %s · **%d** msgs · %s",
+			marker, i+1, sessionDisplayName(e.sessions, s), s.MessageCount, s.ModifiedAt.Format("01-02 15:04")))
+
+		var btns []CardButton
+		if s.ID == activeAgentID {
+			btns = append(btns, PrimaryBtn("Current", fmt.Sprintf("nav:/sessions %d", page)))
+		} else {
+			btns = append(btns, DefaultBtn("Switch", fmt.Sprintf("act:/sessions switch %s %d", s.ID, page)))
+		}
+		btns = append(btns, DangerBtn("Delete", fmt.Sprintf("act:/sessions delete %s %d", s.ID, page)))
+		cb.ButtonsEqual(btns...)
+	}
+
+	if totalPages > 1 {
+		var nav []CardButton
+		if page > 1 {
+			nav = append(nav, DefaultBtn("Prev", fmt.Sprintf("nav:/sessions %d", page-1)))
+		}
+		if page < totalPages {
+			nav = append(nav, DefaultBtn("Next", fmt.Sprintf("nav:/sessions %d", page+1)))
+		}
+		if len(nav) > 0 {
+			cb.ButtonsEqual(nav...)
+		}
+	}
+	backBtn := e.cardBackButton()
+	if page > 1 {
+		backBtn = DefaultBtn("Back", "nav:/sessions 1")
+	}
+	cb.Buttons(backBtn)
+	return cb.Build()
+}
+
 func (e *Engine) cmdSwitch(p Platform, msg *Message, args []string) {
 	if len(args) == 0 {
 		e.reply(p, msg.ReplyCtx, "Usage: /switch <number | id_prefix | name>")
@@ -2752,6 +2868,42 @@ func (e *Engine) cmdSwitch(p Platform, msg *Message, args []string) {
 	}
 	e.reply(p, msg.ReplyCtx,
 		e.i18n.Tf(MsgSwitchSuccess, displayName, shortID, matched.MessageCount))
+}
+
+func (e *Engine) switchSessionByID(sessionKey, id string) string {
+	agentSessions, err := e.agent.ListSessions(e.ctx)
+	if err != nil {
+		return fmt.Sprintf("❌ %v", err)
+	}
+
+	var matched *AgentSessionInfo
+	for i := range agentSessions {
+		if agentSessions[i].ID == id {
+			matched = &agentSessions[i]
+			break
+		}
+	}
+	if matched == nil {
+		return fmt.Sprintf(e.i18n.T(MsgSwitchNoMatch), id)
+	}
+
+	e.cleanupInteractiveState(sessionKey)
+
+	session := e.sessions.GetOrCreateActive(sessionKey)
+	session.AgentSessionID = matched.ID
+	session.Name = matched.Summary
+	session.ClearHistory()
+	e.sessions.Save()
+
+	shortID := matched.ID
+	if len(shortID) > 12 {
+		shortID = shortID[:12]
+	}
+	displayName := e.sessions.GetSessionName(matched.ID)
+	if displayName == "" {
+		displayName = matched.Summary
+	}
+	return e.i18n.Tf(MsgSwitchSuccess, displayName, shortID, matched.MessageCount)
 }
 
 // matchSession resolves a user query to an agent session. Priority:
@@ -4296,6 +4448,8 @@ func (e *Engine) handleCardNav(action, sessionKey string) *Card {
 		return e.renderHelpCard()
 	case "/cron":
 		return e.renderCronCard(sessionKey, notice)
+	case "/sessions":
+		return e.renderSessionCard(sessionKey, parseSessionCardPage(args), notice)
 	case "/review":
 		if strings.HasPrefix(strings.TrimSpace(args), "start ") {
 			return e.simpleCard(e.i18n.T(MsgReviewActionsTitle), "blue", notice)
@@ -4376,6 +4530,18 @@ func (e *Engine) executeCardAction(cmd, args, sessionKey string) string {
 				}
 			}()
 			return e.i18n.Tf(MsgReviewStarted, reviewerProject)
+		}
+	case "/sessions":
+		fields := strings.Fields(args)
+		if len(fields) < 2 {
+			return ""
+		}
+		sub, id := fields[0], fields[1]
+		switch sub {
+		case "switch":
+			return e.switchSessionByID(sessionKey, id)
+		case "delete":
+			return e.deleteSessionByID(sessionKey, id)
 		}
 	}
 	return ""
@@ -5369,6 +5535,52 @@ func (e *Engine) cmdDelete(p Platform, msg *Message, args []string) {
 
 	e.sessions.SetSessionName(matched.ID, "")
 	e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgDeleteSuccess), displayName))
+}
+
+func (e *Engine) deleteSessionByID(sessionKey, id string) string {
+	deleter, ok := e.agent.(SessionDeleter)
+	if !ok {
+		return e.i18n.T(MsgDeleteNotSupported)
+	}
+
+	agentSessions, err := e.agent.ListSessions(e.ctx)
+	if err != nil {
+		return fmt.Sprintf("❌ %v", err)
+	}
+
+	var matched *AgentSessionInfo
+	for i := range agentSessions {
+		if agentSessions[i].ID == id {
+			matched = &agentSessions[i]
+			break
+		}
+	}
+	if matched == nil {
+		return fmt.Sprintf(e.i18n.T(MsgSwitchNoMatch), id)
+	}
+
+	activeSession := e.sessions.GetOrCreateActive(sessionKey)
+	if activeSession.AgentSessionID == matched.ID {
+		return e.i18n.T(MsgDeleteActiveDenied)
+	}
+
+	displayName := e.sessions.GetSessionName(matched.ID)
+	if displayName == "" {
+		displayName = matched.Summary
+	}
+	if displayName == "" {
+		shortID := matched.ID
+		if len(shortID) > 12 {
+			shortID = shortID[:12]
+		}
+		displayName = shortID
+	}
+
+	if err := deleter.DeleteSession(e.ctx, matched.ID); err != nil {
+		return fmt.Sprintf("❌ %v", err)
+	}
+	e.sessions.SetSessionName(matched.ID, "")
+	return fmt.Sprintf(e.i18n.T(MsgDeleteSuccess), displayName)
 }
 
 // truncateIf truncates s to maxLen runes. 0 means no truncation.

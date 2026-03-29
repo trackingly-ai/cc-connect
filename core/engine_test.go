@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -118,6 +119,33 @@ func (a *recordingSendAgent) ListSessions(_ context.Context) ([]AgentSessionInfo
 	return nil, nil
 }
 func (a *recordingSendAgent) Stop() error { return nil }
+
+type listDeleteAgent struct {
+	sessions []AgentSessionInfo
+	deleted  []string
+}
+
+func (a *listDeleteAgent) Name() string { return "list-delete" }
+func (a *listDeleteAgent) StartSession(_ context.Context, _ string) (AgentSession, error) {
+	return &stubAgentSession{}, nil
+}
+func (a *listDeleteAgent) ListSessions(_ context.Context) ([]AgentSessionInfo, error) {
+	out := make([]AgentSessionInfo, len(a.sessions))
+	copy(out, a.sessions)
+	return out, nil
+}
+func (a *listDeleteAgent) Stop() error { return nil }
+func (a *listDeleteAgent) DeleteSession(_ context.Context, id string) error {
+	a.deleted = append(a.deleted, id)
+	filtered := a.sessions[:0]
+	for _, s := range a.sessions {
+		if s.ID != id {
+			filtered = append(filtered, s)
+		}
+	}
+	a.sessions = filtered
+	return nil
+}
 
 type recordingSendSession struct {
 	mu     sync.Mutex
@@ -345,6 +373,122 @@ func TestCmdCronList_FeishuUsesCardButtons(t *testing.T) {
 	sent := p.sentSnapshot()
 	if len(sent) == 0 || !strings.Contains(sent[0], "job-1") {
 		t.Fatalf("sent = %#v, want cron card content with job id", sent)
+	}
+}
+
+func TestCmdList_FeishuUsesSessionCardButtons(t *testing.T) {
+	agent := &listDeleteAgent{sessions: []AgentSessionInfo{
+		{ID: "sess-1", Summary: "First session", MessageCount: 3, ModifiedAt: time.Now()},
+		{ID: "sess-2", Summary: "Second session", MessageCount: 5, ModifiedAt: time.Now()},
+	}}
+	p := &stubCardPlatform{n: "feishu"}
+	e := NewEngine("test", agent, []Platform{p}, "", LangEnglish)
+
+	msg := &Message{SessionKey: "feishu:chat:user", ReplyCtx: "ctx"}
+	e.cmdList(p, msg, nil)
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.cards) == 0 {
+		t.Fatal("expected session card to be sent")
+	}
+	rendered := p.cards[0].RenderText()
+	if !strings.Contains(rendered, "First session") {
+		t.Fatalf("card = %q, want session summary", rendered)
+	}
+	rows := p.cards[0].CollectButtons()
+	var values []string
+	for _, row := range rows {
+		for _, btn := range row {
+			values = append(values, btn.Data)
+		}
+	}
+	if !slices.Contains(values, "act:/sessions switch sess-1 1") {
+		t.Fatalf("buttons = %#v, want switch action", values)
+	}
+	if !slices.Contains(values, "act:/sessions delete sess-1 1") {
+		t.Fatalf("buttons = %#v, want delete action", values)
+	}
+}
+
+func TestExecuteCardAction_SessionsSwitchAndDelete(t *testing.T) {
+	agent := &listDeleteAgent{sessions: []AgentSessionInfo{
+		{ID: "sess-1", Summary: "First session", MessageCount: 3, ModifiedAt: time.Now()},
+		{ID: "sess-2", Summary: "Second session", MessageCount: 5, ModifiedAt: time.Now()},
+	}}
+	e := NewEngine("test", agent, nil, "", LangEnglish)
+	sessionKey := "feishu:chat:user"
+
+	notice := e.executeCardAction("/sessions", "switch sess-2", sessionKey)
+	if !strings.Contains(notice, "Second session") {
+		t.Fatalf("switch notice = %q, want switched session", notice)
+	}
+	if got := e.sessions.GetOrCreateActive(sessionKey).AgentSessionID; got != "sess-2" {
+		t.Fatalf("active agent session = %q, want sess-2", got)
+	}
+
+	notice = e.executeCardAction("/sessions", "delete sess-1", sessionKey)
+	if !strings.Contains(notice, "First session") {
+		t.Fatalf("delete notice = %q, want deleted session", notice)
+	}
+	if !slices.Contains(agent.deleted, "sess-1") {
+		t.Fatalf("deleted = %#v, want sess-1", agent.deleted)
+	}
+}
+
+func TestHandleCardNav_SessionsActionPreservesPage(t *testing.T) {
+	sessions := make([]AgentSessionInfo, 25)
+	for i := range sessions {
+		sessions[i] = AgentSessionInfo{
+			ID:           fmt.Sprintf("sess-%02d", i+1),
+			Summary:      fmt.Sprintf("Session %02d", i+1),
+			MessageCount: i + 1,
+			ModifiedAt:   time.Now(),
+		}
+	}
+	agent := &listDeleteAgent{sessions: sessions}
+	e := NewEngine("test", agent, nil, "", LangEnglish)
+
+	card := e.handleCardNav("act:/sessions delete sess-21 2", "feishu:chat:user")
+	if card == nil {
+		t.Fatal("expected session card")
+	}
+	rendered := card.RenderText()
+	if !strings.Contains(rendered, "(2/2)") {
+		t.Fatalf("card = %q, want page 2 title", rendered)
+	}
+	if strings.Contains(rendered, "Session 01") {
+		t.Fatalf("card = %q, should stay on page 2 after action", rendered)
+	}
+}
+
+func TestRenderSessionCard_PageTwoBackReturnsToPageOne(t *testing.T) {
+	sessions := make([]AgentSessionInfo, 25)
+	for i := range sessions {
+		sessions[i] = AgentSessionInfo{
+			ID:           fmt.Sprintf("sess-%02d", i+1),
+			Summary:      fmt.Sprintf("Session %02d", i+1),
+			MessageCount: i + 1,
+			ModifiedAt:   time.Now(),
+		}
+	}
+	agent := &listDeleteAgent{sessions: sessions}
+	e := NewEngine("test", agent, nil, "", LangEnglish)
+
+	card := e.renderSessionCard("feishu:chat:user", 2, "")
+	if card == nil {
+		t.Fatal("expected session card")
+	}
+
+	buttonRows := card.CollectButtons()
+	var values []string
+	for _, row := range buttonRows {
+		for _, btn := range row {
+			values = append(values, btn.Data)
+		}
+	}
+	if !slices.Contains(values, "nav:/sessions 1") {
+		t.Fatalf("buttons = %#v, want back to page 1", values)
 	}
 }
 
