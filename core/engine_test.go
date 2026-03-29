@@ -589,6 +589,79 @@ func TestHandlePendingCronPromptEditUpdatesPrompt(t *testing.T) {
 	}
 }
 
+func TestHandleCardNav_CronEditPromptSendsExistingPrompt(t *testing.T) {
+	store, err := NewCronStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewCronStore: %v", err)
+	}
+	scheduler := NewCronScheduler(store)
+	p := &stubCardPlatform{n: "feishu"}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	e.SetCronScheduler(scheduler)
+
+	job := &CronJob{
+		ID:         "job-1",
+		Project:    "test",
+		SessionKey: "feishu:chat:user",
+		CronExpr:   "* * * * *",
+		Prompt:     "Old prompt content",
+		Enabled:    true,
+		CreatedAt:  time.Now(),
+	}
+	if err := scheduler.AddJob(job); err != nil {
+		t.Fatalf("AddJob: %v", err)
+	}
+
+	card := e.handleCardNav("act:/cron editprompt job-1", job.SessionKey)
+	if card == nil {
+		t.Fatal("expected refreshed cron card")
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.sent) == 0 || !strings.Contains(p.sent[len(p.sent)-1], "Old prompt content") {
+		t.Fatalf("sent = %#v, want existing prompt content", p.sent)
+	}
+}
+
+func TestHandleCardNav_CronEditPromptWithoutExistingPromptDoesNotClaimSend(t *testing.T) {
+	store, err := NewCronStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewCronStore: %v", err)
+	}
+	scheduler := NewCronScheduler(store)
+	p := &stubCardPlatform{n: "feishu"}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	e.SetCronScheduler(scheduler)
+
+	job := &CronJob{
+		ID:         "job-1",
+		Project:    "test",
+		SessionKey: "feishu:chat:user",
+		CronExpr:   "* * * * *",
+		Prompt:     "",
+		Enabled:    true,
+		CreatedAt:  time.Now(),
+	}
+	if err := scheduler.AddJob(job); err != nil {
+		t.Fatalf("AddJob: %v", err)
+	}
+
+	card := e.handleCardNav("act:/cron editprompt job-1", job.SessionKey)
+	if card == nil {
+		t.Fatal("expected refreshed cron card")
+	}
+	if got := card.RenderText(); strings.Contains(got, "sent above") {
+		t.Fatalf("card = %q, should not claim prompt was sent", got)
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.sent) != 0 {
+		t.Fatalf("sent = %#v, want no extra prompt message", p.sent)
+	}
+}
+
 func TestExecuteCardAction_RejectsForeignCronJob(t *testing.T) {
 	store, err := NewCronStore(t.TempDir())
 	if err != nil {

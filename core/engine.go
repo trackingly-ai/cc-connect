@@ -4502,6 +4502,17 @@ func (e *Engine) executeCardAction(cmd, args, sessionKey string) string {
 			return fmt.Sprintf("Unmuted `%s`.", id)
 		case "editprompt":
 			e.setPendingCronPromptEdit(sessionKey, id)
+			sentExistingPrompt := false
+			if strings.TrimSpace(job.Prompt) != "" {
+				if err := e.sendTextToSession(sessionKey, fmt.Sprintf("Current prompt for `%s`:\n\n%s", id, job.Prompt)); err != nil {
+					slog.Warn("cron: failed to send current prompt for edit", "session_key", sessionKey, "job_id", id, "error", err)
+				} else {
+					sentExistingPrompt = true
+				}
+			}
+			if sentExistingPrompt {
+				return fmt.Sprintf("Send your next message to replace the prompt for `%s`. The current prompt was sent above. Send /cancel to abort.", id)
+			}
 			return fmt.Sprintf("Send your next message to replace the prompt for `%s`. Send /cancel to abort.", id)
 		}
 	case "/review":
