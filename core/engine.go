@@ -2733,6 +2733,16 @@ func sessionDisplayName(sm *SessionManager, s AgentSessionInfo) string {
 	return displayName
 }
 
+func firstNonEmptyLine(s string) string {
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			return line
+		}
+	}
+	return strings.TrimSpace(s)
+}
+
 func parseSessionCardPage(args string) int {
 	fields := strings.Fields(strings.TrimSpace(args))
 	if len(fields) == 0 {
@@ -4586,9 +4596,9 @@ func (e *Engine) renderCronCard(sessionKey string, notice string) *Card {
 		desc := j.Description
 		if desc == "" {
 			if j.IsShellJob() {
-				desc = "🖥 " + truncateStr(j.Exec, 60)
+				desc = "🖥 " + firstNonEmptyLine(j.Exec)
 			} else {
-				desc = truncateStr(j.Prompt, 60)
+				desc = firstNonEmptyLine(j.Prompt)
 			}
 		}
 		if j.Mute {
@@ -4768,9 +4778,9 @@ func (e *Engine) cmdCronList(p Platform, msg *Message) {
 		desc := j.Description
 		if desc == "" {
 			if j.IsShellJob() {
-				desc = truncateStr(j.Exec, 60)
+				desc = firstNonEmptyLine(j.Exec)
 			} else {
-				desc = truncateStr(j.Prompt, 60)
+				desc = firstNonEmptyLine(j.Prompt)
 			}
 		}
 		sb.WriteString(fmt.Sprintf("%s %s\n", status, desc))

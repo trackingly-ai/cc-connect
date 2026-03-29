@@ -538,6 +538,130 @@ func TestRenderCronCard_UsesTwoButtonsPerRow(t *testing.T) {
 	}
 }
 
+func TestRenderCronCard_ShowsFullPromptFirstLine(t *testing.T) {
+	store, err := NewCronStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewCronStore: %v", err)
+	}
+	scheduler := NewCronScheduler(store)
+	e := NewEngine("test", &stubAgent{}, nil, "", LangEnglish)
+	e.SetCronScheduler(scheduler)
+
+	fullPrompt := "看 tmux pane e2-llm 跑的脚本的状态和输出是否正常，如果失败就总结原因并给出下一步建议"
+	job := &CronJob{
+		ID:         "job-1",
+		Project:    "test",
+		SessionKey: "feishu:chat:user",
+		CronExpr:   "* * * * *",
+		Prompt:     fullPrompt,
+		Enabled:    true,
+		CreatedAt:  time.Now(),
+	}
+	if err := scheduler.AddJob(job); err != nil {
+		t.Fatalf("AddJob: %v", err)
+	}
+
+	card := e.renderCronCard(job.SessionKey, "")
+	if card == nil {
+		t.Fatal("expected cron card")
+	}
+	if got := card.RenderText(); !strings.Contains(got, fullPrompt) {
+		t.Fatalf("card = %q, want full prompt line", got)
+	}
+}
+
+func TestFirstNonEmptyLine(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "empty", in: "", want: ""},
+		{name: "whitespace", in: " \n\t ", want: ""},
+		{name: "single line", in: "  hello world  ", want: "hello world"},
+		{name: "leading blanks", in: "\n\nDo the thing\nWith details here", want: "Do the thing"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := firstNonEmptyLine(tc.in); got != tc.want {
+				t.Fatalf("firstNonEmptyLine(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRenderCronCard_UsesFirstNonEmptyPromptLine(t *testing.T) {
+	store, err := NewCronStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewCronStore: %v", err)
+	}
+	scheduler := NewCronScheduler(store)
+	e := NewEngine("test", &stubAgent{}, nil, "", LangEnglish)
+	e.SetCronScheduler(scheduler)
+
+	job := &CronJob{
+		ID:         "job-1",
+		Project:    "test",
+		SessionKey: "feishu:chat:user",
+		CronExpr:   "* * * * *",
+		Prompt:     "\n\nDo the thing\nWith details here",
+		Enabled:    true,
+		CreatedAt:  time.Now(),
+	}
+	if err := scheduler.AddJob(job); err != nil {
+		t.Fatalf("AddJob: %v", err)
+	}
+
+	card := e.renderCronCard(job.SessionKey, "")
+	if card == nil {
+		t.Fatal("expected cron card")
+	}
+	got := card.RenderText()
+	if !strings.Contains(got, "Do the thing") {
+		t.Fatalf("card = %q, want first non-empty line", got)
+	}
+	if strings.Contains(got, "With details here") {
+		t.Fatalf("card = %q, should not include later prompt lines in title", got)
+	}
+}
+
+func TestCmdCronList_UsesFirstNonEmptyLineForShellJobs(t *testing.T) {
+	store, err := NewCronStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewCronStore: %v", err)
+	}
+	scheduler := NewCronScheduler(store)
+	e := NewEngine("test", &stubAgent{}, nil, "", LangEnglish)
+	e.SetCronScheduler(scheduler)
+	p := &stubPlatformEngine{n: "test"}
+
+	job := &CronJob{
+		ID:         "job-1",
+		Project:    "test",
+		SessionKey: "test:user",
+		CronExpr:   "* * * * *",
+		Exec:       "\n\npython run.py --verbose\nsecond line",
+		Enabled:    true,
+		CreatedAt:  time.Now(),
+	}
+	if err := scheduler.AddJob(job); err != nil {
+		t.Fatalf("AddJob: %v", err)
+	}
+
+	e.cmdCronList(p, &Message{SessionKey: job.SessionKey, ReplyCtx: "ctx"})
+	if len(p.sent) == 0 {
+		t.Fatal("expected text cron list")
+	}
+	got := p.sent[len(p.sent)-1]
+	if !strings.Contains(got, "python run.py --verbose") {
+		t.Fatalf("list = %q, want first non-empty exec line", got)
+	}
+	if strings.Contains(got, "second line") {
+		t.Fatalf("list = %q, should not include later exec lines", got)
+	}
+}
+
 func TestHandlePendingCronPromptEditUpdatesPrompt(t *testing.T) {
 	store, err := NewCronStore(t.TempDir())
 	if err != nil {
