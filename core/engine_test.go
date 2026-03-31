@@ -132,8 +132,8 @@ func (a *scriptedRecordingAgent) StartSession(_ context.Context, _ string) (Agen
 	defer a.mu.Unlock()
 	if a.session == nil {
 		a.session = &scriptedRecordingSession{
-			events:     make(chan Event, 32),
-			responses:  append([]string(nil), a.responses...),
+			events:    make(chan Event, 32),
+			responses: append([]string(nil), a.responses...),
 		}
 	}
 	return a.session, nil
@@ -1004,6 +1004,9 @@ func TestStartReviewCycleRunsReviewerAndOriginRevision(t *testing.T) {
 	}
 	if !strings.Contains(reviewerSends[0].prompt, "<review_packet>") || !strings.Contains(reviewerSends[0].prompt, "core/engine.go") {
 		t.Fatalf("reviewer prompt = %q, want review packet", reviewerSends[0].prompt)
+	}
+	if !strings.Contains(reviewerSends[0].prompt, "Do not include praise") {
+		t.Fatalf("reviewer prompt = %q, want findings-only instruction", reviewerSends[0].prompt)
 	}
 
 	originSends := originAgent.session.Sends()

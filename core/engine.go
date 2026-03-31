@@ -5660,7 +5660,7 @@ func (e *Engine) sendTTSReply(p Platform, replyCtx any, text string) {
 
 func buildReviewPrompt(originProject, reviewerProject, summary string) string {
 	return fmt.Sprintf(
-		"Please review the following review packet.\n\nOriginal agent: %s\nReviewer: %s\n\nReview packet:\n%s\n\nUse the packet to determine whether you should inspect working tree changes, the latest commit, or summary-only context. Review it critically. Focus on bugs, regressions, risky assumptions, unclear implementation details, and missing validation or tests. If no major issue is found, say that explicitly.",
+		"Please review the following review packet.\n\nOriginal agent: %s\nReviewer: %s\n\nReview packet:\n%s\n\nUse the packet to determine whether you should inspect working tree changes, the latest commit, or summary-only context. Report only findings that matter. Prioritize bugs, regressions, risky assumptions, unclear implementation details, and missing validation or tests. Order findings from highest severity to lowest severity. Do not include praise, strengths, or 'What Works Well' style sections. If no major issue is found, say that explicitly and keep the response brief.",
 		originProject,
 		reviewerProject,
 		strings.TrimSpace(summary),
