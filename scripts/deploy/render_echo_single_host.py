@@ -89,6 +89,9 @@ def _build_values(env_file: Path | None) -> dict[str, str]:
         "CC_HOST_ID": get("CC_HOST_ID", "host-local"),
         "CC_HOST_LABEL": get("CC_HOST_LABEL", "Local Host"),
         "CLAUDE_MANAGER_MODE": get("CLAUDE_MANAGER_MODE", "bypassPermissions"),
+        "CLAUDE_RESEARCH_REVIEWER_MODE": get(
+            "CLAUDE_RESEARCH_REVIEWER_MODE", "bypassPermissions"
+        ),
         "CODEX_ARCHITECT_MODE": get("CODEX_ARCHITECT_MODE", "full-auto"),
         "CODEX_CODER_MODE": get("CODEX_CODER_MODE", "yolo"),
         "QODER_REVIEWER_MODE": get("QODER_REVIEWER_MODE", "yolo"),

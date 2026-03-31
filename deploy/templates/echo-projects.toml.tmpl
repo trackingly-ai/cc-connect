@@ -37,14 +37,14 @@ enabled = true
 role = "architect"
 
 [[projects]]
-name = "echo-research-reviewer-qoder"
+name = "echo-research-reviewer-claude"
 
 [projects.agent]
-type = "qoder"
+type = "claudecode"
 
 [projects.agent.options]
 work_dir = "{{ECHO_REPO_DIR}}"
-mode = "{{QODER_REVIEWER_MODE}}"
+mode = "{{CLAUDE_RESEARCH_REVIEWER_MODE}}"
 
 [projects.echo]
 enabled = true
