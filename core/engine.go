@@ -258,6 +258,7 @@ type managedTurnOpts struct {
 	Prefix            string
 	AutoApprove       bool
 	OfferFollowUpCard bool
+	Silent            bool
 }
 
 // resolve safely closes the Resolved channel exactly once.
@@ -1124,7 +1125,7 @@ func (e *Engine) runManagedTurn(state *interactiveState, session *Session, agent
 
 		switch event.Type {
 		case EventThinking:
-			if !quiet && event.Content != "" {
+			if !opts.Silent && !quiet && event.Content != "" {
 				preview := truncateIf(event.Content, e.display.ThinkingMaxLen)
 				msg := fmt.Sprintf(e.i18n.T(MsgThinking), preview)
 				if err := e.sendChunksWithPrefix(p, replyCtx, opts.Prefix, msg); err != nil {
@@ -1133,7 +1134,7 @@ func (e *Engine) runManagedTurn(state *interactiveState, session *Session, agent
 			}
 		case EventToolUse:
 			toolCount++
-			if !quiet {
+			if !opts.Silent && !quiet {
 				inputPreview := truncateIf(event.ToolInput, e.display.ToolMaxLen)
 				lineCount := strings.Count(inputPreview, "\n") + 1
 				var formattedInput string
@@ -1148,7 +1149,7 @@ func (e *Engine) runManagedTurn(state *interactiveState, session *Session, agent
 				}
 			}
 		case EventToolResult:
-			if quiet {
+			if opts.Silent || quiet {
 				continue
 			}
 			result := strings.TrimSpace(event.ToolResult)
@@ -1190,17 +1191,19 @@ func (e *Engine) runManagedTurn(state *interactiveState, session *Session, agent
 			if displayResponse != "" {
 				session.AddHistory("assistant", displayResponse)
 				e.sessions.Save()
-				if err := e.sendChunksWithPrefix(p, replyCtx, opts.Prefix, displayResponse); err != nil {
-					return "", err
+				if !opts.Silent {
+					if err := e.sendChunksWithPrefix(p, replyCtx, opts.Prefix, displayResponse); err != nil {
+						return "", err
+					}
 				}
-				if prompt != nil && opts.Prefix == "" {
+				if !opts.Silent && prompt != nil && opts.Prefix == "" {
 					followUp := prompt.Description
 					if strings.TrimSpace(followUp) == "" {
 						followUp = "Choose a reply below, or type your own response."
 					}
 					e.replyWithInteraction(agentSessionKey, p, replyCtx, followUp, prompt.Choices, false)
 				}
-				if opts.OfferFollowUpCard {
+				if !opts.Silent && opts.OfferFollowUpCard {
 					e.offerResultActionCard(p, replyCtx, displayResponse)
 				}
 			}
@@ -5652,11 +5655,35 @@ func (e *Engine) sendTTSReply(p Platform, replyCtx any, text string) {
 
 func buildReviewPrompt(originProject, reviewerProject, summary string) string {
 	return fmt.Sprintf(
-		"Please review the following code or document summary.\n\nOriginal agent: %s\nReviewer: %s\n\nOriginal summary:\n%s\n\nReview it critically. Focus on bugs, regressions, risky assumptions, unclear implementation details, and missing validation or tests. If no major issue is found, say that explicitly.",
+		"Please review the following review packet.\n\nOriginal agent: %s\nReviewer: %s\n\nReview packet:\n%s\n\nUse the packet to determine whether you should inspect working tree changes, the latest commit, or summary-only context. Review it critically. Focus on bugs, regressions, risky assumptions, unclear implementation details, and missing validation or tests. If no major issue is found, say that explicitly.",
 		originProject,
 		reviewerProject,
 		strings.TrimSpace(summary),
 	)
+}
+
+func buildReviewPacketPrompt(originProject, reviewerProject, summary string) string {
+	return fmt.Sprintf(
+		"Prepare a structured review packet for a second agent.\n\nOriginal agent: %s\nReviewer: %s\n\nOriginal summary:\n%s\n\nReturn only a <review_packet>...</review_packet> block.\nDecide whether the task is repo-related.\nIf repo-related, specify the correct review target:\n- working_tree if there are relevant uncommitted changes\n- last_commit if the work is already committed\n- summary_only if code state is not needed\nInclude only the files, commit IDs, repo path, branch, and context necessary for review. Do not include prose outside the XML block.",
+		originProject,
+		reviewerProject,
+		strings.TrimSpace(summary),
+	)
+}
+
+func extractReviewPacket(content string) string {
+	text := strings.TrimSpace(content)
+	if text == "" {
+		return ""
+	}
+	lower := strings.ToLower(text)
+	start := strings.Index(lower, "<review_packet>")
+	end := strings.LastIndex(lower, "</review_packet>")
+	if start >= 0 && end > start {
+		end += len("</review_packet>")
+		return strings.TrimSpace(text[start:end])
+	}
+	return text
 }
 
 func buildRevisionPrompt(originProject, reviewerProject, originSummary, reviewSummary string) string {
@@ -5748,6 +5775,22 @@ func (e *Engine) startReviewCycle(sessionKey, reviewerProject string) error {
 	}
 	e.reviewMu.Unlock()
 
+	packetPrompt := buildReviewPacketPrompt(e.name, reviewerProject, originSummary)
+	reviewPacket, err := e.runManagedTurn(originStateForReviewPacket(e, sessionKey, originPlatform, originReplyCtx, originSession), originSession, sessionKey, packetPrompt, managedTurnOpts{
+		AutoApprove: true,
+		Silent:      true,
+	})
+	if err != nil {
+		return err
+	}
+	reviewPacket = extractReviewPacket(reviewPacket)
+	if reviewPacket == "" {
+		return fmt.Errorf("origin agent returned empty review packet")
+	}
+	if utf8.RuneCountInString(reviewPacket) > maxReviewPromptLen {
+		return fmt.Errorf("%s", e.i18n.Tf(MsgReviewPromptTooLong, maxReviewPromptLen))
+	}
+
 	reviewKey := reviewerSessionKey(e.name, reviewerProject, sessionKey)
 	reviewerSession := reviewerEngine.sessions.GetOrCreateActive(reviewKey)
 	if !reviewerSession.TryLock() {
@@ -5760,7 +5803,7 @@ func (e *Engine) startReviewCycle(sessionKey, reviewerProject string) error {
 	reviewState.platform = originPlatform
 	reviewState.replyCtx = originReplyCtx
 	reviewState.mu.Unlock()
-	reviewPrompt := buildReviewPrompt(e.name, reviewerProject, originSummary)
+	reviewPrompt := buildReviewPrompt(e.name, reviewerProject, reviewPacket)
 	reviewSummary, err := reviewerEngine.runManagedTurn(reviewState, reviewerSession, reviewKey, reviewPrompt, managedTurnOpts{
 		Prefix:      reviewerProject + ": ",
 		AutoApprove: true,
@@ -5789,6 +5832,18 @@ func (e *Engine) startReviewCycle(sessionKey, reviewerProject string) error {
 		OfferFollowUpCard: true,
 	})
 	return err
+}
+
+func originStateForReviewPacket(e *Engine, sessionKey string, p Platform, replyCtx any, session *Session) *interactiveState {
+	state := e.getOrCreateInteractiveState(sessionKey, p, replyCtx, session)
+	if state == nil || state.agentSession == nil {
+		return nil
+	}
+	state.mu.Lock()
+	state.platform = p
+	state.replyCtx = replyCtx
+	state.mu.Unlock()
+	return state
 }
 
 func (e *Engine) resultActionCard() *Card {

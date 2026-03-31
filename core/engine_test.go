@@ -120,6 +120,29 @@ func (a *recordingSendAgent) ListSessions(_ context.Context) ([]AgentSessionInfo
 }
 func (a *recordingSendAgent) Stop() error { return nil }
 
+type scriptedRecordingAgent struct {
+	mu        sync.Mutex
+	responses []string
+	session   *scriptedRecordingSession
+}
+
+func (a *scriptedRecordingAgent) Name() string { return "scripted-recording" }
+func (a *scriptedRecordingAgent) StartSession(_ context.Context, _ string) (AgentSession, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.session == nil {
+		a.session = &scriptedRecordingSession{
+			events:     make(chan Event, 32),
+			responses:  append([]string(nil), a.responses...),
+		}
+	}
+	return a.session, nil
+}
+func (a *scriptedRecordingAgent) ListSessions(_ context.Context) ([]AgentSessionInfo, error) {
+	return nil, nil
+}
+func (a *scriptedRecordingAgent) Stop() error { return nil }
+
 type listDeleteAgent struct {
 	sessions []AgentSessionInfo
 	deleted  []string
@@ -176,6 +199,43 @@ func (s *recordingSendSession) Alive() bool                                     
 func (s *recordingSendSession) Close() error                                         { close(s.events); return nil }
 
 func (s *recordingSendSession) Sends() []recordedSend {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]recordedSend, len(s.sends))
+	copy(out, s.sends)
+	return out
+}
+
+type scriptedRecordingSession struct {
+	mu        sync.Mutex
+	sends     []recordedSend
+	events    chan Event
+	responses []string
+}
+
+func (s *scriptedRecordingSession) Send(prompt string, images []ImageAttachment, files []FileAttachment) error {
+	s.mu.Lock()
+	s.sends = append(s.sends, recordedSend{
+		prompt: prompt,
+		images: cloneImages(images),
+		files:  append([]FileAttachment(nil), files...),
+	})
+	response := "ok"
+	if len(s.responses) > 0 {
+		response = s.responses[0]
+		s.responses = s.responses[1:]
+	}
+	s.mu.Unlock()
+	s.events <- Event{Type: EventText, Content: response}
+	s.events <- Event{Type: EventResult, Done: true}
+	return nil
+}
+func (s *scriptedRecordingSession) RespondPermission(_ string, _ PermissionResult) error { return nil }
+func (s *scriptedRecordingSession) Events() <-chan Event                                 { return s.events }
+func (s *scriptedRecordingSession) CurrentSessionID() string                             { return "scripted-recording" }
+func (s *scriptedRecordingSession) Alive() bool                                          { return true }
+func (s *scriptedRecordingSession) Close() error                                         { close(s.events); return nil }
+func (s *scriptedRecordingSession) Sends() []recordedSend {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]recordedSend, len(s.sends))
@@ -907,8 +967,11 @@ func TestReviewerSelectorCardExcludesCurrentProject(t *testing.T) {
 
 func TestStartReviewCycleRunsReviewerAndOriginRevision(t *testing.T) {
 	rm := NewRelayManager("")
-	originAgent := &recordingSendAgent{}
-	reviewerAgent := &recordingSendAgent{}
+	originAgent := &scriptedRecordingAgent{responses: []string{
+		"<review_packet><recommended_review_target>working_tree</recommended_review_target><files><file>core/engine.go</file></files></review_packet>",
+		"revised summary",
+	}}
+	reviewerAgent := &scriptedRecordingAgent{responses: []string{"reviewer summary"}}
 	originPlatform := &stubCardPlatform{n: "feishu"}
 	reviewerPlatform := &stubCardPlatform{n: "worker"}
 	origin := NewEngine("codex", originAgent, []Platform{originPlatform}, "", LangEnglish)
@@ -930,19 +993,22 @@ func TestStartReviewCycleRunsReviewerAndOriginRevision(t *testing.T) {
 	if len(reviewerSends) != 1 {
 		t.Fatalf("reviewer send count = %d, want 1", len(reviewerSends))
 	}
-	if !strings.Contains(reviewerSends[0].prompt, "Original summary from codex.") {
-		t.Fatalf("reviewer prompt = %q, want original summary", reviewerSends[0].prompt)
+	if !strings.Contains(reviewerSends[0].prompt, "<review_packet>") || !strings.Contains(reviewerSends[0].prompt, "core/engine.go") {
+		t.Fatalf("reviewer prompt = %q, want review packet", reviewerSends[0].prompt)
 	}
 
 	originSends := originAgent.session.Sends()
-	if len(originSends) != 1 {
-		t.Fatalf("origin send count = %d, want 1 revision prompt", len(originSends))
+	if len(originSends) != 2 {
+		t.Fatalf("origin send count = %d, want 2 (packet + revision)", len(originSends))
 	}
-	if !strings.Contains(originSends[0].prompt, "Reviewer feedback from qoder:") {
-		t.Fatalf("origin revision prompt = %q, want reviewer feedback section", originSends[0].prompt)
+	if !strings.Contains(originSends[0].prompt, "Prepare a structured review packet") {
+		t.Fatalf("origin packet prompt = %q, want review packet instruction", originSends[0].prompt)
 	}
-	if !strings.Contains(originSends[0].prompt, "ok") {
-		t.Fatalf("origin revision prompt = %q, want reviewer summary text", originSends[0].prompt)
+	if !strings.Contains(originSends[1].prompt, "Reviewer feedback from qoder:") {
+		t.Fatalf("origin revision prompt = %q, want reviewer feedback section", originSends[1].prompt)
+	}
+	if !strings.Contains(originSends[1].prompt, "reviewer summary") {
+		t.Fatalf("origin revision prompt = %q, want reviewer summary text", originSends[1].prompt)
 	}
 
 	originPlatform.mu.Lock()
@@ -963,8 +1029,8 @@ func TestStartReviewCycleRunsReviewerAndOriginRevision(t *testing.T) {
 	if flow.LastOriginSummary != "Original summary from codex." {
 		t.Fatalf("origin summary = %q", flow.LastOriginSummary)
 	}
-	if flow.LastReviewSummary != "ok" {
-		t.Fatalf("review summary = %q, want ok", flow.LastReviewSummary)
+	if flow.LastReviewSummary != "reviewer summary" {
+		t.Fatalf("review summary = %q, want reviewer summary", flow.LastReviewSummary)
 	}
 	if flow.Running {
 		t.Fatal("expected flow to be marked not running after completion")
@@ -973,8 +1039,11 @@ func TestStartReviewCycleRunsReviewerAndOriginRevision(t *testing.T) {
 
 func TestStartReviewCycle_UsesOriginPlatformForReviewerOutput(t *testing.T) {
 	rm := NewRelayManager("")
-	originAgent := &recordingSendAgent{}
-	reviewerAgent := &recordingSendAgent{}
+	originAgent := &scriptedRecordingAgent{responses: []string{
+		"<review_packet><recommended_review_target>summary_only</recommended_review_target></review_packet>",
+		"revised summary",
+	}}
+	reviewerAgent := &scriptedRecordingAgent{responses: []string{"reviewer summary"}}
 	originPlatform := &stubCardPlatform{n: "feishu"}
 	reviewerPlatform := &stubCardPlatform{n: "worker"}
 	origin := NewEngine("codex", originAgent, []Platform{originPlatform}, "", LangEnglish)
@@ -997,8 +1066,17 @@ func TestStartReviewCycle_UsesOriginPlatformForReviewerOutput(t *testing.T) {
 	if len(originPlatform.sent) == 0 {
 		t.Fatal("expected reviewer output to be sent via origin platform")
 	}
-	if !strings.Contains(strings.Join(originPlatform.sent, "\n"), "qoder: ok") {
+	if !strings.Contains(strings.Join(originPlatform.sent, "\n"), "qoder: reviewer summary") {
 		t.Fatalf("origin platform sent = %#v, want prefixed reviewer output", originPlatform.sent)
+	}
+}
+
+func TestExtractReviewPacket(t *testing.T) {
+	input := "prefix\n<review_packet><repo>demo</repo></review_packet>\nsuffix"
+	got := extractReviewPacket(input)
+	want := "<review_packet><repo>demo</repo></review_packet>"
+	if got != want {
+		t.Fatalf("extractReviewPacket = %q, want %q", got, want)
 	}
 }
 
