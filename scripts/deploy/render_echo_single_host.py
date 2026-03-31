@@ -21,7 +21,11 @@ def _load_env_file(path: Path | None) -> dict[str, str]:
         key, sep, value = line.partition("=")
         if not sep:
             raise ValueError(f"invalid env line: {raw_line!r}")
-        loaded[key.strip()] = value.strip()
+        parsed_value = value.strip()
+        tokens = shlex.split(parsed_value)
+        if len(tokens) == 1:
+            parsed_value = tokens[0]
+        loaded[key.strip()] = parsed_value
     return loaded
 
 
@@ -39,8 +43,7 @@ def _write_executable(path: Path, content: str) -> None:
 
 def _write_shell_env(path: Path, values: dict[str, str]) -> None:
     path.write_text(
-        "\n".join(f"{key}={shlex.quote(value)}" for key, value in sorted(values.items()))
-        + "\n",
+        "\n".join(f"{key}={value}" for key, value in sorted(values.items())) + "\n",
         encoding="utf-8",
     )
 
@@ -122,6 +125,10 @@ def render(env_file: Path | None) -> dict[str, str]:
                 "#!/usr/bin/env bash",
                 "set -euo pipefail",
                 f"cd {values['CC_CONNECT_REPO_DIR']}",
+                (
+                    "python3 scripts/deploy/render_echo_single_host.py "
+                    f"--env-file {shlex.quote(values['DEPLOY_ENV_PATH'])}"
+                ),
                 (
                     f"exec {values['CC_CONNECT_BINARY']} "
                     f"-config {values['CC_CONNECT_CONFIG_PATH']}"
