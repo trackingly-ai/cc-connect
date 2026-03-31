@@ -3,6 +3,12 @@ package claudecode
 import (
 	"bytes"
 	"encoding/json"
+	"io"
+	"image"
+	"image/color"
+	"image/png"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -94,17 +100,8 @@ func TestBuildClaudeSessionArgsDoesNotResumeSyntheticSessionKey(t *testing.T) {
 	}
 }
 
-func TestNormalizeClaudeImage_ReencodesToPNG(t *testing.T) {
-	// Valid 1x1 RGBA PNG that reproduces Claude's "Could not process image" error
-	// when sent without normalization.
-	raw := []byte{
-		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
-		0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-		0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00,
-		0x0d, 0x49, 0x44, 0x41, 0x54, 0x08, 0x63, 0xf8, 0xff, 0xff, 0xff, 0x19,
-		0x00, 0x09, 0xfb, 0x03, 0xff, 0xda, 0x13, 0x7c, 0x37, 0x00, 0x00, 0x00,
-		0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
-	}
+func TestNormalizeClaudeImage_ReencodesToJPEG(t *testing.T) {
+	raw := mustPNGBytes(t)
 
 	img := normalizeClaudeImage(core.ImageAttachment{
 		MimeType: "image/png",
@@ -112,17 +109,17 @@ func TestNormalizeClaudeImage_ReencodesToPNG(t *testing.T) {
 		FileName: "tiny.png",
 	})
 
-	if img.MimeType != "image/png" {
-		t.Fatalf("mime = %q, want image/png", img.MimeType)
+	if img.MimeType != "image/jpeg" {
+		t.Fatalf("mime = %q, want image/jpeg", img.MimeType)
 	}
-	if img.FileName != "tiny.png" {
-		t.Fatalf("fileName = %q, want tiny.png", img.FileName)
+	if img.FileName != "tiny.jpg" {
+		t.Fatalf("fileName = %q, want tiny.jpg", img.FileName)
 	}
 	if len(img.Data) == 0 {
 		t.Fatal("normalized image data is empty")
 	}
-	if !bytes.HasPrefix(img.Data, []byte{0x89, 0x50, 0x4e, 0x47}) {
-		t.Fatalf("normalized image is not a PNG")
+	if len(img.Data) < 2 || img.Data[0] != 0xff || img.Data[1] != 0xd8 {
+		t.Fatalf("normalized image is not a JPEG")
 	}
 }
 
@@ -159,9 +156,9 @@ func TestNormalizeClaudeImage_UsesHEICConverter(t *testing.T) {
 
 	heicImageConverter = func(img core.ImageAttachment) (core.ImageAttachment, error) {
 		return core.ImageAttachment{
-			MimeType: "image/png",
-			Data:     []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a},
-			FileName: "cover.png",
+			MimeType: "image/jpeg",
+			Data:     []byte{0xff, 0xd8, 0xff, 0xd9},
+			FileName: "cover.jpg",
 		}, nil
 	}
 
@@ -171,15 +168,75 @@ func TestNormalizeClaudeImage_UsesHEICConverter(t *testing.T) {
 		Data:     append([]byte{0, 0, 0, 24}, append([]byte("ftypheic"), []byte("rest")...)...),
 	})
 
-	if img.MimeType != "image/png" {
-		t.Fatalf("mime = %q, want image/png", img.MimeType)
+	if img.MimeType != "image/jpeg" {
+		t.Fatalf("mime = %q, want image/jpeg", img.MimeType)
 	}
-	if img.FileName != "cover.png" {
-		t.Fatalf("fileName = %q, want cover.png", img.FileName)
+	if img.FileName != "cover.jpg" {
+		t.Fatalf("fileName = %q, want cover.jpg", img.FileName)
 	}
-	if !bytes.HasPrefix(img.Data, []byte{0x89, 0x50, 0x4e, 0x47}) {
-		t.Fatalf("expected converted PNG, got %#v", img.Data)
+	if len(img.Data) < 2 || img.Data[0] != 0xff || img.Data[1] != 0xd8 {
+		t.Fatalf("expected converted JPEG, got %#v", img.Data)
 	}
+}
+
+func TestClaudeSend_UsesLocalFilePathsOnlyForImages(t *testing.T) {
+	workDir := t.TempDir()
+	var buf bytes.Buffer
+	cs := &claudeSession{
+		workDir: workDir,
+		stdin:   nopWriteCloser{Writer: &buf},
+	}
+	cs.alive.Store(true)
+
+	raw := mustPNGBytes(t)
+
+	if err := cs.Send("check this", []core.ImageAttachment{{
+		MimeType: "image/png",
+		Data:     raw,
+		FileName: "tiny.png",
+	}}, nil); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	payload := buf.String()
+	if strings.Contains(payload, "\"type\":\"image\"") || strings.Contains(payload, "\"base64\"") {
+		t.Fatalf("payload unexpectedly contains image block: %s", payload)
+	}
+	if !strings.Contains(payload, ".cc-connect/images") || !strings.Contains(payload, ".jpg") {
+		t.Fatalf("payload missing local image path: %s", payload)
+	}
+
+	matches, err := filepath.Glob(filepath.Join(workDir, ".cc-connect", "images", "*"))
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("saved image count = %d, want 1", len(matches))
+	}
+	data, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatalf("read saved image: %v", err)
+	}
+	if len(data) < 2 || data[0] != 0xff || data[1] != 0xd8 {
+		t.Fatalf("saved image is not JPEG")
+	}
+}
+
+type nopWriteCloser struct {
+	io.Writer
+}
+
+func (n nopWriteCloser) Close() error { return nil }
+
+func mustPNGBytes(t *testing.T) []byte {
+	t.Helper()
+	img := image.NewNRGBA(image.Rect(0, 0, 1, 1))
+	img.Set(0, 0, color.NRGBA{R: 255, G: 0, B: 0, A: 255})
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("png encode: %v", err)
+	}
+	return buf.Bytes()
 }
 
 func TestContainsClaudeImageError(t *testing.T) {

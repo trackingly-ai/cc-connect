@@ -249,6 +249,15 @@ func TestShouldResetAgentSessionOnResult(t *testing.T) {
 	if !e.shouldResetAgentSessionOnResult("API Error: 400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Could not process image\"}}") {
 		t.Fatal("expected Claude image failure to trigger reset")
 	}
+	if !e.shouldResetAgentSessionOnResult("Request too large (max 20MB). Try with a smaller file.") {
+		t.Fatal("expected request size limit to trigger reset")
+	}
+	if !e.shouldResetAgentSessionOnResult("Error: max 20MB exceeded for this request") {
+		t.Fatal("expected max 20MB limit to trigger reset")
+	}
+	if !e.shouldResetAgentSessionOnResult("Payload too large for this request") {
+		t.Fatal("expected payload size limit to trigger reset")
+	}
 	if e.shouldResetAgentSessionOnResult("normal response") {
 		t.Fatal("did not expect normal response to trigger reset")
 	}
@@ -1311,6 +1320,34 @@ func TestProcessInteractiveEvents_FatalClaudeImageErrorCleansInteractiveState(t 
 	}
 	if _, ok := e.interactiveStates["test:user1"]; ok {
 		t.Fatal("expected interactive state to be cleaned up after fatal image error")
+	}
+}
+
+func TestProcessInteractiveEvents_RequestTooLargeCleansInteractiveState(t *testing.T) {
+	e := NewEngine("test", &namedStubAgent{name: "claudecode"}, nil, filepath.Join(t.TempDir(), "sessions.json"), LangEnglish)
+	p := &stubPlatformEngine{n: "test"}
+	events := make(chan Event, 1)
+	events <- Event{
+		Type:    EventResult,
+		Content: "Request too large (max 20MB). Try with a smaller file.",
+		Done:    true,
+	}
+	close(events)
+
+	session := &Session{ID: "s15", AgentSessionID: "too-large-session"}
+	state := newInteractiveState(&eventfulStubAgentSession{events: events}, p, "ctx", false)
+	e.interactiveStates["test:user2"] = state
+
+	e.processInteractiveEvents(state, session, "test:user2", "msg-2", time.Now())
+
+	if session.AgentSessionID != "" {
+		t.Fatalf("AgentSessionID = %q, want empty", session.AgentSessionID)
+	}
+	if !session.NeedsReplay {
+		t.Fatal("expected session to require replay after request-too-large error")
+	}
+	if _, ok := e.interactiveStates["test:user2"]; ok {
+		t.Fatal("expected interactive state to be cleaned up after request-too-large error")
 	}
 }
 

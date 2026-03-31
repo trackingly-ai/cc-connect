@@ -2387,6 +2387,11 @@ func (e *Engine) shouldResetAgentSessionOnResult(content string) bool {
 		return false
 	}
 	lower := strings.ToLower(content)
+	if strings.Contains(lower, "request too large") ||
+		strings.Contains(lower, "payload too large") ||
+		strings.Contains(lower, "max 20mb") {
+		return true
+	}
 	return strings.Contains(lower, "could not process image") ||
 		(strings.Contains(lower, "api error: 400") && strings.Contains(lower, "image"))
 }

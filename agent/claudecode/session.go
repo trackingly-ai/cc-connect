@@ -4,14 +4,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"image"
 	_ "image/gif"
-	_ "image/jpeg"
-	"image/png"
+	"image/draw"
+	"image/jpeg"
+	_ "image/png"
 	"io"
 	"log/slog"
 	"os"
@@ -407,17 +407,21 @@ func normalizeClaudeImage(img core.ImageAttachment) core.ImageAttachment {
 		return img
 	}
 
+	opaque := image.NewRGBA(decoded.Bounds())
+	draw.Draw(opaque, opaque.Bounds(), image.NewUniform(image.White), image.Point{}, draw.Src)
+	draw.Draw(opaque, opaque.Bounds(), decoded, decoded.Bounds().Min, draw.Over)
+
 	var buf bytes.Buffer
-	if err := png.Encode(&buf, decoded); err != nil {
+	if err := jpeg.Encode(&buf, opaque, &jpeg.Options{Quality: 90}); err != nil {
 		return img
 	}
 
 	normalized := img
 	normalized.Data = buf.Bytes()
-	normalized.MimeType = "image/png"
+	normalized.MimeType = "image/jpeg"
 	if normalized.FileName != "" {
 		base := strings.TrimSuffix(normalized.FileName, filepath.Ext(normalized.FileName))
-		normalized.FileName = base + ".png"
+		normalized.FileName = base + ".jpg"
 	}
 	slog.Debug("claudeSession: image normalized", "file", img.FileName, "mime", img.MimeType, "bytes", len(img.Data), "decoded_format", format, "out_file", normalized.FileName, "out_mime", normalized.MimeType, "out_bytes", len(normalized.Data))
 	return normalized
@@ -493,7 +497,7 @@ func convertHEICImage(img core.ImageAttachment) (core.ImageAttachment, error) {
 	}
 
 	inputPath := filepath.Join(tmpDir, filepath.Base(name))
-	outputPath := filepath.Join(tmpDir, strings.TrimSuffix(filepath.Base(name), filepath.Ext(name))+".png")
+	outputPath := filepath.Join(tmpDir, strings.TrimSuffix(filepath.Base(name), filepath.Ext(name))+".jpg")
 	if err := os.WriteFile(inputPath, img.Data, 0o644); err != nil {
 		return img, err
 	}
@@ -501,7 +505,7 @@ func convertHEICImage(img core.ImageAttachment) (core.ImageAttachment, error) {
 	var cmd *exec.Cmd
 	if runtime.GOOS == "darwin" {
 		if _, err := exec.LookPath("sips"); err == nil {
-			cmd = exec.Command("sips", "-s", "format", "png", inputPath, "--out", outputPath)
+			cmd = exec.Command("sips", "-s", "format", "jpeg", inputPath, "--out", outputPath)
 		}
 	}
 	if cmd == nil {
@@ -525,16 +529,16 @@ func convertHEICImage(img core.ImageAttachment) (core.ImageAttachment, error) {
 	}
 	converted := img
 	converted.Data = convertedData
-	converted.MimeType = "image/png"
-	converted.FileName = strings.TrimSuffix(filepath.Base(name), filepath.Ext(name)) + ".png"
+	converted.MimeType = "image/jpeg"
+	converted.FileName = strings.TrimSuffix(filepath.Base(name), filepath.Ext(name)) + ".jpg"
 	return converted, nil
 }
 
 // Send writes a user message (with optional images) to the Claude process stdin.
-// Images are normalized to a canonical PNG encoding first because some valid
+// Images are normalized to a canonical JPEG encoding first because some valid
 // image files still trigger "Could not process image" errors from Claude's API.
-// The normalized images are then sent as base64 in the multimodal content
-// array, with local file paths also mentioned in the text prompt as a fallback.
+// The normalized images are then saved locally and only the file paths are
+// referenced in the text prompt so Claude Code can inspect them via local tools.
 func (cs *claudeSession) Send(prompt string, images []core.ImageAttachment, files []core.FileAttachment) error {
 	if !cs.alive.Load() {
 		return fmt.Errorf("session process is not running")
@@ -549,7 +553,6 @@ func (cs *claudeSession) Send(prompt string, images []core.ImageAttachment, file
 		})
 	}
 
-	var parts []map[string]any
 	normalizedImages := make([]core.ImageAttachment, 0, len(images))
 	for _, img := range images {
 		normalized := normalizeClaudeImage(img)
@@ -561,35 +564,20 @@ func (cs *claudeSession) Send(prompt string, images []core.ImageAttachment, file
 		if i < len(savedPaths) {
 			slog.Debug("claudeSession: image saved", "path", savedPaths[i], "size", len(img.Data))
 		}
-
-		mimeType := img.MimeType
-		if mimeType == "" {
-			mimeType = "image/png"
-		}
-		parts = append(parts, map[string]any{
-			"type": "image",
-			"source": map[string]any{
-				"type":       "base64",
-				"media_type": mimeType,
-				"data":       base64.StdEncoding.EncodeToString(img.Data),
-			},
-		})
 	}
 
-	// Build text part: user prompt + file path references as fallback
 	textPart := prompt
 	if textPart == "" {
-		textPart = "Please analyze the attached image(s)."
+		textPart = "Please analyze the attached local image file(s)."
 	}
 	if len(savedPaths) > 0 || len(filePaths) > 0 {
 		refs := append(append([]string{}, savedPaths...), filePaths...)
 		textPart += "\n\n(Local files: " + strings.Join(refs, ", ") + ")"
 	}
-	parts = append(parts, map[string]any{"type": "text", "text": textPart})
 
 	return cs.writeJSON(map[string]any{
 		"type":    "user",
-		"message": map[string]any{"role": "user", "content": parts},
+		"message": map[string]any{"role": "user", "content": textPart},
 	})
 }
 
