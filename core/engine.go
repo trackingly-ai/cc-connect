@@ -5781,20 +5781,59 @@ func (e *Engine) startReviewCycle(sessionKey, reviewerProject string) error {
 	e.reviewMu.Unlock()
 
 	packetPrompt := buildReviewPacketPrompt(e.name, reviewerProject, originSummary)
+	packetStart := time.Now()
+	slog.Info("review: preparing packet",
+		"origin_project", e.name,
+		"reviewer_project", reviewerProject,
+		"session_key", sessionKey,
+		"origin_session", originSession.ID,
+		"origin_agent_session", originSession.AgentSessionID,
+	)
 	reviewPacket, err := e.runManagedTurn(originStateForReviewPacket(e, sessionKey, originPlatform, originReplyCtx, originSession), originSession, sessionKey, packetPrompt, managedTurnOpts{
 		AutoApprove: true,
 		Silent:      true,
 	})
 	if err != nil {
+		slog.Warn("review: packet preparation failed",
+			"origin_project", e.name,
+			"reviewer_project", reviewerProject,
+			"session_key", sessionKey,
+			"origin_session", originSession.ID,
+			"elapsed", time.Since(packetStart),
+			"error", err,
+		)
 		return err
 	}
 	reviewPacket = extractReviewPacket(reviewPacket)
 	if reviewPacket == "" {
+		slog.Warn("review: packet preparation returned empty packet",
+			"origin_project", e.name,
+			"reviewer_project", reviewerProject,
+			"session_key", sessionKey,
+			"origin_session", originSession.ID,
+			"elapsed", time.Since(packetStart),
+		)
 		return fmt.Errorf("origin agent returned empty review packet")
 	}
 	if utf8.RuneCountInString(reviewPacket) > maxReviewPromptLen {
+		slog.Warn("review: packet preparation returned oversized packet",
+			"origin_project", e.name,
+			"reviewer_project", reviewerProject,
+			"session_key", sessionKey,
+			"origin_session", originSession.ID,
+			"elapsed", time.Since(packetStart),
+			"runes", utf8.RuneCountInString(reviewPacket),
+		)
 		return fmt.Errorf("%s", e.i18n.Tf(MsgReviewPromptTooLong, maxReviewPromptLen))
 	}
+	slog.Info("review: packet prepared",
+		"origin_project", e.name,
+		"reviewer_project", reviewerProject,
+		"session_key", sessionKey,
+		"origin_session", originSession.ID,
+		"elapsed", time.Since(packetStart),
+		"packet_runes", utf8.RuneCountInString(reviewPacket),
+	)
 
 	reviewKey := reviewerSessionKey(e.name, reviewerProject, sessionKey)
 	reviewerSession := reviewerEngine.sessions.GetOrCreateActive(reviewKey)
