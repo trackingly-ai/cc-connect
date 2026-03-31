@@ -37,6 +37,20 @@ enabled = true
 role = "architect"
 
 [[projects]]
+name = "echo-research-reviewer-qoder"
+
+[projects.agent]
+type = "qoder"
+
+[projects.agent.options]
+work_dir = "{{ECHO_REPO_DIR}}"
+mode = "{{QODER_REVIEWER_MODE}}"
+
+[projects.echo]
+enabled = true
+role = "research_reviewer"
+
+[[projects]]
 name = "echo-researcher-codex"
 
 [projects.agent]
@@ -49,6 +63,20 @@ mode = "{{CODEX_ARCHITECT_MODE}}"
 [projects.echo]
 enabled = true
 role = "researcher"
+
+[[projects]]
+name = "echo-design-reviewer-qoder"
+
+[projects.agent]
+type = "qoder"
+
+[projects.agent.options]
+work_dir = "{{ECHO_REPO_DIR}}"
+mode = "{{QODER_REVIEWER_MODE}}"
+
+[projects.echo]
+enabled = true
+role = "design_reviewer"
 
 [[projects]]
 name = "echo-coder-codex"

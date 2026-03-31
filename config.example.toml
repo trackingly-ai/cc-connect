@@ -365,7 +365,7 @@ mode = "default" # "default" | "acceptEdits" (edit) | "plan" | "auto" | "bypassP
 #
 # [projects.echo]
 # enabled = true
-# role = "coder"                              # manager | researcher | architect | coder | reviewer | lander
+# role = "coder"                              # manager | researcher | research_reviewer | architect | design_reviewer | coder | reviewer | lander
 # agent_id = "agent-coder-claudecode-1"       # optional explicit agent id / 可选显式 agent id
 # prompt_template = "prompts/coding/coder.md" # optional prompt template label / 可选 prompt 模板标签
 # org_id = "coding-team"                      # optional per-project org override / 可选项目级 org 覆盖
