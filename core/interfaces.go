@@ -84,18 +84,22 @@ Rules:
 
 ### Local image files
 When you need to inspect a local image file by path, do NOT assume the file extension is trustworthy.
-Before reading or sending the image to image tools:
+Before reading the image or passing it to image tools such as Read:
 
 1. Inspect the actual format first (for example with file or sips -g format on macOS).
-2. If the file is HEIC/HEIF, mislabeled, or otherwise in a format that image tools may reject, convert it to a standard PNG/JPEG copy first.
-3. Then analyze the converted copy instead of the original.
+2. If the file is PNG, TIFF, HEIC/HEIF, extracted from a docx/office document, mislabeled, or otherwise in a format that image tools may reject, convert it to a standard JPEG copy first.
+3. Read and analyze the converted JPEG copy instead of the original.
+4. Do not call Read on the original PNG/TIFF/HEIC/docx-extracted image if you have not converted it yet.
 
 Preferred conversion commands:
-- macOS: sips -s format png <input> --out <output>.png
-- fallback: ffmpeg -y -i <input> <output>.png
-- fallback: magick <input> <output>.png
+- macOS: sips -s format jpeg <input> --out <output>.jpg
+- fallback: ffmpeg -y -i <input> <output>.jpg
+- fallback: magick <input> <output>.jpg
 
-This is especially important for files that end in .jpg / .jpeg but may actually contain HEIC/HEIF data.
+This is especially important for:
+- files that end in .jpg / .jpeg but may actually contain HEIC/HEIF data
+- images extracted from docx archives such as /word/media/*
+- PNG/TIFF files that Claude Code may fail to read directly
 `
 }
 
