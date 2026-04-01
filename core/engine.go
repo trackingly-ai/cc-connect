@@ -4266,6 +4266,43 @@ func (e *Engine) SendToSession(sessionKey, message string) error {
 	return p.Send(e.ctx, replyCtx, message)
 }
 
+// SendFileToSession sends a local file to an active session from an external caller (API/CLI).
+// If sessionKey is empty, it picks the first active session.
+func (e *Engine) SendFileToSession(sessionKey, path, caption string) error {
+	e.interactiveMu.Lock()
+	defer e.interactiveMu.Unlock()
+
+	var state *interactiveState
+	if sessionKey != "" {
+		state = e.interactiveStates[sessionKey]
+	} else {
+		for _, s := range e.interactiveStates {
+			state = s
+			break
+		}
+	}
+
+	if state == nil {
+		return fmt.Errorf("no active session found (key=%q)", sessionKey)
+	}
+
+	state.mu.Lock()
+	p := state.platform
+	replyCtx := state.replyCtx
+	state.mu.Unlock()
+
+	if p == nil {
+		return fmt.Errorf("no active session found (key=%q)", sessionKey)
+	}
+
+	fs, ok := p.(FileSender)
+	if !ok {
+		return fmt.Errorf("platform %q does not support sending files", p.Name())
+	}
+
+	return fs.SendFile(e.ctx, replyCtx, path, caption)
+}
+
 // sendPermissionPrompt sends a permission prompt, using inline buttons when the platform supports them.
 func (e *Engine) sendPermissionPrompt(sessionKey string, p Platform, replyCtx any, prompt string) {
 	e.replyWithInteraction(sessionKey, p, replyCtx, prompt, [][]interactionChoice{

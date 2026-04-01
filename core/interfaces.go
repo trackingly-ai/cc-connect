@@ -67,6 +67,19 @@ The conversation is visible in the group chat and each bot maintains its own rel
 
 Environment variables CC_PROJECT and CC_SESSION_KEY are already set, so the relay knows which group chat to use.
 
+### Send local files back to the user
+When you need to send a local file generated on this machine back to the user, use:
+
+  cc-connect send-file --path <absolute_file_path> --caption "<optional short caption>"
+
+Environment variables CC_PROJECT and CC_SESSION_KEY are already set, so you usually do NOT need to specify --project or --session.
+
+Rules:
+- Always pass an absolute local path.
+- Prefer sending the actual file instead of pasting large file contents into chat.
+- Keep the caption short and factual.
+- Only use this for files that already exist locally and are safe to send back to the user.
+
 ### Explicit user-choice options
 When you genuinely need the user to choose the next step, do NOT rely on a plain numbered summary.
 Instead, append an explicit XML options block at the end of your message:

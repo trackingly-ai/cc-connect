@@ -61,6 +61,11 @@ type AudioSender interface {
 	SendAudio(ctx context.Context, replyCtx any, audio []byte, format string) error
 }
 
+// FileSender is implemented by platforms that support sending local files.
+type FileSender interface {
+	SendFile(ctx context.Context, replyCtx any, path string, caption string) error
+}
+
 // ──────────────────────────────────────────────────────────────
 // QwenTTS — Alibaba DashScope TTS implementation
 // ──────────────────────────────────────────────────────────────

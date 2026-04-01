@@ -8,6 +8,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -1486,6 +1488,80 @@ func (p *Platform) SendAudio(ctx context.Context, rctx any, audio []byte, format
 	}
 	if !sendResp.Success() {
 		return fmt.Errorf("feishu: send audio message code=%d msg=%s", sendResp.Code, sendResp.Msg)
+	}
+	return nil
+}
+
+// SendFile uploads a local file to Feishu and sends it back to the current chat.
+func (p *Platform) SendFile(ctx context.Context, rctx any, path string, caption string) error {
+	rc, ok := rctx.(replyContext)
+	if !ok {
+		return fmt.Errorf("feishu: SendFile: invalid reply context type %T", rctx)
+	}
+
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return fmt.Errorf("feishu: SendFile: empty path")
+	}
+	if !filepath.IsAbs(path) {
+		return fmt.Errorf("feishu: SendFile: path must be absolute")
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("feishu: open file: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	name := filepath.Base(path)
+	if name == "" || name == "." || name == string(filepath.Separator) {
+		name = "attachment"
+	}
+
+	uploadResp, err := p.client.Im.File.Create(ctx,
+		larkim.NewCreateFileReqBuilder().
+			Body(larkim.NewCreateFileReqBodyBuilder().
+				FileType(larkim.FileTypeStream).
+				FileName(name).
+				File(f).
+				Build()).
+			Build())
+	if err != nil {
+		return fmt.Errorf("feishu: upload file: %w", err)
+	}
+	if !uploadResp.Success() {
+		return fmt.Errorf("feishu: upload file code=%d msg=%s", uploadResp.Code, uploadResp.Msg)
+	}
+	if uploadResp.Data == nil || uploadResp.Data.FileKey == nil {
+		return fmt.Errorf("feishu: upload file: no file_key returned")
+	}
+	fileKey := *uploadResp.Data.FileKey
+
+	fileMsg := larkim.MessageFile{FileKey: fileKey}
+	fileContent, err := fileMsg.String()
+	if err != nil {
+		return fmt.Errorf("feishu: build file message: %w", err)
+	}
+
+	if strings.TrimSpace(caption) != "" {
+		if err := p.Send(ctx, rc, caption); err != nil {
+			return fmt.Errorf("feishu: send file caption: %w", err)
+		}
+	}
+
+	sendResp, err := p.client.Im.Message.Create(ctx, larkim.NewCreateMessageReqBuilder().
+		ReceiveIdType(larkim.ReceiveIdTypeChatId).
+		Body(larkim.NewCreateMessageReqBodyBuilder().
+			ReceiveId(rc.chatID).
+			MsgType(larkim.MsgTypeFile).
+			Content(fileContent).
+			Build()).
+		Build())
+	if err != nil {
+		return fmt.Errorf("feishu: send file message: %w", err)
+	}
+	if !sendResp.Success() {
+		return fmt.Errorf("feishu: send file message code=%d msg=%s", sendResp.Code, sendResp.Msg)
 	}
 	return nil
 }
