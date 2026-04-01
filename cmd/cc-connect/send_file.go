@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -46,6 +47,11 @@ func runSendFile(args []string) {
 			printSendFileUsage()
 			return
 		default:
+			if strings.HasPrefix(args[i], "-") {
+				fmt.Fprintf(os.Stderr, "Error: unknown option %s\n", args[i])
+				printSendFileUsage()
+				os.Exit(1)
+			}
 			if path == "" {
 				path = args[i]
 			} else {
@@ -56,6 +62,11 @@ func runSendFile(args []string) {
 
 	if strings.TrimSpace(path) == "" {
 		fmt.Fprintln(os.Stderr, "Error: path is required")
+		printSendFileUsage()
+		os.Exit(1)
+	}
+	if !filepath.IsAbs(path) {
+		fmt.Fprintln(os.Stderr, "Error: path must be absolute")
 		printSendFileUsage()
 		os.Exit(1)
 	}

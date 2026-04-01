@@ -4272,6 +4272,14 @@ func (e *Engine) SendFileToSession(sessionKey, path, caption string) error {
 	e.interactiveMu.Lock()
 	defer e.interactiveMu.Unlock()
 
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return fmt.Errorf("path is required")
+	}
+	if !filepath.IsAbs(path) {
+		return fmt.Errorf("path must be absolute")
+	}
+
 	var state *interactiveState
 	if sessionKey != "" {
 		state = e.interactiveStates[sessionKey]
