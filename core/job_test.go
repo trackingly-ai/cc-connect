@@ -258,6 +258,12 @@ func TestJobManagerCapturesWorkspaceSnapshotForProducerTasks(t *testing.T) {
 	if completed.Events[0].Metadata["snapshot_error"] == "" {
 		t.Fatalf("metadata = %#v, want snapshot_error", completed.Events[0].Metadata)
 	}
+	if completed.Events[0].Metadata["job_outcome"] != "completed" {
+		t.Fatalf("job_outcome = %#v, want completed", completed.Events[0].Metadata)
+	}
+	if completed.Events[0].Metadata["snapshot_stage"] != "post_run" {
+		t.Fatalf("snapshot_stage = %#v, want post_run", completed.Events[0].Metadata)
+	}
 }
 
 func TestJobManagerCancelRunningJob(t *testing.T) {

@@ -185,6 +185,68 @@ func TestEngineJobRunnerEmitsStructuredJobEvents(t *testing.T) {
 	}
 }
 
+func TestEngineJobRunnerTruncatesLargeResultAndErrorEvents(t *testing.T) {
+	t.Run("result", func(t *testing.T) {
+		session := &jobTestSession{events: make(chan Event, 2)}
+		large := strings.Repeat("r", maxJobEventContentLen+128)
+		session.onSend = func(prompt string) {
+			session.events <- Event{Type: EventResult, Content: large}
+			close(session.events)
+		}
+
+		engine := NewEngine("proj-large-result", &jobTestAgent{session: session}, nil, "", LangEnglish)
+		var captured []JobEvent
+		_, err := engine.JobRunner().Run(context.Background(), JobRequest{
+			Project: "proj-large-result",
+			Prompt:  "emit result",
+		}, "job-large-result", func(event JobEvent) {
+			captured = append(captured, event)
+		})
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if len(captured) != 1 || captured[0].Type != string(EventResult) {
+			t.Fatalf("captured = %#v, want single result event", captured)
+		}
+		if len(captured[0].Content) >= len(large) {
+			t.Fatalf("result content was not truncated")
+		}
+		if !strings.Contains(captured[0].Content, "[truncated ") {
+			t.Fatalf("result content = %q, want truncation marker", captured[0].Content)
+		}
+	})
+
+	t.Run("error", func(t *testing.T) {
+		session := &jobTestSession{events: make(chan Event, 2)}
+		large := strings.Repeat("e", maxJobEventContentLen+128)
+		session.onSend = func(prompt string) {
+			session.events <- Event{Type: EventError, Error: errors.New(large)}
+			close(session.events)
+		}
+
+		engine := NewEngine("proj-large-error", &jobTestAgent{session: session}, nil, "", LangEnglish)
+		var captured []JobEvent
+		_, err := engine.JobRunner().Run(context.Background(), JobRequest{
+			Project: "proj-large-error",
+			Prompt:  "emit error",
+		}, "job-large-error", func(event JobEvent) {
+			captured = append(captured, event)
+		})
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if len(captured) != 1 || captured[0].Type != string(EventError) {
+			t.Fatalf("captured = %#v, want single error event", captured)
+		}
+		if len(captured[0].Content) >= len(large) {
+			t.Fatalf("error content was not truncated")
+		}
+		if !strings.Contains(captured[0].Content, "[truncated ") {
+			t.Fatalf("error content = %q, want truncation marker", captured[0].Content)
+		}
+	})
+}
+
 func TestSummarizeJobOutput(t *testing.T) {
 	short := summarizeJobOutput("short")
 	if short != "short" {

@@ -213,7 +213,12 @@ func CaptureWorkspaceSnapshot(
 	worktreePath = strings.TrimSpace(worktreePath)
 	branchName = strings.TrimSpace(branchName)
 	if worktreePath == "" {
-		return nil, nil
+		return &WorkspaceSnapshot{
+			RepoPath:     repoPath,
+			WorktreePath: worktreePath,
+			Branch:       branchName,
+			Error:        "missing worktree path",
+		}, nil
 	}
 
 	snapshot := &WorkspaceSnapshot{

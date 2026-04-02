@@ -12,6 +12,7 @@ import (
 
 const maxJobSummaryLen = 240
 const maxBufferedJobTextBytes = 64 * 1024
+const maxJobEventContentLen = 16 * 1024
 
 type codedJobError struct {
 	code string
@@ -70,6 +71,22 @@ func (b *jobTextBuffer) String() string {
 		return fmt.Sprintf("[truncated %d bytes]", b.droppedBytes)
 	}
 	return fmt.Sprintf("[truncated %d bytes]\n%s", b.droppedBytes, output)
+}
+
+func truncateJobEventContent(text string) string {
+	text = strings.TrimSpace(text)
+	if len(text) <= maxJobEventContentLen {
+		return text
+	}
+	cut := text[:maxJobEventContentLen]
+	for len(cut) > 0 && !utf8.ValidString(cut) {
+		cut = cut[:len(cut)-1]
+	}
+	return fmt.Sprintf(
+		"%s\n[truncated %d bytes]",
+		strings.TrimSpace(cut),
+		len(text)-len(cut),
+	)
 }
 
 type engineJobRunner struct {
@@ -175,7 +192,7 @@ func (r engineJobRunner) Run(
 				if onEvent != nil {
 					onEvent(JobEvent{
 						Type:      string(EventResult),
-						Content:   output,
+						Content:   truncateJobEventContent(output),
 						SessionID: sessionID,
 						CreatedAt: time.Now().UTC(),
 					})
@@ -193,7 +210,7 @@ func (r engineJobRunner) Run(
 				if onEvent != nil {
 					onEvent(JobEvent{
 						Type:      string(EventError),
-						Content:   errValue.Error(),
+						Content:   truncateJobEventContent(errValue.Error()),
 						SessionID: sessionID,
 						CreatedAt: time.Now().UTC(),
 					})

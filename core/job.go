@@ -377,6 +377,13 @@ func (jm *JobManager) runJob(managed *managedJob) {
 	result, err := runner.Run(ctx, req, jobID, func(event JobEvent) {
 		jm.recordJobEvent(jobID, event)
 	})
+	jobOutcome := "completed"
+	if err != nil {
+		jobOutcome = "failed"
+	}
+	if ctx.Err() != nil {
+		jobOutcome = "cancelled"
+	}
 	if shouldCaptureWorkspaceSnapshot(req) {
 		if snapshot, snapshotErr := CaptureWorkspaceSnapshot(
 			req.WorkspaceRef.RepoPath,
@@ -388,15 +395,20 @@ func (jm *JobManager) runJob(managed *managedJob) {
 				Content:   "workspace snapshot failed",
 				CreatedAt: time.Now().UTC(),
 				Metadata: map[string]any{
-					"error": snapshotErr.Error(),
+					"error":          snapshotErr.Error(),
+					"job_outcome":    jobOutcome,
+					"snapshot_stage": "post_run",
 				},
 			})
 		} else if snapshot != nil {
+			metadata := snapshot.Metadata()
+			metadata["job_outcome"] = jobOutcome
+			metadata["snapshot_stage"] = "post_run"
 			jm.recordJobEvent(jobID, JobEvent{
 				Type:      "workspace_snapshot",
 				Content:   snapshot.Summary(),
 				CreatedAt: time.Now().UTC(),
-				Metadata:  snapshot.Metadata(),
+				Metadata:  metadata,
 			})
 		}
 	}
