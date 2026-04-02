@@ -1720,6 +1720,27 @@ func TestCmdStopReleasesBusySessionWhenEventLoopIsWaiting(t *testing.T) {
 	}
 }
 
+func TestCmdStopClearsStaleBusyLockWithoutInteractiveState(t *testing.T) {
+	e := newTestEngine()
+	p := &stubPlatformEngine{n: "test"}
+	sessionKey := "test:user-stale-stop"
+	session := e.sessions.GetOrCreateActive(sessionKey)
+	if !session.TryLock() {
+		t.Fatal("expected fresh session lock to succeed")
+	}
+
+	e.cmdStop(p, &Message{SessionKey: sessionKey, ReplyCtx: "ctx"})
+
+	if !session.TryLock() {
+		t.Fatal("expected stale busy lock to be released by /stop")
+	}
+	session.Unlock()
+
+	if len(p.sent) == 0 || p.sent[len(p.sent)-1] != e.i18n.T(MsgExecutionStopped) {
+		t.Fatalf("expected stop confirmation reply, got %#v", p.sent)
+	}
+}
+
 func TestEngine_ClearAliases(t *testing.T) {
 	e := newTestEngine()
 	e.AddAlias("帮助", "/help")

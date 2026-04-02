@@ -3810,6 +3810,17 @@ func (e *Engine) cmdStop(p Platform, msg *Message) {
 	e.interactiveMu.Unlock()
 
 	if !ok || state == nil {
+		// Recovery path: if there is no interactive state but the active local
+		// session is still marked busy, release the stale lock so users can
+		// continue chatting.
+		session := e.sessions.GetOrCreateActive(msg.SessionKey)
+		if !session.TryLock() {
+			slog.Warn("cmdStop: stale busy session without interactive state; forcing unlock", "session_key", msg.SessionKey, "session", session.ID)
+			session.Unlock()
+			e.reply(p, msg.ReplyCtx, e.i18n.T(MsgExecutionStopped))
+			return
+		}
+		session.Unlock()
 		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgNoExecution))
 		return
 	}
