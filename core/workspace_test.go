@@ -257,6 +257,142 @@ func TestFinalizeSourceCommitSelectivelyCommitsAndPushes(t *testing.T) {
 	}
 }
 
+func TestFinalizeSourceCommitSupportsDirectoryArtifacts(t *testing.T) {
+	originPath, repoPath := initGitRepoWithOrigin(t)
+	branchName := "echo/task-directory"
+	if _, err := runGit(repoPath, "checkout", "-b", branchName); err != nil {
+		t.Fatalf("git checkout -b: %v", err)
+	}
+	docsDir := filepath.Join(repoPath, "docs", "bundle")
+	if err := os.MkdirAll(filepath.Join(docsDir, "nested"), 0o755); err != nil {
+		t.Fatalf("mkdir bundle: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(docsDir, "nested", "note.md"), []byte("nested\n"), 0o644); err != nil {
+		t.Fatalf("write nested file: %v", err)
+	}
+	result, err := FinalizeSourceCommit(
+		repoPath,
+		repoPath,
+		branchName,
+		"echo: finalize directory artifact",
+		[]string{"docs/bundle"},
+	)
+	if err != nil {
+		t.Fatalf("FinalizeSourceCommit: %v", err)
+	}
+	if !result.CreatedCommit {
+		t.Fatal("expected directory artifact commit to be created")
+	}
+	if got, err := runGit(repoPath, "show", "HEAD:docs/bundle/nested/note.md"); err != nil || got != "nested" {
+		t.Fatalf("directory artifact not present in HEAD: %q err=%v", got, err)
+	}
+	if _, err := runGit(originPath, "rev-parse", "refs/heads/"+branchName); err != nil {
+		t.Fatalf("expected pushed remote branch: %v", err)
+	}
+}
+
+func TestFinalizeSourceCommitRejectsEmptyDirectoryArtifact(t *testing.T) {
+	_, repoPath := initGitRepoWithOrigin(t)
+	branchName := "echo/task-empty-directory"
+	if _, err := runGit(repoPath, "checkout", "-b", branchName); err != nil {
+		t.Fatalf("git checkout -b: %v", err)
+	}
+	emptyDir := filepath.Join(repoPath, "docs", "empty")
+	if err := os.MkdirAll(emptyDir, 0o755); err != nil {
+		t.Fatalf("mkdir empty dir: %v", err)
+	}
+	_, err := FinalizeSourceCommit(
+		repoPath,
+		repoPath,
+		branchName,
+		"echo: finalize empty directory artifact",
+		[]string{"docs/empty"},
+	)
+	if err == nil || !strings.Contains(err.Error(), "is empty") {
+		t.Fatalf("expected empty directory error, got %v", err)
+	}
+}
+
+func TestFinalizeSourceCommitReusesAlreadyCommittedArtifact(t *testing.T) {
+	originPath, repoPath := initGitRepoWithOrigin(t)
+	branchName := "echo/task-already-committed"
+	if _, err := runGit(repoPath, "checkout", "-b", branchName); err != nil {
+		t.Fatalf("git checkout -b: %v", err)
+	}
+	docsDir := filepath.Join(repoPath, "docs")
+	if err := os.MkdirAll(docsDir, 0o755); err != nil {
+		t.Fatalf("mkdir docs: %v", err)
+	}
+	artifactPath := filepath.Join(docsDir, "DESIGN.md")
+	if err := os.WriteFile(artifactPath, []byte("design\n"), 0o644); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+	if _, err := runGit(repoPath, "add", "docs/DESIGN.md"); err != nil {
+		t.Fatalf("git add artifact: %v", err)
+	}
+	if _, err := runGit(repoPath, "commit", "-m", "manual artifact commit"); err != nil {
+		t.Fatalf("git commit artifact: %v", err)
+	}
+	headSHA, err := runGit(repoPath, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("rev-parse HEAD: %v", err)
+	}
+	result, err := FinalizeSourceCommit(
+		repoPath,
+		repoPath,
+		branchName,
+		"echo: finalize already committed artifact",
+		[]string{"docs/DESIGN.md"},
+	)
+	if err != nil {
+		t.Fatalf("FinalizeSourceCommit: %v", err)
+	}
+	if result.CreatedCommit {
+		t.Fatal("expected no new commit for already committed artifact")
+	}
+	if result.CommitSHA != headSHA {
+		t.Fatalf("commit sha = %q, want %q", result.CommitSHA, headSHA)
+	}
+	if _, err := runGit(originPath, "rev-parse", "refs/heads/"+branchName); err != nil {
+		t.Fatalf("expected pushed remote branch: %v", err)
+	}
+}
+
+func TestFinalizeSourceCommitPushesWithLeaseWhenRemoteIsAncestor(t *testing.T) {
+	originPath, repoPath := initGitRepoWithOrigin(t)
+	branchName := "echo/task-lease"
+	if _, err := runGit(repoPath, "checkout", "-b", branchName); err != nil {
+		t.Fatalf("git checkout -b: %v", err)
+	}
+	if _, err := runGit(repoPath, "push", "origin", "HEAD:refs/heads/"+branchName); err != nil {
+		t.Fatalf("push initial branch: %v", err)
+	}
+	docsDir := filepath.Join(repoPath, "docs")
+	if err := os.MkdirAll(docsDir, 0o755); err != nil {
+		t.Fatalf("mkdir docs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(docsDir, "RESEARCH.md"), []byte("lease\n"), 0o644); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+	result, err := FinalizeSourceCommit(
+		repoPath,
+		repoPath,
+		branchName,
+		"echo: finalize lease path",
+		[]string{"docs/RESEARCH.md"},
+	)
+	if err != nil {
+		t.Fatalf("FinalizeSourceCommit: %v", err)
+	}
+	remoteSHA, err := runGit(originPath, "rev-parse", "refs/heads/"+branchName)
+	if err != nil {
+		t.Fatalf("rev-parse remote branch: %v", err)
+	}
+	if remoteSHA != result.CommitSHA {
+		t.Fatalf("remote sha = %q, want %q", remoteSHA, result.CommitSHA)
+	}
+}
+
 func TestFinalizeSourceCommitRejectsTrackedDirtyWithoutArtifacts(t *testing.T) {
 	_, repoPath := initGitRepoWithOrigin(t)
 	branchName := "echo/task-no-artifacts"

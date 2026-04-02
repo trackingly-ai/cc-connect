@@ -295,21 +295,34 @@ func finalizeSourceCommitLocked(
 		}, nil
 	}
 
+	cleanArtifactPaths := make([]string, 0, len(artifactPaths))
 	for _, artifactPath := range artifactPaths {
 		artifactPath = strings.TrimSpace(artifactPath)
 		if artifactPath == "" {
 			continue
 		}
-		if info, err := os.Stat(filepath.Join(worktreePath, artifactPath)); err != nil {
+		cleanArtifactPaths = append(cleanArtifactPaths, artifactPath)
+		info, err := os.Stat(filepath.Join(worktreePath, artifactPath))
+		if err != nil {
 			return nil, fmt.Errorf("stat artifact path %q: %w", artifactPath, err)
-		} else if info.IsDir() {
-			continue
 		}
+		if info.IsDir() {
+			entries, err := os.ReadDir(filepath.Join(worktreePath, artifactPath))
+			if err != nil {
+				return nil, fmt.Errorf("read artifact directory %q: %w", artifactPath, err)
+			}
+			if len(entries) == 0 {
+				return nil, fmt.Errorf("artifact directory %q is empty", artifactPath)
+			}
+		}
+	}
+	if len(cleanArtifactPaths) == 0 {
+		return nil, fmt.Errorf("artifact_paths must contain at least one non-empty path")
 	}
 
 	createdCommit := false
 	if len(statusEntries) > 0 {
-		args := append([]string{"add", "--"}, artifactPaths...)
+		args := append([]string{"add", "--"}, cleanArtifactPaths...)
 		if _, err := runGit(worktreePath, args...); err != nil {
 			return nil, fmt.Errorf("git add artifacts: %w", err)
 		}
@@ -332,7 +345,7 @@ func finalizeSourceCommitLocked(
 		}
 	}
 
-	for _, artifactPath := range artifactPaths {
+	for _, artifactPath := range cleanArtifactPaths {
 		if err := verifyArtifactInHEAD(worktreePath, artifactPath); err != nil {
 			return nil, err
 		}
