@@ -8,8 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	_ "image/gif"
 	"image/draw"
+	_ "image/gif"
 	"image/jpeg"
 	_ "image/png"
 	"io"
@@ -314,9 +314,17 @@ func (cs *claudeSession) handleUser(raw map[string]any) {
 		}
 		contentType, _ := item["type"].(string)
 		if contentType == "tool_result" {
+			result, _ := item["content"].(string)
+			if strings.TrimSpace(result) != "" {
+				evt := core.Event{Type: core.EventToolResult, Content: result}
+				select {
+				case cs.events <- evt:
+				case <-cs.ctx.Done():
+					return
+				}
+			}
 			isError, _ := item["is_error"].(bool)
 			if isError {
-				result, _ := item["content"].(string)
 				if strings.Contains(strings.ToLower(result), "could not process image") {
 					slog.Warn("claudeSession: image tool error", "content", result)
 				} else {

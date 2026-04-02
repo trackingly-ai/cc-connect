@@ -172,16 +172,33 @@ func (r engineJobRunner) Run(
 				if output == "" {
 					output = textBuffer.String()
 				}
+				if onEvent != nil {
+					onEvent(JobEvent{
+						Type:      string(EventResult),
+						Content:   output,
+						SessionID: sessionID,
+						CreatedAt: time.Now().UTC(),
+					})
+				}
 				return &JobResult{
 					Output:    output,
 					Summary:   summarizeJobOutput(output),
 					SessionID: sessionID,
 				}, nil
 			case EventError:
-				if event.Error != nil {
-					return nil, event.Error
+				errValue := event.Error
+				if errValue == nil {
+					errValue = fmt.Errorf("job runner received agent error event")
 				}
-				return nil, fmt.Errorf("job runner received agent error event")
+				if onEvent != nil {
+					onEvent(JobEvent{
+						Type:      string(EventError),
+						Content:   errValue.Error(),
+						SessionID: sessionID,
+						CreatedAt: time.Now().UTC(),
+					})
+				}
+				return nil, errValue
 			case EventPermissionRequest:
 				if onEvent != nil {
 					onEvent(JobEvent{

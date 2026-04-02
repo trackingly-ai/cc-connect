@@ -165,8 +165,8 @@ func TestEngineJobRunnerEmitsStructuredJobEvents(t *testing.T) {
 	if result.SessionID != "session-7" {
 		t.Fatalf("SessionID = %q, want session-7", result.SessionID)
 	}
-	if len(captured) != 4 {
-		t.Fatalf("captured len = %d, want 4", len(captured))
+	if len(captured) != 5 {
+		t.Fatalf("captured len = %d, want 5", len(captured))
 	}
 	if captured[0].Type != string(EventThinking) {
 		t.Fatalf("first event type = %q, want thinking", captured[0].Type)
@@ -179,6 +179,9 @@ func TestEngineJobRunnerEmitsStructuredJobEvents(t *testing.T) {
 	}
 	if captured[3].Content != "Done." {
 		t.Fatalf("text content = %q, want Done.", captured[3].Content)
+	}
+	if captured[4].Type != string(EventResult) || captured[4].Content != "final" {
+		t.Fatalf("result event = %#v, want final result", captured[4])
 	}
 }
 
@@ -243,12 +246,18 @@ func TestEngineJobRunnerReturnsAgentError(t *testing.T) {
 	}
 
 	engine := NewEngine("proj-c", &jobTestAgent{session: session}, nil, "", LangEnglish)
+	var captured []JobEvent
 	_, err := engine.JobRunner().Run(context.Background(), JobRequest{
 		Project: "proj-c",
 		Prompt:  "fail",
-	}, "job-fail", nil)
+	}, "job-fail", func(event JobEvent) {
+		captured = append(captured, event)
+	})
 	if err == nil || err.Error() != "agent failed" {
 		t.Fatalf("err = %v, want agent failed", err)
+	}
+	if len(captured) != 1 || captured[0].Type != string(EventError) {
+		t.Fatalf("captured = %#v, want one error event", captured)
 	}
 }
 

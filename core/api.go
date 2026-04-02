@@ -285,6 +285,7 @@ type CronAddRequest struct {
 type StartJobRequest struct {
 	Project      string          `json:"project"`
 	TaskID       string          `json:"task_id,omitempty"`
+	TaskType     string          `json:"task_type,omitempty"`
 	Prompt       string          `json:"prompt"`
 	TimeoutSec   int             `json:"timeout_sec,omitempty"`
 	WorkspaceRef JobWorkspaceRef `json:"workspace_ref,omitempty"`
@@ -314,6 +315,7 @@ func (s *APIServer) handleJobs(w http.ResponseWriter, r *http.Request) {
 		job, err := jobs.Start(JobRequest{
 			Project:      req.Project,
 			TaskID:       req.TaskID,
+			TaskType:     req.TaskType,
 			Prompt:       req.Prompt,
 			Timeout:      time.Duration(req.TimeoutSec) * time.Second,
 			WorkspaceRef: req.WorkspaceRef,

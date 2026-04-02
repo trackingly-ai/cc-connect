@@ -209,6 +209,57 @@ func TestJobManagerPersistsBufferedEvents(t *testing.T) {
 	}
 }
 
+func TestJobManagerCapturesWorkspaceSnapshotForProducerTasks(t *testing.T) {
+	dataDir := t.TempDir()
+	jm, err := NewJobManager(dataDir)
+	if err != nil {
+		t.Fatalf("NewJobManager: %v", err)
+	}
+
+	jm.RegisterRunner("echo", stubJobRunner{
+		run: func(
+			ctx context.Context,
+			req JobRequest,
+			jobID string,
+			onEvent func(JobEvent),
+		) (*JobResult, error) {
+			_ = ctx
+			_ = req
+			_ = jobID
+			_ = onEvent
+			return &JobResult{Output: "done", Summary: "done"}, nil
+		},
+	})
+
+	job, err := jm.Start(JobRequest{
+		Project:  "echo",
+		TaskType: "research",
+		Prompt:   "run",
+		WorkspaceRef: JobWorkspaceRef{
+			RepoPath:     "/tmp/repo",
+			WorktreePath: filepath.Join(dataDir, "missing-worktree"),
+			Branch:       "echo/research/test",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	completed := waitForJobStatus(t, jm, job.ID, JobStatusCompleted)
+	if completed.EventCount != 1 {
+		t.Fatalf("EventCount = %d, want 1", completed.EventCount)
+	}
+	if len(completed.Events) != 1 {
+		t.Fatalf("len(Events) = %d, want 1", len(completed.Events))
+	}
+	if completed.Events[0].Type != "workspace_snapshot" {
+		t.Fatalf("event type = %q, want workspace_snapshot", completed.Events[0].Type)
+	}
+	if completed.Events[0].Metadata["snapshot_error"] == "" {
+		t.Fatalf("metadata = %#v, want snapshot_error", completed.Events[0].Metadata)
+	}
+}
+
 func TestJobManagerCancelRunningJob(t *testing.T) {
 	dataDir := t.TempDir()
 	jm, err := NewJobManager(dataDir)

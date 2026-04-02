@@ -300,6 +300,7 @@ func (c *WorkerClient) handleAssignTask(ctx context.Context, payload map[string]
 	requestID, _ := payload["request_id"].(string)
 	agentProject, _ := payload["agent_project"].(string)
 	taskID, _ := payload["task_id"].(string)
+	taskType, _ := payload["task_type"].(string)
 	prompt, _ := payload["prompt"].(string)
 	timeoutSec, _ := payload["timeout_sec"].(float64)
 	workspaceRef := decodeWorkspaceRef(payload["workspace_ref"])
@@ -307,6 +308,7 @@ func (c *WorkerClient) handleAssignTask(ctx context.Context, payload map[string]
 	job, err := c.jobMgr.Start(JobRequest{
 		Project:      strings.TrimSpace(agentProject),
 		TaskID:       strings.TrimSpace(taskID),
+		TaskType:     strings.TrimSpace(taskType),
 		Prompt:       prompt,
 		Timeout:      time.Duration(int(timeoutSec)) * time.Second,
 		WorkspaceRef: workspaceRef,
@@ -809,6 +811,7 @@ func workerJobPayload(job *Job) map[string]any {
 		"id":            job.ID,
 		"project":       job.Project,
 		"task_id":       job.TaskID,
+		"task_type":     job.TaskType,
 		"prompt":        job.Prompt,
 		"workspace_ref": job.WorkspaceRef,
 		"status":        job.Status,

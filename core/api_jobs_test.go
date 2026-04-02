@@ -90,14 +90,17 @@ func TestAPIServerJobEndpoints(t *testing.T) {
 	if fetched.Output != "done" {
 		t.Fatalf("fetched output = %q, want done", fetched.Output)
 	}
-	if len(fetched.Events) != 1 {
-		t.Fatalf("len(fetched.Events) = %d, want 1", len(fetched.Events))
+	if len(fetched.Events) != 2 {
+		t.Fatalf("len(fetched.Events) = %d, want 2", len(fetched.Events))
 	}
 	if fetched.Events[0].Type != string(EventText) {
-		t.Fatalf("fetched event type = %q, want %q", fetched.Events[0].Type, EventText)
+		t.Fatalf("fetched first event type = %q, want %q", fetched.Events[0].Type, EventText)
 	}
-	if fetched.EventCount != 1 {
-		t.Fatalf("fetched event_count = %d, want 1", fetched.EventCount)
+	if fetched.Events[1].Type != string(EventResult) {
+		t.Fatalf("fetched second event type = %q, want %q", fetched.Events[1].Type, EventResult)
+	}
+	if fetched.EventCount != 2 {
+		t.Fatalf("fetched event_count = %d, want 2", fetched.EventCount)
 	}
 
 	getSlashReq := httptest.NewRequest(http.MethodGet, "/jobs/"+started.ID+"/", nil)

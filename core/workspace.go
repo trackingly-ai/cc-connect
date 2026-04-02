@@ -30,6 +30,53 @@ type SourceCommitFinalizationResult struct {
 	CreatedCommit bool   `json:"created_commit"`
 }
 
+type WorkspaceSnapshot struct {
+	RepoPath     string   `json:"repo_path,omitempty"`
+	WorktreePath string   `json:"worktree_path,omitempty"`
+	Branch       string   `json:"branch,omitempty"`
+	HeadSHA      string   `json:"head_sha,omitempty"`
+	StatusShort  []string `json:"status_short,omitempty"`
+	Error        string   `json:"error,omitempty"`
+}
+
+func (s *WorkspaceSnapshot) Summary() string {
+	if s == nil {
+		return "workspace snapshot unavailable"
+	}
+	if s.Error != "" {
+		return "Workspace snapshot failed\nError: " + s.Error
+	}
+	lines := []string{
+		"Workspace snapshot",
+		"Repo: " + emptyFallback(s.RepoPath, "unknown"),
+		"Worktree: " + emptyFallback(s.WorktreePath, "unknown"),
+		"Branch: " + emptyFallback(s.Branch, "unknown"),
+		"HEAD: " + emptyFallback(s.HeadSHA, "unknown"),
+	}
+	if len(s.StatusShort) == 0 {
+		lines = append(lines, "Status: clean")
+		return strings.Join(lines, "\n")
+	}
+	lines = append(lines, "Status:")
+	lines = append(lines, s.StatusShort...)
+	return strings.Join(lines, "\n")
+}
+
+func (s *WorkspaceSnapshot) Metadata() map[string]any {
+	if s == nil {
+		return map[string]any{}
+	}
+	metadata := map[string]any{
+		"repo_path":      s.RepoPath,
+		"worktree_path":  s.WorktreePath,
+		"branch":         s.Branch,
+		"head_sha":       s.HeadSHA,
+		"status_short":   append([]string(nil), s.StatusShort...),
+		"snapshot_error": s.Error,
+	}
+	return metadata
+}
+
 func SetupWorkspace(
 	repoPath string,
 	baseBranch string,
@@ -155,6 +202,64 @@ func EnsureRepoCheckout(repoURL string, repoPath string, defaultBranch string) e
 
 func CleanupWorkspace(worktreePath string) error {
 	return CleanupWorkspaceWithOptions(worktreePath, CleanupWorkspaceOptions{})
+}
+
+func CaptureWorkspaceSnapshot(
+	repoPath string,
+	worktreePath string,
+	branchName string,
+) (*WorkspaceSnapshot, error) {
+	repoPath = strings.TrimSpace(repoPath)
+	worktreePath = strings.TrimSpace(worktreePath)
+	branchName = strings.TrimSpace(branchName)
+	if worktreePath == "" {
+		return nil, nil
+	}
+
+	snapshot := &WorkspaceSnapshot{
+		RepoPath:     repoPath,
+		WorktreePath: worktreePath,
+		Branch:       branchName,
+	}
+
+	if _, err := os.Stat(worktreePath); err != nil {
+		snapshot.Error = fmt.Sprintf("stat worktree path: %v", err)
+		return snapshot, nil
+	}
+
+	err := withWorkspacePathLock(worktreePath, func() error {
+		headSHA, err := runGit(worktreePath, "rev-parse", "HEAD")
+		if err != nil {
+			snapshot.Error = fmt.Sprintf("resolve HEAD: %v", err)
+			return nil
+		}
+		snapshot.HeadSHA = strings.TrimSpace(headSHA)
+
+		statusOutput, err := runGit(
+			worktreePath,
+			"status",
+			"--short",
+			"--branch",
+			"--untracked-files=all",
+		)
+		if err != nil {
+			snapshot.Error = fmt.Sprintf("git status: %v", err)
+			return nil
+		}
+		snapshot.StatusShort = nonEmptyLines(statusOutput)
+
+		if snapshot.Branch == "" {
+			currentBranch, err := runGit(worktreePath, "rev-parse", "--abbrev-ref", "HEAD")
+			if err == nil {
+				snapshot.Branch = strings.TrimSpace(currentBranch)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return snapshot, nil
 }
 
 func FinalizeSourceCommit(
@@ -537,4 +642,12 @@ func runGitCommand(dir string, args ...string) (string, error) {
 		return "", fmt.Errorf("%s", message)
 	}
 	return strings.TrimSpace(stdout.String()), nil
+}
+
+func emptyFallback(value string, fallback string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback
+	}
+	return value
 }

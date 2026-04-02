@@ -390,6 +390,16 @@ func (cs *codexSession) handleItemCompleted(raw map[string]any) {
 			"exit_code", int(exitCode),
 			"output_len", len(output),
 		)
+		toolResult := strings.TrimSpace(output)
+		if toolResult == "" {
+			toolResult = fmt.Sprintf("status=%s exit_code=%d", status, int(exitCode))
+		}
+		evt := core.Event{Type: core.EventToolResult, ToolName: "Bash", Content: toolResult}
+		select {
+		case cs.events <- evt:
+		case <-cs.ctx.Done():
+			return
+		}
 
 	case "function_call":
 		name, _ := item["name"].(string)
@@ -398,6 +408,16 @@ func (cs *codexSession) handleItemCompleted(raw map[string]any) {
 		slog.Debug("codexSession: function_call completed",
 			"name", name, "status", status, "output_len", len(output),
 		)
+		toolResult := strings.TrimSpace(output)
+		if toolResult == "" {
+			toolResult = fmt.Sprintf("status=%s", status)
+		}
+		evt := core.Event{Type: core.EventToolResult, ToolName: name, Content: toolResult}
+		select {
+		case cs.events <- evt:
+		case <-cs.ctx.Done():
+			return
+		}
 
 	case "function_call_output":
 		slog.Debug("codexSession: function_call_output")

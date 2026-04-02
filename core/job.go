@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -38,6 +39,7 @@ type JobWorkspaceRef struct {
 type JobRequest struct {
 	Project      string          `json:"project"`
 	TaskID       string          `json:"task_id,omitempty"`
+	TaskType     string          `json:"task_type,omitempty"`
 	Prompt       string          `json:"prompt"`
 	Timeout      time.Duration   `json:"timeout,omitempty"`
 	WorkspaceRef JobWorkspaceRef `json:"workspace_ref,omitempty"`
@@ -50,19 +52,21 @@ type JobResult struct {
 }
 
 type JobEvent struct {
-	Index     int       `json:"index"`
-	Type      string    `json:"type"`
-	Content   string    `json:"content,omitempty"`
-	ToolName  string    `json:"tool_name,omitempty"`
-	ToolInput string    `json:"tool_input,omitempty"`
-	SessionID string    `json:"session_id,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	Index     int            `json:"index"`
+	Type      string         `json:"type"`
+	Content   string         `json:"content,omitempty"`
+	ToolName  string         `json:"tool_name,omitempty"`
+	ToolInput string         `json:"tool_input,omitempty"`
+	SessionID string         `json:"session_id,omitempty"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
+	CreatedAt time.Time      `json:"created_at"`
 }
 
 type Job struct {
 	ID           string          `json:"id"`
 	Project      string          `json:"project"`
 	TaskID       string          `json:"task_id,omitempty"`
+	TaskType     string          `json:"task_type,omitempty"`
 	Prompt       string          `json:"prompt"`
 	WorkspaceRef JobWorkspaceRef `json:"workspace_ref,omitempty"`
 	Status       string          `json:"status"`
@@ -207,6 +211,7 @@ func (jm *JobManager) Start(req JobRequest) (*Job, error) {
 		ID:           jobID,
 		Project:      req.Project,
 		TaskID:       req.TaskID,
+		TaskType:     req.TaskType,
 		Prompt:       req.Prompt,
 		WorkspaceRef: req.WorkspaceRef,
 		Status:       JobStatusQueued,
@@ -372,6 +377,29 @@ func (jm *JobManager) runJob(managed *managedJob) {
 	result, err := runner.Run(ctx, req, jobID, func(event JobEvent) {
 		jm.recordJobEvent(jobID, event)
 	})
+	if shouldCaptureWorkspaceSnapshot(req) {
+		if snapshot, snapshotErr := CaptureWorkspaceSnapshot(
+			req.WorkspaceRef.RepoPath,
+			req.WorkspaceRef.WorktreePath,
+			req.WorkspaceRef.Branch,
+		); snapshotErr != nil {
+			jm.recordJobEvent(jobID, JobEvent{
+				Type:      "workspace_snapshot",
+				Content:   "workspace snapshot failed",
+				CreatedAt: time.Now().UTC(),
+				Metadata: map[string]any{
+					"error": snapshotErr.Error(),
+				},
+			})
+		} else if snapshot != nil {
+			jm.recordJobEvent(jobID, JobEvent{
+				Type:      "workspace_snapshot",
+				Content:   snapshot.Summary(),
+				CreatedAt: time.Now().UTC(),
+				Metadata:  snapshot.Metadata(),
+			})
+		}
+	}
 	jm.finishJob(jobID, func(job *Job) {
 		now := time.Now().UTC()
 		job.FinishedAt = &now
@@ -399,6 +427,15 @@ func (jm *JobManager) runJob(managed *managedJob) {
 			job.SessionID = result.SessionID
 		}
 	})
+}
+
+func shouldCaptureWorkspaceSnapshot(req JobRequest) bool {
+	switch strings.TrimSpace(req.TaskType) {
+	case "research", "design", "implementation":
+		return strings.TrimSpace(req.WorkspaceRef.WorktreePath) != ""
+	default:
+		return false
+	}
 }
 
 func (jm *JobManager) recordJobEvent(jobID string, event JobEvent) {
