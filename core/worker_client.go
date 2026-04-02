@@ -288,6 +288,8 @@ func (c *WorkerClient) readLoop(ctx context.Context, conn *websocket.Conn) error
 			go c.handleEnsureRepoCheckout(payload)
 		case "write_repo_file":
 			go c.handleWriteRepoFile(payload)
+		case "finalize_source_commit":
+			go c.handleFinalizeSourceCommit(payload)
 		default:
 			slog.Warn("worker client received unsupported gateway message", "type", msgType)
 		}
@@ -469,6 +471,40 @@ func (c *WorkerClient) handleWriteRepoFile(payload map[string]any) {
 			"repo_path":     strings.TrimSpace(repoPath),
 			"relative_path": strings.TrimSpace(relativePath),
 			"absolute_path": absolutePath,
+		},
+	})
+}
+
+func (c *WorkerClient) handleFinalizeSourceCommit(payload map[string]any) {
+	requestID, _ := payload["request_id"].(string)
+	repoPath, _ := payload["repo_path"].(string)
+	worktreePath, _ := payload["worktree_path"].(string)
+	branchName, _ := payload["branch_name"].(string)
+	commitMessage, _ := payload["commit_message"].(string)
+	result, err := FinalizeSourceCommit(
+		strings.TrimSpace(repoPath),
+		strings.TrimSpace(worktreePath),
+		strings.TrimSpace(branchName),
+		strings.TrimSpace(commitMessage),
+		decodeStringSlice(payload["artifact_paths"]),
+	)
+	if err != nil {
+		_ = c.sendJSON(map[string]any{
+			"type":       "source_commit_finalized",
+			"request_id": requestID,
+			"host_id":    c.hostID,
+			"error":      err.Error(),
+		})
+		return
+	}
+	_ = c.sendJSON(map[string]any{
+		"type":       "source_commit_finalized",
+		"request_id": requestID,
+		"host_id":    c.hostID,
+		"result": map[string]any{
+			"commit_sha":     result.CommitSHA,
+			"branch_name":    result.BranchName,
+			"created_commit": result.CreatedCommit,
 		},
 	})
 }
@@ -721,6 +757,26 @@ func decodeWorkspaceRef(raw any) JobWorkspaceRef {
 		ref.Branch = value
 	}
 	return ref
+}
+
+func decodeStringSlice(raw any) []string {
+	items, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	values := make([]string, 0, len(items))
+	for _, item := range items {
+		value, ok := item.(string)
+		if !ok {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		values = append(values, value)
+	}
+	return values
 }
 
 func cloneMap(in map[string]any) map[string]any {

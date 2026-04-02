@@ -368,9 +368,10 @@ func TestWorkerClientHandlesWorkspaceAndRepoRPCs(t *testing.T) {
 	workspaceReadySeen := false
 	checkoutReadySeen := false
 	repoFileWrittenSeen := false
+	sourceCommitFinalizedSeen := false
 	workspaceCleanedSeen := false
 
-	repoPath := initGitRepo(t)
+	_, repoPath := initGitRepoWithOrigin(t)
 	worktreePath := filepath.Join(t.TempDir(), "worktree")
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -428,6 +429,19 @@ func TestWorkerClientHandlesWorkspaceAndRepoRPCs(t *testing.T) {
 				repoFileWrittenSeen = true
 				mu.Unlock()
 				_ = conn.WriteJSON(map[string]any{
+					"type":           "finalize_source_commit",
+					"request_id":     "finalize-1",
+					"repo_path":      repoPath,
+					"worktree_path":  worktreePath,
+					"branch_name":    "echo/task-1",
+					"commit_message": "echo: finalize task output",
+					"artifact_paths": []string{"docs/design.md"},
+				})
+			case "source_commit_finalized":
+				mu.Lock()
+				sourceCommitFinalizedSeen = true
+				mu.Unlock()
+				_ = conn.WriteJSON(map[string]any{
 					"type":          "cleanup_workspace",
 					"request_id":    "cleanup-1",
 					"worktree_path": worktreePath,
@@ -476,7 +490,11 @@ func TestWorkerClientHandlesWorkspaceAndRepoRPCs(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		mu.Lock()
-		done := workspaceReadySeen && checkoutReadySeen && repoFileWrittenSeen && workspaceCleanedSeen
+		done := workspaceReadySeen &&
+			checkoutReadySeen &&
+			repoFileWrittenSeen &&
+			sourceCommitFinalizedSeen &&
+			workspaceCleanedSeen
 		mu.Unlock()
 		if done {
 			break
@@ -490,12 +508,17 @@ func TestWorkerClientHandlesWorkspaceAndRepoRPCs(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if !workspaceReadySeen || !checkoutReadySeen || !repoFileWrittenSeen || !workspaceCleanedSeen {
+	if !workspaceReadySeen ||
+		!checkoutReadySeen ||
+		!repoFileWrittenSeen ||
+		!sourceCommitFinalizedSeen ||
+		!workspaceCleanedSeen {
 		t.Fatalf(
-			"expected all rpc acknowledgements, got workspace=%v checkout=%v file=%v cleanup=%v",
+			"expected all rpc acknowledgements, got workspace=%v checkout=%v file=%v finalize=%v cleanup=%v",
 			workspaceReadySeen,
 			checkoutReadySeen,
 			repoFileWrittenSeen,
+			sourceCommitFinalizedSeen,
 			workspaceCleanedSeen,
 		)
 	}

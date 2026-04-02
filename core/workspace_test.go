@@ -209,6 +209,130 @@ func TestEnsureRepoCheckoutRejectsMismatchedOrigin(t *testing.T) {
 	}
 }
 
+func TestFinalizeSourceCommitSelectivelyCommitsAndPushes(t *testing.T) {
+	originPath, repoPath := initGitRepoWithOrigin(t)
+	branchName := "echo/task-finalize"
+	if _, err := runGit(repoPath, "checkout", "-b", branchName); err != nil {
+		t.Fatalf("git checkout -b: %v", err)
+	}
+	docsDir := filepath.Join(repoPath, "docs")
+	if err := os.MkdirAll(docsDir, 0o755); err != nil {
+		t.Fatalf("mkdir docs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(docsDir, "RESEARCH.md"), []byte("brief\n"), 0o644); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoPath, "scratch.tmp"), []byte("noise\n"), 0o644); err != nil {
+		t.Fatalf("write stray file: %v", err)
+	}
+
+	result, err := FinalizeSourceCommit(
+		repoPath,
+		repoPath,
+		branchName,
+		"echo: finalize research output",
+		[]string{"docs/RESEARCH.md"},
+	)
+	if err != nil {
+		t.Fatalf("FinalizeSourceCommit: %v", err)
+	}
+	if !result.CreatedCommit {
+		t.Fatal("expected finalize to create commit")
+	}
+	if got := result.CommitSHA; got == "" {
+		t.Fatal("expected commit sha")
+	}
+	if got, err := runGit(repoPath, "show", "HEAD:docs/RESEARCH.md"); err != nil || got != "brief" {
+		t.Fatalf("artifact not present in HEAD: %q err=%v", got, err)
+	}
+	if _, err := runGit(originPath, "rev-parse", "refs/heads/"+branchName); err != nil {
+		t.Fatalf("expected pushed remote branch: %v", err)
+	}
+	status, err := runGit(repoPath, "status", "--short")
+	if err != nil {
+		t.Fatalf("git status: %v", err)
+	}
+	if !strings.Contains(status, "?? scratch.tmp") {
+		t.Fatalf("expected stray file to remain untracked, got %q", status)
+	}
+}
+
+func TestFinalizeSourceCommitRejectsTrackedDirtyWithoutArtifacts(t *testing.T) {
+	_, repoPath := initGitRepoWithOrigin(t)
+	branchName := "echo/task-no-artifacts"
+	if _, err := runGit(repoPath, "checkout", "-b", branchName); err != nil {
+		t.Fatalf("git checkout -b: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoPath, "README.md"), []byte("dirty tracked\n"), 0o644); err != nil {
+		t.Fatalf("write tracked change: %v", err)
+	}
+	_, err := FinalizeSourceCommit(
+		repoPath,
+		repoPath,
+		branchName,
+		"echo: finalize design output",
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "tracked uncommitted changes") {
+		t.Fatalf("expected tracked uncommitted changes error, got %v", err)
+	}
+}
+
+func TestFinalizeSourceCommitRejectsDivergedRemoteBranch(t *testing.T) {
+	originPath, repoPath := initGitRepoWithOrigin(t)
+	branchName := "echo/task-diverged"
+	if _, err := runGit(repoPath, "checkout", "-b", branchName); err != nil {
+		t.Fatalf("git checkout -b: %v", err)
+	}
+	if _, err := runGit(repoPath, "push", "origin", "HEAD:refs/heads/"+branchName); err != nil {
+		t.Fatalf("push initial branch: %v", err)
+	}
+
+	otherClone := filepath.Join(t.TempDir(), "other")
+	if _, err := runGit(filepath.Dir(otherClone), "clone", originPath, otherClone); err != nil {
+		t.Fatalf("clone other: %v", err)
+	}
+	if _, err := runGit(otherClone, "config", "user.email", "fixture@example.com"); err != nil {
+		t.Fatalf("config user.email: %v", err)
+	}
+	if _, err := runGit(otherClone, "config", "user.name", "Fixture User"); err != nil {
+		t.Fatalf("config user.name: %v", err)
+	}
+	if _, err := runGit(otherClone, "checkout", branchName); err != nil {
+		t.Fatalf("checkout other branch: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(otherClone, "README.md"), []byte("remote moved\n"), 0o644); err != nil {
+		t.Fatalf("write remote change: %v", err)
+	}
+	if _, err := runGit(otherClone, "add", "README.md"); err != nil {
+		t.Fatalf("git add remote change: %v", err)
+	}
+	if _, err := runGit(otherClone, "commit", "-m", "remote moved"); err != nil {
+		t.Fatalf("git commit remote change: %v", err)
+	}
+	if _, err := runGit(otherClone, "push", "origin", "HEAD:refs/heads/"+branchName); err != nil {
+		t.Fatalf("push remote change: %v", err)
+	}
+
+	docsDir := filepath.Join(repoPath, "docs")
+	if err := os.MkdirAll(docsDir, 0o755); err != nil {
+		t.Fatalf("mkdir docs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(docsDir, "RESEARCH.md"), []byte("local artifact\n"), 0o644); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+	_, err := FinalizeSourceCommit(
+		repoPath,
+		repoPath,
+		branchName,
+		"echo: finalize research output",
+		[]string{"docs/RESEARCH.md"},
+	)
+	if err == nil || !strings.Contains(err.Error(), "has diverged") {
+		t.Fatalf("expected diverged branch error, got %v", err)
+	}
+}
+
 func initGitRepo(t *testing.T) string {
 	t.Helper()
 
@@ -243,4 +367,40 @@ func initGitRepo(t *testing.T) string {
 		t.Fatalf("expected base repo in worktree list, got %q", list)
 	}
 	return repoPath
+}
+
+func initGitRepoWithOrigin(t *testing.T) (string, string) {
+	t.Helper()
+
+	originPath := filepath.Join(t.TempDir(), "origin.git")
+	if err := os.MkdirAll(originPath, 0o755); err != nil {
+		t.Fatalf("mkdir origin: %v", err)
+	}
+	if _, err := runGit(originPath, "init", "--bare"); err != nil {
+		t.Fatalf("git init --bare: %v", err)
+	}
+	repoPath := filepath.Join(t.TempDir(), "repo")
+	if _, err := runGit(filepath.Dir(repoPath), "clone", originPath, repoPath); err != nil {
+		t.Fatalf("git clone: %v", err)
+	}
+	if _, err := runGit(repoPath, "config", "user.email", "fixture@example.com"); err != nil {
+		t.Fatalf("git config user.email: %v", err)
+	}
+	if _, err := runGit(repoPath, "config", "user.name", "Fixture User"); err != nil {
+		t.Fatalf("git config user.name: %v", err)
+	}
+	readmePath := filepath.Join(repoPath, "README.md")
+	if err := os.WriteFile(readmePath, []byte("# fixture\n"), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	if _, err := runGit(repoPath, "add", "README.md"); err != nil {
+		t.Fatalf("git add: %v", err)
+	}
+	if _, err := runGit(repoPath, "commit", "-m", "initial commit"); err != nil {
+		t.Fatalf("git commit: %v", err)
+	}
+	if _, err := runGit(repoPath, "push", "origin", "HEAD:refs/heads/main"); err != nil {
+		t.Fatalf("git push main: %v", err)
+	}
+	return originPath, repoPath
 }

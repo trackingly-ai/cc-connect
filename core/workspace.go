@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,6 +22,12 @@ var runGit = runGitCommand
 
 type CleanupWorkspaceOptions struct {
 	KeepBranch bool
+}
+
+type SourceCommitFinalizationResult struct {
+	CommitSHA     string `json:"commit_sha"`
+	BranchName    string `json:"branch_name"`
+	CreatedCommit bool   `json:"created_commit"`
 }
 
 func SetupWorkspace(
@@ -150,6 +157,53 @@ func CleanupWorkspace(worktreePath string) error {
 	return CleanupWorkspaceWithOptions(worktreePath, CleanupWorkspaceOptions{})
 }
 
+func FinalizeSourceCommit(
+	repoPath string,
+	worktreePath string,
+	branchName string,
+	commitMessage string,
+	artifactPaths []string,
+) (*SourceCommitFinalizationResult, error) {
+	repoPath = strings.TrimSpace(repoPath)
+	worktreePath = strings.TrimSpace(worktreePath)
+	branchName = strings.TrimSpace(branchName)
+	commitMessage = strings.TrimSpace(commitMessage)
+	if repoPath == "" {
+		return nil, fmt.Errorf("repo_path is required")
+	}
+	if worktreePath == "" {
+		return nil, fmt.Errorf("worktree_path is required")
+	}
+	if branchName == "" {
+		return nil, fmt.Errorf("branch_name is required")
+	}
+	if commitMessage == "" {
+		return nil, fmt.Errorf("commit_message is required")
+	}
+	if _, err := os.Stat(worktreePath); err != nil {
+		return nil, fmt.Errorf("stat worktree path: %w", err)
+	}
+
+	var finalResult *SourceCommitFinalizationResult
+	err := withWorkspaceRepoLock(repoPath, func() error {
+		result, err := finalizeSourceCommitLocked(
+			worktreePath,
+			branchName,
+			commitMessage,
+			artifactPaths,
+		)
+		if err != nil {
+			return err
+		}
+		finalResult = result
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return finalResult, nil
+}
+
 func CleanupWorkspaceWithOptions(
 	worktreePath string,
 	opts CleanupWorkspaceOptions,
@@ -194,6 +248,214 @@ func CleanupWorkspaceWithOptions(
 			return nil
 		})
 	})
+}
+
+func finalizeSourceCommitLocked(
+	worktreePath string,
+	branchName string,
+	commitMessage string,
+	artifactPaths []string,
+) (*SourceCommitFinalizationResult, error) {
+	statusOutput, err := runGit(
+		worktreePath,
+		"status",
+		"--porcelain",
+		"--untracked-files=all",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("git status: %w", err)
+	}
+	statusEntries := nonEmptyLines(statusOutput)
+	trackedChanges, untrackedChanges := splitGitStatusEntries(statusEntries)
+
+	if len(artifactPaths) == 0 {
+		if len(trackedChanges) > 0 {
+			return nil, fmt.Errorf(
+				"tracked uncommitted changes present without repo_artifacts",
+			)
+		}
+		commitSHA, err := runGit(worktreePath, "rev-parse", "HEAD")
+		if err != nil {
+			return nil, fmt.Errorf("resolve HEAD commit: %w", err)
+		}
+		if err := pushSourceBranch(worktreePath, branchName); err != nil {
+			return nil, err
+		}
+		if len(untrackedChanges) > 0 {
+			slog.Warn(
+				"echo finalize_source_commit ignored untracked non-artifact files",
+				"branch_name", branchName,
+				"ignored_paths", untrackedChanges,
+			)
+		}
+		return &SourceCommitFinalizationResult{
+			CommitSHA:     strings.TrimSpace(commitSHA),
+			BranchName:    branchName,
+			CreatedCommit: false,
+		}, nil
+	}
+
+	for _, artifactPath := range artifactPaths {
+		artifactPath = strings.TrimSpace(artifactPath)
+		if artifactPath == "" {
+			continue
+		}
+		if info, err := os.Stat(filepath.Join(worktreePath, artifactPath)); err != nil {
+			return nil, fmt.Errorf("stat artifact path %q: %w", artifactPath, err)
+		} else if info.IsDir() {
+			continue
+		}
+	}
+
+	createdCommit := false
+	if len(statusEntries) > 0 {
+		args := append([]string{"add", "--"}, artifactPaths...)
+		if _, err := runGit(worktreePath, args...); err != nil {
+			return nil, fmt.Errorf("git add artifacts: %w", err)
+		}
+		stagedOutput, err := runGit(worktreePath, "diff", "--cached", "--name-only")
+		if err != nil {
+			return nil, fmt.Errorf("git diff --cached: %w", err)
+		}
+		if len(nonEmptyLines(stagedOutput)) > 0 {
+			if _, err := runGit(worktreePath, "commit", "-m", commitMessage); err != nil {
+				return nil, fmt.Errorf("git commit: %w", err)
+			}
+			createdCommit = true
+		} else if len(trackedChanges) > 0 || len(untrackedChanges) > 0 {
+			slog.Warn(
+				"echo finalize_source_commit found dirty workspace outside declared artifacts",
+				"branch_name", branchName,
+				"tracked_changes", trackedChanges,
+				"untracked_changes", untrackedChanges,
+			)
+		}
+	}
+
+	for _, artifactPath := range artifactPaths {
+		if err := verifyArtifactInHEAD(worktreePath, artifactPath); err != nil {
+			return nil, err
+		}
+	}
+
+	commitSHA, err := runGit(worktreePath, "rev-parse", branchName)
+	if err != nil {
+		return nil, fmt.Errorf("resolve branch commit: %w", err)
+	}
+	if err := pushSourceBranch(worktreePath, branchName); err != nil {
+		return nil, err
+	}
+
+	return &SourceCommitFinalizationResult{
+		CommitSHA:     strings.TrimSpace(commitSHA),
+		BranchName:    branchName,
+		CreatedCommit: createdCommit,
+	}, nil
+}
+
+func splitGitStatusEntries(entries []string) ([]string, []string) {
+	tracked := make([]string, 0, len(entries))
+	untracked := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if len(entry) >= 2 && entry[:2] == "??" {
+			untracked = append(untracked, entry)
+			continue
+		}
+		tracked = append(tracked, entry)
+	}
+	return tracked, untracked
+}
+
+func nonEmptyLines(output string) []string {
+	lines := strings.Split(output, "\n")
+	result := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		result = append(result, line)
+	}
+	return result
+}
+
+func verifyArtifactInHEAD(worktreePath string, artifactPath string) error {
+	artifactPath = strings.TrimSpace(artifactPath)
+	info, err := os.Stat(filepath.Join(worktreePath, artifactPath))
+	if err != nil {
+		return fmt.Errorf("stat artifact path %q: %w", artifactPath, err)
+	}
+	if info.IsDir() {
+		treeOutput, err := runGit(
+			worktreePath,
+			"ls-tree",
+			"-r",
+			"--name-only",
+			"HEAD",
+			"--",
+			artifactPath,
+		)
+		if err != nil {
+			return fmt.Errorf("verify artifact directory %q in HEAD: %w", artifactPath, err)
+		}
+		if strings.TrimSpace(treeOutput) == "" {
+			return fmt.Errorf("artifact directory %q is missing from HEAD", artifactPath)
+		}
+		return nil
+	}
+	if _, err := runGit(worktreePath, "cat-file", "-e", "HEAD:"+artifactPath); err != nil {
+		return fmt.Errorf("verify artifact %q in HEAD: %w", artifactPath, err)
+	}
+	return nil
+}
+
+func pushSourceBranch(worktreePath string, branchName string) error {
+	remoteRef := "refs/heads/" + strings.TrimSpace(branchName)
+	remoteCommitSHA, err := resolveRemoteBranchHeadSHA(worktreePath, remoteRef)
+	if err != nil {
+		return err
+	}
+	if remoteCommitSHA != "" {
+		if _, err := runGit(
+			worktreePath,
+			"merge-base",
+			"--is-ancestor",
+			remoteCommitSHA,
+			"HEAD",
+		); err != nil {
+			return fmt.Errorf("remote branch %s has diverged", branchName)
+		}
+		if _, err := runGit(
+			worktreePath,
+			"push",
+			"--force-with-lease="+remoteRef+":"+remoteCommitSHA,
+			"origin",
+			"HEAD:"+remoteRef,
+		); err != nil {
+			return fmt.Errorf("push source branch with lease: %w", err)
+		}
+		return nil
+	}
+	if _, err := runGit(worktreePath, "push", "origin", "HEAD:"+remoteRef); err != nil {
+		return fmt.Errorf("push source branch: %w", err)
+	}
+	return nil
+}
+
+func resolveRemoteBranchHeadSHA(worktreePath string, remoteRef string) (string, error) {
+	output, err := runGit(worktreePath, "ls-remote", "--heads", "origin", remoteRef)
+	if err != nil {
+		return "", fmt.Errorf("ls-remote %s: %w", remoteRef, err)
+	}
+	lines := nonEmptyLines(output)
+	if len(lines) == 0 {
+		return "", nil
+	}
+	fields := strings.Fields(lines[0])
+	if len(fields) == 0 {
+		return "", nil
+	}
+	return strings.TrimSpace(fields[0]), nil
 }
 
 func withWorkspaceRepoLock(repoPath string, fn func() error) error {
