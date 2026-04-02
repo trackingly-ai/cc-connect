@@ -266,6 +266,59 @@ func TestJobManagerCapturesWorkspaceSnapshotForProducerTasks(t *testing.T) {
 	}
 }
 
+func TestJobManagerSnapshotOutcomePrefersFailureOverCancellation(t *testing.T) {
+	dataDir := t.TempDir()
+	jm, err := NewJobManager(dataDir)
+	if err != nil {
+		t.Fatalf("NewJobManager: %v", err)
+	}
+
+	worktreePath := filepath.Join(dataDir, "missing-worktree")
+	started := make(chan struct{})
+	jm.RegisterRunner("echo", stubJobRunner{
+		run: func(
+			ctx context.Context,
+			req JobRequest,
+			jobID string,
+			onEvent func(JobEvent),
+		) (*JobResult, error) {
+			_ = req
+			_ = jobID
+			_ = onEvent
+			close(started)
+			<-ctx.Done()
+			return nil, errors.New("runner failed during cancellation")
+		},
+	})
+
+	job, err := jm.Start(JobRequest{
+		Project:  "echo",
+		TaskType: "research",
+		Prompt:   "run",
+		WorkspaceRef: JobWorkspaceRef{
+			RepoPath:     "/tmp/repo",
+			WorktreePath: worktreePath,
+			Branch:       "echo/research/test",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	<-started
+
+	if _, err := jm.Cancel(job.ID); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+
+	finished := waitForFinishedAt(t, jm, job.ID)
+	if len(finished.Events) != 1 {
+		t.Fatalf("len(Events) = %d, want 1", len(finished.Events))
+	}
+	if finished.Events[0].Metadata["job_outcome"] != "failed" {
+		t.Fatalf("job_outcome = %#v, want failed", finished.Events[0].Metadata)
+	}
+}
+
 func TestJobManagerCancelRunningJob(t *testing.T) {
 	dataDir := t.TempDir()
 	jm, err := NewJobManager(dataDir)

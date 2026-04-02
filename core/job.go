@@ -380,8 +380,7 @@ func (jm *JobManager) runJob(managed *managedJob) {
 	jobOutcome := "completed"
 	if err != nil {
 		jobOutcome = "failed"
-	}
-	if ctx.Err() != nil {
+	} else if ctx.Err() != nil {
 		jobOutcome = "cancelled"
 	}
 	if shouldCaptureWorkspaceSnapshot(req) {
