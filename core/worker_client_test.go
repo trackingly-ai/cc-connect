@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -77,12 +78,18 @@ func TestBuildWorkerAgentRegistrations(t *testing.T) {
 				Name: "echo-manager-claude",
 				Agent: config.AgentConfig{
 					Type: "claudecode",
+					Options: map[string]any{
+						"mode": "bypassPermissions",
+					},
 				},
 			},
 			{
 				Name: "custom-review",
 				Agent: config.AgentConfig{
 					Type: "qoder",
+					Options: map[string]any{
+						"mode": "default",
+					},
 				},
 				Echo: config.EchoProjectConfig{
 					Enabled:        &enabled,
@@ -107,6 +114,80 @@ func TestBuildWorkerAgentRegistrations(t *testing.T) {
 	}
 	if agents[1].ID != "agent-reviewer-qoder-9" {
 		t.Fatalf("unexpected explicit agent id: %q", agents[1].ID)
+	}
+}
+
+func TestBuildWorkerAgentRegistrationsRejectsNonReviewerWithoutYoloMode(t *testing.T) {
+	_, err := buildWorkerAgentRegistrations(
+		config.EchoConfig{OrgID: "coding-team"},
+		[]config.ProjectConfig{
+			{
+				Name: "echo-researcher-codex",
+				Agent: config.AgentConfig{
+					Type: "codex",
+					Options: map[string]any{
+						"mode": "full-auto",
+					},
+				},
+			},
+		},
+	)
+	if err == nil {
+		t.Fatal("expected yolo mode validation error")
+	}
+	if got := err.Error(); !strings.Contains(got, `must use yolo-equivalent mode`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestBuildWorkerAgentRegistrationsAllowsReviewerWithoutYoloMode(t *testing.T) {
+	enabled := true
+	agents, err := buildWorkerAgentRegistrations(
+		config.EchoConfig{OrgID: "coding-team"},
+		[]config.ProjectConfig{
+			{
+				Name: "echo-reviewer-qoder",
+				Agent: config.AgentConfig{
+					Type: "qoder",
+					Options: map[string]any{
+						"mode": "default",
+					},
+				},
+				Echo: config.EchoProjectConfig{
+					Enabled: &enabled,
+					Role:    "reviewer",
+				},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("buildWorkerAgentRegistrations: %v", err)
+	}
+	if len(agents) != 1 {
+		t.Fatalf("unexpected agent count: %d", len(agents))
+	}
+}
+
+func TestBuildWorkerAgentRegistrationsAcceptsClaudeBypassPermissionsAsYoloEquivalent(t *testing.T) {
+	agents, err := buildWorkerAgentRegistrations(
+		config.EchoConfig{OrgID: "coding-team"},
+		[]config.ProjectConfig{
+			{
+				Name: "echo-manager-claude",
+				Agent: config.AgentConfig{
+					Type: "claudecode",
+					Options: map[string]any{
+						"mode": "bypassPermissions",
+					},
+				},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("buildWorkerAgentRegistrations: %v", err)
+	}
+	if len(agents) != 1 {
+		t.Fatalf("unexpected agent count: %d", len(agents))
 	}
 }
 
@@ -199,6 +280,9 @@ func TestWorkerClientRegistersAndHeartbeats(t *testing.T) {
 				Name: "echo-manager-claude",
 				Agent: config.AgentConfig{
 					Type: "claudecode",
+					Options: map[string]any{
+						"mode": "bypassPermissions",
+					},
 				},
 			},
 		},
@@ -325,6 +409,9 @@ func TestWorkerClientCancelsAssignedTask(t *testing.T) {
 				Name: "echo-manager-claude",
 				Agent: config.AgentConfig{
 					Type: "claudecode",
+					Options: map[string]any{
+						"mode": "bypassPermissions",
+					},
 				},
 			},
 		},
@@ -475,6 +562,9 @@ func TestWorkerClientHandlesWorkspaceAndRepoRPCs(t *testing.T) {
 				Name: "echo-manager-claude",
 				Agent: config.AgentConfig{
 					Type: "claudecode",
+					Options: map[string]any{
+						"mode": "bypassPermissions",
+					},
 				},
 			},
 		},

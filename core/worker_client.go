@@ -787,6 +787,9 @@ func buildWorkerAgentRegistrations(
 		if agentType == "" {
 			return nil, fmt.Errorf("project %q missing agent type", proj.Name)
 		}
+		if err := validateEchoWorkerMode(proj, role, agentType); err != nil {
+			return nil, err
+		}
 		key := role + ":" + agentType
 		counts[key]++
 		agentID := strings.TrimSpace(proj.Echo.AgentID)
@@ -814,6 +817,53 @@ func buildWorkerAgentRegistrations(
 		})
 	}
 	return agents, nil
+}
+
+func validateEchoWorkerMode(
+	proj config.ProjectConfig,
+	role string,
+	agentType string,
+) error {
+	if isEchoReviewerRole(role) {
+		return nil
+	}
+	mode, _ := proj.Agent.Options["mode"].(string)
+	if isEchoYoloEquivalentMode(agentType, mode) {
+		return nil
+	}
+	return fmt.Errorf(
+		"echo project %q role %q with agent type %q must use yolo-equivalent mode during worker registration; got %q",
+		proj.Name,
+		role,
+		agentType,
+		strings.TrimSpace(mode),
+	)
+}
+
+func isEchoReviewerRole(role string) bool {
+	return strings.Contains(strings.ToLower(strings.TrimSpace(role)), "review")
+}
+
+func isEchoYoloEquivalentMode(agentType string, mode string) bool {
+	normalizedAgentType := strings.ToLower(strings.TrimSpace(agentType))
+	normalizedMode := strings.ToLower(strings.TrimSpace(mode))
+	switch normalizedAgentType {
+	case "claudecode":
+		return normalizedMode == "yolo" || normalizedMode == "bypasspermissions"
+	case "codex":
+		return normalizedMode == "yolo"
+	case "qoder":
+		return normalizedMode == "yolo" ||
+			normalizedMode == "bypass" ||
+			normalizedMode == "dangerously-skip-permissions"
+	case "gemini", "opencode", "iflow":
+		return normalizedMode == "yolo" ||
+			normalizedMode == "auto" ||
+			normalizedMode == "force" ||
+			normalizedMode == "bypasspermissions"
+	default:
+		return normalizedMode == "yolo"
+	}
 }
 
 func resolveEchoProjectEnabled(proj config.ProjectConfig) (bool, string) {
