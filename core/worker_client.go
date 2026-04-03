@@ -479,6 +479,29 @@ func (c *WorkerClient) handleInspectWorkspace(payload map[string]any) {
 	})
 }
 
+func (c *WorkerClient) handleCheckPaths(payload map[string]any) {
+	requestID, _ := payload["request_id"].(string)
+	paths := decodeStringSlice(payload["paths"])
+	result, err := CheckPaths(CheckPathsRequest{
+		Paths: paths,
+	})
+	if err != nil {
+		_ = c.sendJSON(map[string]any{
+			"type":       "paths_checked",
+			"request_id": requestID,
+			"host_id":    c.hostID,
+			"error":      err.Error(),
+		})
+		return
+	}
+	_ = c.sendJSON(map[string]any{
+		"type":       "paths_checked",
+		"request_id": requestID,
+		"host_id":    c.hostID,
+		"result":     result,
+	})
+}
+
 func (c *WorkerClient) handlePushRef(payload map[string]any) {
 	requestID, _ := payload["request_id"].(string)
 	repoPath, _ := payload["repo_path"].(string)
