@@ -291,6 +291,102 @@ func TestFinalizeSourceCommitSupportsDirectoryArtifacts(t *testing.T) {
 	}
 }
 
+func TestInspectWorkspaceAndCheckPathsSmoke(t *testing.T) {
+	originPath, repoPath := initGitRepoWithOrigin(t)
+	worktreePath := filepath.Join(t.TempDir(), "worktrees", "inspect-smoke")
+	branchName := "echo/research/inspect-smoke"
+
+	if err := SetupWorkspace(repoPath, "main", branchName, worktreePath); err != nil {
+		t.Fatalf("SetupWorkspace: %v", err)
+	}
+	docsDir := filepath.Join(worktreePath, "docs", "echo", "research")
+	if err := os.MkdirAll(docsDir, 0o755); err != nil {
+		t.Fatalf("mkdir docs: %v", err)
+	}
+	researchPath := filepath.Join(docsDir, "brief.md")
+	if err := os.WriteFile(researchPath, []byte("brief\n"), 0o644); err != nil {
+		t.Fatalf("write brief: %v", err)
+	}
+	if _, err := runGit(worktreePath, "add", "docs/echo/research/brief.md"); err != nil {
+		t.Fatalf("git add: %v", err)
+	}
+	if _, err := runGit(worktreePath, "commit", "-m", "add brief"); err != nil {
+		t.Fatalf("git commit: %v", err)
+	}
+	if _, err := runGit(worktreePath, "push", "origin", "HEAD:refs/heads/"+branchName); err != nil {
+		t.Fatalf("git push: %v", err)
+	}
+
+	snapshot, err := CaptureWorkspaceSnapshot(repoPath, worktreePath, branchName)
+	if err != nil {
+		t.Fatalf("CaptureWorkspaceSnapshot: %v", err)
+	}
+	if snapshot.HeadSHA == "" {
+		t.Fatal("expected snapshot head sha")
+	}
+	if snapshot.Branch != branchName {
+		t.Fatalf("snapshot branch = %q, want %q", snapshot.Branch, branchName)
+	}
+
+	inspection, err := InspectWorkspace(
+		repoPath,
+		worktreePath,
+		branchName,
+		WorkspaceInspectionRequest{
+			ResolveRefs:   []string{branchName},
+			RemoteRefs:    []string{"refs/heads/" + branchName},
+			WorktreePaths: []string{"docs/echo/research/brief.md"},
+			HeadPaths:     []string{"docs/echo/research/brief.md"},
+			IncludeHead:   true,
+			IncludeBranch: true,
+		},
+	)
+	if err != nil {
+		t.Fatalf("InspectWorkspace: %v", err)
+	}
+	if inspection.Error != "" {
+		t.Fatalf("unexpected inspection error: %v", inspection.Error)
+	}
+	if inspection.HeadSHA == "" {
+		t.Fatal("expected inspection head sha")
+	}
+	if inspection.Branch != branchName {
+		t.Fatalf("inspection branch = %q, want %q", inspection.Branch, branchName)
+	}
+	if inspection.ResolvedRefs[branchName] == "" {
+		t.Fatalf("expected resolved ref for %q", branchName)
+	}
+	if inspection.RemoteRefs["refs/heads/"+branchName] == "" {
+		t.Fatalf("expected remote ref for %q", branchName)
+	}
+	if !inspection.WorktreePaths["docs/echo/research/brief.md"].IsFile {
+		t.Fatalf("expected worktree file state, got %#v", inspection.WorktreePaths)
+	}
+	if !inspection.HeadPaths["docs/echo/research/brief.md"] {
+		t.Fatalf("expected HEAD path to exist, got %#v", inspection.HeadPaths)
+	}
+
+	pathCheck, err := CheckPaths(CheckPathsRequest{
+		Paths: []string{
+			worktreePath,
+			researchPath,
+			filepath.Join(originPath, "missing.txt"),
+		},
+	})
+	if err != nil {
+		t.Fatalf("CheckPaths: %v", err)
+	}
+	if !pathCheck.Paths[worktreePath].Exists || !pathCheck.Paths[worktreePath].IsDir {
+		t.Fatalf("expected worktree dir state, got %#v", pathCheck.Paths[worktreePath])
+	}
+	if !pathCheck.Paths[researchPath].Exists || !pathCheck.Paths[researchPath].IsFile {
+		t.Fatalf("expected research file state, got %#v", pathCheck.Paths[researchPath])
+	}
+	if pathCheck.Paths[filepath.Join(originPath, "missing.txt")].Exists {
+		t.Fatalf("expected missing path to be absent, got %#v", pathCheck.Paths)
+	}
+}
+
 func TestFinalizeSourceCommitRejectsEmptyDirectoryArtifact(t *testing.T) {
 	_, repoPath := initGitRepoWithOrigin(t)
 	branchName := "echo/task-empty-directory"
