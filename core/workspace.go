@@ -39,6 +39,47 @@ type WorkspaceSnapshot struct {
 	Error        string   `json:"error,omitempty"`
 }
 
+type WorkspacePathState struct {
+	Exists bool   `json:"exists"`
+	IsFile bool   `json:"is_file"`
+	IsDir  bool   `json:"is_dir"`
+	Error  string `json:"error,omitempty"`
+}
+
+type WorkspaceInspectionRequest struct {
+	ResolveRefs   []string `json:"resolve_refs,omitempty"`
+	RemoteRefs    []string `json:"remote_refs,omitempty"`
+	WorktreePaths []string `json:"worktree_paths,omitempty"`
+	HeadPaths     []string `json:"head_paths,omitempty"`
+	IncludeHead   bool     `json:"include_head,omitempty"`
+	IncludeBranch bool     `json:"include_branch,omitempty"`
+}
+
+type WorkspaceInspectionResult struct {
+	RepoPath      string                        `json:"repo_path,omitempty"`
+	WorktreePath  string                        `json:"worktree_path,omitempty"`
+	Branch        string                        `json:"branch,omitempty"`
+	HeadSHA       string                        `json:"head_sha,omitempty"`
+	ResolvedRefs  map[string]string             `json:"resolved_refs,omitempty"`
+	RemoteRefs    map[string]string             `json:"remote_refs,omitempty"`
+	WorktreePaths map[string]WorkspacePathState `json:"worktree_paths,omitempty"`
+	HeadPaths     map[string]bool               `json:"head_paths,omitempty"`
+	Error         string                        `json:"error,omitempty"`
+}
+
+type PushRefResult struct {
+	SourceRef string `json:"source_ref,omitempty"`
+	RemoteRef string `json:"remote_ref,omitempty"`
+}
+
+type CheckPathsRequest struct {
+	Paths []string `json:"paths"`
+}
+
+type CheckPathsResult struct {
+	Paths map[string]WorkspacePathState `json:"paths"`
+}
+
 func (s *WorkspaceSnapshot) Summary() string {
 	if s == nil {
 		return "workspace snapshot unavailable"
@@ -265,6 +306,105 @@ func CaptureWorkspaceSnapshot(
 		return nil, err
 	}
 	return snapshot, nil
+}
+
+func InspectWorkspace(
+	repoPath string,
+	worktreePath string,
+	branchName string,
+	req WorkspaceInspectionRequest,
+) (*WorkspaceInspectionResult, error) {
+	repoPath = strings.TrimSpace(repoPath)
+	worktreePath = strings.TrimSpace(worktreePath)
+	branchName = strings.TrimSpace(branchName)
+	if repoPath == "" {
+		return nil, fmt.Errorf("repo_path is required")
+	}
+	if worktreePath == "" {
+		return nil, fmt.Errorf("worktree_path is required")
+	}
+
+	result := &WorkspaceInspectionResult{
+		RepoPath:      repoPath,
+		WorktreePath:  worktreePath,
+		Branch:        branchName,
+		ResolvedRefs:  map[string]string{},
+		RemoteRefs:    map[string]string{},
+		WorktreePaths: map[string]WorkspacePathState{},
+		HeadPaths:     map[string]bool{},
+	}
+	if _, err := os.Stat(worktreePath); err != nil {
+		result.Error = fmt.Sprintf("stat worktree path: %v", err)
+		return result, nil
+	}
+
+	err := withWorkspacePathLock(worktreePath, func() error {
+		if req.IncludeHead {
+			headSHA, err := runGit(worktreePath, "rev-parse", "HEAD")
+			if err != nil {
+				result.Error = fmt.Sprintf("resolve HEAD: %v", err)
+				return nil
+			}
+			result.HeadSHA = strings.TrimSpace(headSHA)
+		}
+		if req.IncludeBranch && result.Branch == "" {
+			currentBranch, err := runGit(worktreePath, "rev-parse", "--abbrev-ref", "HEAD")
+			if err == nil {
+				result.Branch = strings.TrimSpace(currentBranch)
+			}
+		}
+		for _, ref := range req.ResolveRefs {
+			ref = strings.TrimSpace(ref)
+			if ref == "" {
+				continue
+			}
+			sha, err := runGit(worktreePath, "rev-parse", ref)
+			if err == nil {
+				result.ResolvedRefs[ref] = strings.TrimSpace(sha)
+			}
+		}
+		for _, ref := range req.RemoteRefs {
+			ref = strings.TrimSpace(ref)
+			if ref == "" {
+				continue
+			}
+			sha, err := resolveRemoteBranchHeadSHA(worktreePath, ref)
+			if err == nil && sha != "" {
+				result.RemoteRefs[ref] = strings.TrimSpace(sha)
+			}
+		}
+		for _, relPath := range req.WorktreePaths {
+			relPath = strings.TrimSpace(relPath)
+			if relPath == "" {
+				continue
+			}
+			state := WorkspacePathState{}
+			info, err := os.Stat(filepath.Join(worktreePath, relPath))
+			if err != nil {
+				if !os.IsNotExist(err) {
+					state.Error = err.Error()
+				}
+				result.WorktreePaths[relPath] = state
+				continue
+			}
+			state.Exists = true
+			state.IsDir = info.IsDir()
+			state.IsFile = info.Mode().IsRegular()
+			result.WorktreePaths[relPath] = state
+		}
+		for _, relPath := range req.HeadPaths {
+			relPath = strings.TrimSpace(relPath)
+			if relPath == "" {
+				continue
+			}
+			result.HeadPaths[relPath] = headPathExists(worktreePath, relPath)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func FinalizeSourceCommit(
@@ -502,6 +642,51 @@ func nonEmptyLines(output string) []string {
 	return result
 }
 
+func PushRef(
+	repoPath string,
+	worktreePath string,
+	sourceRef string,
+	remoteRef string,
+) (*PushRefResult, error) {
+	repoPath = strings.TrimSpace(repoPath)
+	worktreePath = strings.TrimSpace(worktreePath)
+	sourceRef = strings.TrimSpace(sourceRef)
+	remoteRef = strings.TrimSpace(remoteRef)
+	if repoPath == "" {
+		return nil, fmt.Errorf("repo_path is required")
+	}
+	if worktreePath == "" {
+		return nil, fmt.Errorf("worktree_path is required")
+	}
+	if sourceRef == "" {
+		return nil, fmt.Errorf("source_ref is required")
+	}
+	if remoteRef == "" {
+		return nil, fmt.Errorf("remote_ref is required")
+	}
+	if _, err := os.Stat(worktreePath); err != nil {
+		return nil, fmt.Errorf("stat worktree path: %w", err)
+	}
+	var finalResult *PushRefResult
+	err := withWorkspacePathLock(worktreePath, func() error {
+		if _, err := runGit(worktreePath, "cat-file", "-e", sourceRef+"^{commit}"); err != nil {
+			return fmt.Errorf("source ref %s does not resolve to a commit: %w", sourceRef, err)
+		}
+		if _, err := runGit(worktreePath, "push", "origin", sourceRef+":"+remoteRef); err != nil {
+			return fmt.Errorf("push %s to %s: %w", sourceRef, remoteRef, err)
+		}
+		finalResult = &PushRefResult{
+			SourceRef: sourceRef,
+			RemoteRef: remoteRef,
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return finalResult, nil
+}
+
 func verifyArtifactInHEAD(worktreePath string, artifactPath string) error {
 	artifactPath = strings.TrimSpace(artifactPath)
 	info, err := os.Stat(filepath.Join(worktreePath, artifactPath))
@@ -530,6 +715,25 @@ func verifyArtifactInHEAD(worktreePath string, artifactPath string) error {
 		return fmt.Errorf("verify artifact %q in HEAD: %w", artifactPath, err)
 	}
 	return nil
+}
+
+func headPathExists(worktreePath string, artifactPath string) bool {
+	artifactPath = strings.TrimSpace(artifactPath)
+	info, err := os.Stat(filepath.Join(worktreePath, artifactPath))
+	if err == nil && info.IsDir() {
+		treeOutput, treeErr := runGit(
+			worktreePath,
+			"ls-tree",
+			"-r",
+			"--name-only",
+			"HEAD",
+			"--",
+			artifactPath,
+		)
+		return treeErr == nil && strings.TrimSpace(treeOutput) != ""
+	}
+	_, err = runGit(worktreePath, "cat-file", "-e", "HEAD:"+artifactPath)
+	return err == nil
 }
 
 func pushSourceBranch(worktreePath string, branchName string) error {
@@ -655,4 +859,30 @@ func emptyFallback(value string, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func CheckPaths(req CheckPathsRequest) (*CheckPathsResult, error) {
+	result := &CheckPathsResult{
+		Paths: make(map[string]WorkspacePathState),
+	}
+	for _, path := range req.Paths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		state := WorkspacePathState{}
+		info, err := os.Stat(path)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				state.Error = err.Error()
+			}
+			result.Paths[path] = state
+			continue
+		}
+		state.Exists = true
+		state.IsDir = info.IsDir()
+		state.IsFile = info.Mode().IsRegular()
+		result.Paths[path] = state
+	}
+	return result, nil
 }

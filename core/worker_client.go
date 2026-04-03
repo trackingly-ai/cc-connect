@@ -284,6 +284,14 @@ func (c *WorkerClient) readLoop(ctx context.Context, conn *websocket.Conn) error
 			go c.handleSetupWorkspace(payload)
 		case "cleanup_workspace":
 			go c.handleCleanupWorkspace(payload)
+		case "capture_workspace_snapshot":
+			go c.handleCaptureWorkspaceSnapshot(payload)
+		case "inspect_workspace":
+			go c.handleInspectWorkspace(payload)
+		case "check_paths":
+			go c.handleCheckPaths(payload)
+		case "push_ref":
+			go c.handlePushRef(payload)
 		case "ensure_repo_checkout":
 			go c.handleEnsureRepoCheckout(payload)
 		case "write_repo_file":
@@ -406,6 +414,97 @@ func (c *WorkerClient) handleCleanupWorkspace(payload map[string]any) {
 		"result": map[string]any{
 			"worktree_path": strings.TrimSpace(worktreePath),
 		},
+	})
+}
+
+func (c *WorkerClient) handleCaptureWorkspaceSnapshot(payload map[string]any) {
+	requestID, _ := payload["request_id"].(string)
+	repoPath, _ := payload["repo_path"].(string)
+	worktreePath, _ := payload["worktree_path"].(string)
+	branchName, _ := payload["branch_name"].(string)
+	result, err := CaptureWorkspaceSnapshot(
+		strings.TrimSpace(repoPath),
+		strings.TrimSpace(worktreePath),
+		strings.TrimSpace(branchName),
+	)
+	if err != nil {
+		_ = c.sendJSON(map[string]any{
+			"type":       "workspace_snapshot_captured",
+			"request_id": requestID,
+			"host_id":    c.hostID,
+			"error":      err.Error(),
+		})
+		return
+	}
+	_ = c.sendJSON(map[string]any{
+		"type":       "workspace_snapshot_captured",
+		"request_id": requestID,
+		"host_id":    c.hostID,
+		"result":     result,
+	})
+}
+
+func (c *WorkerClient) handleInspectWorkspace(payload map[string]any) {
+	requestID, _ := payload["request_id"].(string)
+	repoPath, _ := payload["repo_path"].(string)
+	worktreePath, _ := payload["worktree_path"].(string)
+	branchName, _ := payload["branch_name"].(string)
+	result, err := InspectWorkspace(
+		strings.TrimSpace(repoPath),
+		strings.TrimSpace(worktreePath),
+		strings.TrimSpace(branchName),
+		WorkspaceInspectionRequest{
+			ResolveRefs:   decodeStringSlice(payload["resolve_refs"]),
+			RemoteRefs:    decodeStringSlice(payload["remote_refs"]),
+			WorktreePaths: decodeStringSlice(payload["worktree_paths"]),
+			HeadPaths:     decodeStringSlice(payload["head_paths"]),
+			IncludeHead:   decodeBool(payload["include_head"]),
+			IncludeBranch: decodeBool(payload["include_branch"]),
+		},
+	)
+	if err != nil {
+		_ = c.sendJSON(map[string]any{
+			"type":       "workspace_inspected",
+			"request_id": requestID,
+			"host_id":    c.hostID,
+			"error":      err.Error(),
+		})
+		return
+	}
+	_ = c.sendJSON(map[string]any{
+		"type":       "workspace_inspected",
+		"request_id": requestID,
+		"host_id":    c.hostID,
+		"result":     result,
+	})
+}
+
+func (c *WorkerClient) handlePushRef(payload map[string]any) {
+	requestID, _ := payload["request_id"].(string)
+	repoPath, _ := payload["repo_path"].(string)
+	worktreePath, _ := payload["worktree_path"].(string)
+	sourceRef, _ := payload["source_ref"].(string)
+	remoteRef, _ := payload["remote_ref"].(string)
+	result, err := PushRef(
+		strings.TrimSpace(repoPath),
+		strings.TrimSpace(worktreePath),
+		strings.TrimSpace(sourceRef),
+		strings.TrimSpace(remoteRef),
+	)
+	if err != nil {
+		_ = c.sendJSON(map[string]any{
+			"type":       "ref_pushed",
+			"request_id": requestID,
+			"host_id":    c.hostID,
+			"error":      err.Error(),
+		})
+		return
+	}
+	_ = c.sendJSON(map[string]any{
+		"type":       "ref_pushed",
+		"request_id": requestID,
+		"host_id":    c.hostID,
+		"result":     result,
 	})
 }
 
@@ -779,6 +878,11 @@ func decodeStringSlice(raw any) []string {
 		values = append(values, value)
 	}
 	return values
+}
+
+func decodeBool(raw any) bool {
+	value, _ := raw.(bool)
+	return value
 }
 
 func cloneMap(in map[string]any) map[string]any {

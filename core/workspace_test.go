@@ -469,6 +469,54 @@ func TestFinalizeSourceCommitRejectsDivergedRemoteBranch(t *testing.T) {
 	}
 }
 
+func TestPushRefPushesCommitToRemoteRef(t *testing.T) {
+	originPath, repoPath := initGitRepoWithOrigin(t)
+	branchName := "echo/task-push-ref"
+	if _, err := runGit(repoPath, "checkout", "-b", branchName); err != nil {
+		t.Fatalf("git checkout -b: %v", err)
+	}
+	docsDir := filepath.Join(repoPath, "docs")
+	if err := os.MkdirAll(docsDir, 0o755); err != nil {
+		t.Fatalf("mkdir docs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(docsDir, "RESEARCH.md"), []byte("brief\n"), 0o644); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+	if _, err := runGit(repoPath, "add", "docs/RESEARCH.md"); err != nil {
+		t.Fatalf("git add: %v", err)
+	}
+	if _, err := runGit(repoPath, "commit", "-m", "create push ref artifact"); err != nil {
+		t.Fatalf("git commit: %v", err)
+	}
+	headSHA, err := runGit(repoPath, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("git rev-parse HEAD: %v", err)
+	}
+
+	result, err := PushRef(
+		repoPath,
+		repoPath,
+		headSHA,
+		"refs/heads/echo/source/task-push-ref",
+	)
+	if err != nil {
+		t.Fatalf("PushRef: %v", err)
+	}
+	if result.SourceRef != headSHA {
+		t.Fatalf("source ref = %q, want %q", result.SourceRef, headSHA)
+	}
+	if result.RemoteRef != "refs/heads/echo/source/task-push-ref" {
+		t.Fatalf("remote ref = %q", result.RemoteRef)
+	}
+	remoteSHA, err := runGit(originPath, "rev-parse", "refs/heads/echo/source/task-push-ref")
+	if err != nil {
+		t.Fatalf("git rev-parse remote ref: %v", err)
+	}
+	if remoteSHA != headSHA {
+		t.Fatalf("remote sha = %q, want %q", remoteSHA, headSHA)
+	}
+}
+
 func initGitRepo(t *testing.T) string {
 	t.Helper()
 
