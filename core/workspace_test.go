@@ -366,10 +366,34 @@ func TestInspectWorkspaceAndCheckPathsSmoke(t *testing.T) {
 		t.Fatalf("expected HEAD path to exist, got %#v", inspection.HeadPaths)
 	}
 
+	dirtyPath := filepath.Join(docsDir, "draft.md")
+	if err := os.WriteFile(dirtyPath, []byte("draft\n"), 0o644); err != nil {
+		t.Fatalf("write dirty file: %v", err)
+	}
+	dirtyInspection, err := InspectWorkspace(
+		repoPath,
+		worktreePath,
+		branchName,
+		WorkspaceInspectionRequest{
+			WorktreePaths: []string{"docs/echo/research/draft.md"},
+			HeadPaths:     []string{"docs/echo/research/draft.md"},
+		},
+	)
+	if err != nil {
+		t.Fatalf("InspectWorkspace dirty path: %v", err)
+	}
+	if !dirtyInspection.WorktreePaths["docs/echo/research/draft.md"].IsFile {
+		t.Fatalf("expected dirty worktree file state, got %#v", dirtyInspection.WorktreePaths)
+	}
+	if dirtyInspection.HeadPaths["docs/echo/research/draft.md"] {
+		t.Fatalf("expected dirty path to be absent from HEAD, got %#v", dirtyInspection.HeadPaths)
+	}
+
 	pathCheck, err := CheckPaths(CheckPathsRequest{
 		Paths: []string{
 			worktreePath,
 			researchPath,
+			dirtyPath,
 			filepath.Join(originPath, "missing.txt"),
 		},
 	})
@@ -381,6 +405,9 @@ func TestInspectWorkspaceAndCheckPathsSmoke(t *testing.T) {
 	}
 	if !pathCheck.Paths[researchPath].Exists || !pathCheck.Paths[researchPath].IsFile {
 		t.Fatalf("expected research file state, got %#v", pathCheck.Paths[researchPath])
+	}
+	if !pathCheck.Paths[dirtyPath].Exists || !pathCheck.Paths[dirtyPath].IsFile {
+		t.Fatalf("expected dirty file state, got %#v", pathCheck.Paths[dirtyPath])
 	}
 	if pathCheck.Paths[filepath.Join(originPath, "missing.txt")].Exists {
 		t.Fatalf("expected missing path to be absent, got %#v", pathCheck.Paths)
