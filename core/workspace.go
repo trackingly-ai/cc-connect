@@ -713,32 +713,25 @@ func DeleteRemoteRef(
 		return nil, fmt.Errorf("stat worktree path: %w", err)
 	}
 
-	var finalResult *DeleteRemoteRefResult
-	err := withWorkspacePathLock(worktreePath, func() error {
-		_, err := runGit(worktreePath, "ls-remote", "--exit-code", "origin", remoteRef)
-		if err != nil {
-			if strings.Contains(err.Error(), "exit status 2") {
-				finalResult = &DeleteRemoteRefResult{
-					RemoteRef: remoteRef,
-					Deleted:   false,
-				}
-				return nil
-			}
-			return fmt.Errorf("resolve remote ref %s: %w", remoteRef, err)
-		}
-		if _, err := runGit(worktreePath, "push", "origin", ":"+remoteRef); err != nil {
-			return fmt.Errorf("delete remote ref %s: %w", remoteRef, err)
-		}
-		finalResult = &DeleteRemoteRefResult{
-			RemoteRef: remoteRef,
-			Deleted:   true,
-		}
-		return nil
-	})
+	// Remote ref deletion is best-effort and does not mutate local workspace state,
+	// so avoid holding the worktree lock across potentially slow network calls.
+	remoteListing, err := runGit(worktreePath, "ls-remote", "--refs", "origin", remoteRef)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("resolve remote ref %s: %w", remoteRef, err)
 	}
-	return finalResult, nil
+	if strings.TrimSpace(remoteListing) == "" {
+		return &DeleteRemoteRefResult{
+			RemoteRef: remoteRef,
+			Deleted:   false,
+		}, nil
+	}
+	if _, err := runGit(worktreePath, "push", "origin", ":"+remoteRef); err != nil {
+		return nil, fmt.Errorf("delete remote ref %s: %w", remoteRef, err)
+	}
+	return &DeleteRemoteRefResult{
+		RemoteRef: remoteRef,
+		Deleted:   true,
+	}, nil
 }
 
 func verifyArtifactInHEAD(worktreePath string, artifactPath string) error {
