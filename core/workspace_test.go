@@ -640,6 +640,60 @@ func TestPushRefPushesCommitToRemoteRef(t *testing.T) {
 	}
 }
 
+func TestDeleteRemoteRefDeletesManagedRemoteRef(t *testing.T) {
+	originPath, repoPath := initGitRepoWithOrigin(t)
+	branchName := "echo/task-delete-ref"
+	if _, err := runGit(repoPath, "checkout", "-b", branchName); err != nil {
+		t.Fatalf("git checkout -b: %v", err)
+	}
+	headSHA, err := runGit(repoPath, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("git rev-parse HEAD: %v", err)
+	}
+	if _, err := runGit(
+		repoPath,
+		"push",
+		"origin",
+		headSHA+":refs/heads/echo/source/task-delete-ref",
+	); err != nil {
+		t.Fatalf("git push source ref: %v", err)
+	}
+
+	result, err := DeleteRemoteRef(
+		repoPath,
+		repoPath,
+		"refs/heads/echo/source/task-delete-ref",
+	)
+	if err != nil {
+		t.Fatalf("DeleteRemoteRef: %v", err)
+	}
+	if !result.Deleted {
+		t.Fatal("expected remote ref to be deleted")
+	}
+	if result.RemoteRef != "refs/heads/echo/source/task-delete-ref" {
+		t.Fatalf("remote ref = %q", result.RemoteRef)
+	}
+	if _, err := runGit(originPath, "rev-parse", "refs/heads/echo/source/task-delete-ref"); err == nil {
+		t.Fatal("expected remote ref to be absent after delete")
+	}
+}
+
+func TestDeleteRemoteRefTreatsMissingRefAsSuccess(t *testing.T) {
+	_, repoPath := initGitRepoWithOrigin(t)
+
+	result, err := DeleteRemoteRef(
+		repoPath,
+		repoPath,
+		"refs/heads/echo/source/missing-ref",
+	)
+	if err != nil {
+		t.Fatalf("DeleteRemoteRef missing ref: %v", err)
+	}
+	if result.Deleted {
+		t.Fatal("expected missing remote ref to report deleted=false")
+	}
+}
+
 func initGitRepo(t *testing.T) string {
 	t.Helper()
 

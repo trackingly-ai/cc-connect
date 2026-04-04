@@ -456,6 +456,7 @@ func TestWorkerClientHandlesWorkspaceAndRepoRPCs(t *testing.T) {
 	checkoutReadySeen := false
 	repoFileWrittenSeen := false
 	sourceCommitFinalizedSeen := false
+	remoteRefDeletedSeen := false
 	workspaceCleanedSeen := false
 
 	_, repoPath := initGitRepoWithOrigin(t)
@@ -529,6 +530,17 @@ func TestWorkerClientHandlesWorkspaceAndRepoRPCs(t *testing.T) {
 				sourceCommitFinalizedSeen = true
 				mu.Unlock()
 				_ = conn.WriteJSON(map[string]any{
+					"type":          "delete_remote_ref",
+					"request_id":    "delete-1",
+					"repo_path":     repoPath,
+					"worktree_path": worktreePath,
+					"remote_ref":    "refs/heads/echo/source/task-1",
+				})
+			case "remote_ref_deleted":
+				mu.Lock()
+				remoteRefDeletedSeen = true
+				mu.Unlock()
+				_ = conn.WriteJSON(map[string]any{
 					"type":          "cleanup_workspace",
 					"request_id":    "cleanup-1",
 					"worktree_path": worktreePath,
@@ -584,6 +596,7 @@ func TestWorkerClientHandlesWorkspaceAndRepoRPCs(t *testing.T) {
 			checkoutReadySeen &&
 			repoFileWrittenSeen &&
 			sourceCommitFinalizedSeen &&
+			remoteRefDeletedSeen &&
 			workspaceCleanedSeen
 		mu.Unlock()
 		if done {
@@ -602,13 +615,15 @@ func TestWorkerClientHandlesWorkspaceAndRepoRPCs(t *testing.T) {
 		!checkoutReadySeen ||
 		!repoFileWrittenSeen ||
 		!sourceCommitFinalizedSeen ||
+		!remoteRefDeletedSeen ||
 		!workspaceCleanedSeen {
 		t.Fatalf(
-			"expected all rpc acknowledgements, got workspace=%v checkout=%v file=%v finalize=%v cleanup=%v",
+			"expected all rpc acknowledgements, got workspace=%v checkout=%v file=%v finalize=%v delete=%v cleanup=%v",
 			workspaceReadySeen,
 			checkoutReadySeen,
 			repoFileWrittenSeen,
 			sourceCommitFinalizedSeen,
+			remoteRefDeletedSeen,
 			workspaceCleanedSeen,
 		)
 	}

@@ -292,6 +292,8 @@ func (c *WorkerClient) readLoop(ctx context.Context, conn *websocket.Conn) error
 			go c.handleCheckPaths(payload)
 		case "push_ref":
 			go c.handlePushRef(payload)
+		case "delete_remote_ref":
+			go c.handleDeleteRemoteRef(payload)
 		case "ensure_repo_checkout":
 			go c.handleEnsureRepoCheckout(payload)
 		case "write_repo_file":
@@ -525,6 +527,33 @@ func (c *WorkerClient) handlePushRef(payload map[string]any) {
 	}
 	_ = c.sendJSON(map[string]any{
 		"type":       "ref_pushed",
+		"request_id": requestID,
+		"host_id":    c.hostID,
+		"result":     result,
+	})
+}
+
+func (c *WorkerClient) handleDeleteRemoteRef(payload map[string]any) {
+	requestID, _ := payload["request_id"].(string)
+	repoPath, _ := payload["repo_path"].(string)
+	worktreePath, _ := payload["worktree_path"].(string)
+	remoteRef, _ := payload["remote_ref"].(string)
+	result, err := DeleteRemoteRef(
+		strings.TrimSpace(repoPath),
+		strings.TrimSpace(worktreePath),
+		strings.TrimSpace(remoteRef),
+	)
+	if err != nil {
+		_ = c.sendJSON(map[string]any{
+			"type":       "remote_ref_deleted",
+			"request_id": requestID,
+			"host_id":    c.hostID,
+			"error":      err.Error(),
+		})
+		return
+	}
+	_ = c.sendJSON(map[string]any{
+		"type":       "remote_ref_deleted",
 		"request_id": requestID,
 		"host_id":    c.hostID,
 		"result":     result,

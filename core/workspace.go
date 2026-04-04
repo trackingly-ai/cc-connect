@@ -72,6 +72,11 @@ type PushRefResult struct {
 	RemoteRef string `json:"remote_ref,omitempty"`
 }
 
+type DeleteRemoteRefResult struct {
+	RemoteRef string `json:"remote_ref,omitempty"`
+	Deleted   bool   `json:"deleted"`
+}
+
 type CheckPathsRequest struct {
 	Paths []string `json:"paths"`
 }
@@ -678,6 +683,55 @@ func PushRef(
 		finalResult = &PushRefResult{
 			SourceRef: sourceRef,
 			RemoteRef: remoteRef,
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return finalResult, nil
+}
+
+func DeleteRemoteRef(
+	repoPath string,
+	worktreePath string,
+	remoteRef string,
+) (*DeleteRemoteRefResult, error) {
+	repoPath = strings.TrimSpace(repoPath)
+	worktreePath = strings.TrimSpace(worktreePath)
+	remoteRef = strings.TrimSpace(remoteRef)
+	if repoPath == "" {
+		return nil, fmt.Errorf("repo_path is required")
+	}
+	if worktreePath == "" {
+		return nil, fmt.Errorf("worktree_path is required")
+	}
+	if remoteRef == "" {
+		return nil, fmt.Errorf("remote_ref is required")
+	}
+	if _, err := os.Stat(worktreePath); err != nil {
+		return nil, fmt.Errorf("stat worktree path: %w", err)
+	}
+
+	var finalResult *DeleteRemoteRefResult
+	err := withWorkspacePathLock(worktreePath, func() error {
+		_, err := runGit(worktreePath, "ls-remote", "--exit-code", "origin", remoteRef)
+		if err != nil {
+			if strings.Contains(err.Error(), "exit status 2") {
+				finalResult = &DeleteRemoteRefResult{
+					RemoteRef: remoteRef,
+					Deleted:   false,
+				}
+				return nil
+			}
+			return fmt.Errorf("resolve remote ref %s: %w", remoteRef, err)
+		}
+		if _, err := runGit(worktreePath, "push", "origin", ":"+remoteRef); err != nil {
+			return fmt.Errorf("delete remote ref %s: %w", remoteRef, err)
+		}
+		finalResult = &DeleteRemoteRefResult{
+			RemoteRef: remoteRef,
+			Deleted:   true,
 		}
 		return nil
 	})
