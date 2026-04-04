@@ -14,8 +14,15 @@ func TestSetupWorkspaceCreatesWorktree(t *testing.T) {
 	repoPath := initGitRepo(t)
 	worktreePath := filepath.Join(t.TempDir(), "worktrees", "task-1")
 
-	if err := SetupWorkspace(repoPath, "main", "echo/task-1", worktreePath); err != nil {
+	result, err := SetupWorkspace(repoPath, "main", "echo/task-1", worktreePath)
+	if err != nil {
 		t.Fatalf("SetupWorkspace: %v", err)
+	}
+	if strings.TrimSpace(result.RequestedBaseCommitSHA) == "" {
+		t.Fatalf("RequestedBaseCommitSHA should be populated")
+	}
+	if strings.TrimSpace(result.InitialHeadCommitSHA) == "" {
+		t.Fatalf("InitialHeadCommitSHA should be populated")
 	}
 
 	if _, err := os.Stat(worktreePath); err != nil {
@@ -39,8 +46,15 @@ func TestSetupWorkspaceReusesExistingBranch(t *testing.T) {
 		t.Fatalf("git branch: %v", err)
 	}
 
-	if err := SetupWorkspace(repoPath, "main", "echo/task-existing-branch", worktreePath); err != nil {
+	result, err := SetupWorkspace(repoPath, "main", "echo/task-existing-branch", worktreePath)
+	if err != nil {
 		t.Fatalf("SetupWorkspace with existing branch: %v", err)
+	}
+	if strings.TrimSpace(result.RequestedBaseCommitSHA) == "" {
+		t.Fatalf("RequestedBaseCommitSHA should be populated")
+	}
+	if strings.TrimSpace(result.InitialHeadCommitSHA) == "" {
+		t.Fatalf("InitialHeadCommitSHA should be populated")
 	}
 
 	branch, err := runGit(worktreePath, "rev-parse", "--abbrev-ref", "HEAD")
@@ -56,7 +70,7 @@ func TestCleanupWorkspaceRemovesWorktree(t *testing.T) {
 	repoPath := initGitRepo(t)
 	worktreePath := filepath.Join(t.TempDir(), "worktrees", "task-2")
 
-	if err := SetupWorkspace(repoPath, "main", "echo/task-2", worktreePath); err != nil {
+	if _, err := SetupWorkspace(repoPath, "main", "echo/task-2", worktreePath); err != nil {
 		t.Fatalf("SetupWorkspace: %v", err)
 	}
 	if err := CleanupWorkspace(worktreePath); err != nil {
@@ -88,7 +102,7 @@ func TestCleanupWorkspaceCanKeepBranch(t *testing.T) {
 	repoPath := initGitRepo(t)
 	worktreePath := filepath.Join(t.TempDir(), "worktrees", "task-keep")
 
-	if err := SetupWorkspace(repoPath, "main", "echo/task-keep", worktreePath); err != nil {
+	if _, err := SetupWorkspace(repoPath, "main", "echo/task-keep", worktreePath); err != nil {
 		t.Fatalf("SetupWorkspace: %v", err)
 	}
 	if err := CleanupWorkspaceWithOptions(worktreePath, CleanupWorkspaceOptions{
@@ -110,7 +124,7 @@ func TestCleanupWorkspaceKeepsNonManagedBranch(t *testing.T) {
 	repoPath := initGitRepo(t)
 	worktreePath := filepath.Join(t.TempDir(), "worktrees", "task-non-managed")
 
-	if err := SetupWorkspace(repoPath, "main", "echo/task-non-managed", worktreePath); err != nil {
+	if _, err := SetupWorkspace(repoPath, "main", "echo/task-non-managed", worktreePath); err != nil {
 		t.Fatalf("SetupWorkspace: %v", err)
 	}
 	if _, err := runGit(worktreePath, "checkout", "-b", "manual/debug"); err != nil {
@@ -159,8 +173,14 @@ func TestSetupWorkspaceSerializesByRepo(t *testing.T) {
 	worktreeB := filepath.Join(t.TempDir(), "worktrees", "task-b")
 
 	errCh := make(chan error, 2)
-	go func() { errCh <- SetupWorkspace(repoPath, "main", "echo/task-a", worktreeA) }()
-	go func() { errCh <- SetupWorkspace(repoPath, "main", "echo/task-b", worktreeB) }()
+	go func() {
+		_, err := SetupWorkspace(repoPath, "main", "echo/task-a", worktreeA)
+		errCh <- err
+	}()
+	go func() {
+		_, err := SetupWorkspace(repoPath, "main", "echo/task-b", worktreeB)
+		errCh <- err
+	}()
 
 	for range 2 {
 		if err := <-errCh; err != nil {
@@ -296,7 +316,7 @@ func TestInspectWorkspaceAndCheckPathsSmoke(t *testing.T) {
 	worktreePath := filepath.Join(t.TempDir(), "worktrees", "inspect-smoke")
 	branchName := "echo/research/inspect-smoke"
 
-	if err := SetupWorkspace(repoPath, "main", branchName, worktreePath); err != nil {
+	if _, err := SetupWorkspace(repoPath, "main", branchName, worktreePath); err != nil {
 		t.Fatalf("SetupWorkspace: %v", err)
 	}
 	docsDir := filepath.Join(worktreePath, "docs", "echo", "research")

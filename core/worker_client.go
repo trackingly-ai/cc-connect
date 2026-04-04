@@ -370,12 +370,13 @@ func (c *WorkerClient) handleSetupWorkspace(payload map[string]any) {
 	baseBranch, _ := payload["base_branch"].(string)
 	branchName, _ := payload["branch_name"].(string)
 	worktreePath, _ := payload["worktree_path"].(string)
-	if err := SetupWorkspace(
+	result, err := SetupWorkspace(
 		strings.TrimSpace(repoPath),
 		strings.TrimSpace(baseBranch),
 		strings.TrimSpace(branchName),
 		strings.TrimSpace(worktreePath),
-	); err != nil {
+	)
+	if err != nil {
 		_ = c.sendJSON(map[string]any{
 			"type":       "workspace_ready",
 			"request_id": requestID,
@@ -389,10 +390,12 @@ func (c *WorkerClient) handleSetupWorkspace(payload map[string]any) {
 		"request_id": requestID,
 		"host_id":    c.hostID,
 		"result": map[string]any{
-			"repo_path":     strings.TrimSpace(repoPath),
-			"base_branch":   strings.TrimSpace(baseBranch),
-			"branch_name":   strings.TrimSpace(branchName),
-			"worktree_path": strings.TrimSpace(worktreePath),
+			"repo_path":                 result.RepoPath,
+			"base_branch":               result.BaseBranch,
+			"branch_name":               result.BranchName,
+			"worktree_path":             result.WorktreePath,
+			"requested_base_commit_sha": result.RequestedBaseCommitSHA,
+			"initial_head_commit_sha":   result.InitialHeadCommitSHA,
 		},
 	})
 }

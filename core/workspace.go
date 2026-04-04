@@ -39,6 +39,15 @@ type WorkspaceSnapshot struct {
 	Error        string   `json:"error,omitempty"`
 }
 
+type WorkspaceSetupResult struct {
+	RepoPath               string `json:"repo_path,omitempty"`
+	BaseBranch             string `json:"base_branch,omitempty"`
+	BranchName             string `json:"branch_name,omitempty"`
+	WorktreePath           string `json:"worktree_path,omitempty"`
+	RequestedBaseCommitSHA string `json:"requested_base_commit_sha,omitempty"`
+	InitialHeadCommitSHA   string `json:"initial_head_commit_sha,omitempty"`
+}
+
 type WorkspacePathState struct {
 	Exists bool   `json:"exists"`
 	IsFile bool   `json:"is_file"`
@@ -128,31 +137,42 @@ func SetupWorkspace(
 	baseBranch string,
 	branchName string,
 	worktreePath string,
-) error {
+) (*WorkspaceSetupResult, error) {
 	repoPath = strings.TrimSpace(repoPath)
 	baseBranch = strings.TrimSpace(baseBranch)
 	branchName = strings.TrimSpace(branchName)
 	worktreePath = strings.TrimSpace(worktreePath)
 
 	if repoPath == "" {
-		return fmt.Errorf("repo_path is required")
+		return nil, fmt.Errorf("repo_path is required")
 	}
 	if baseBranch == "" {
-		return fmt.Errorf("base_branch is required")
+		return nil, fmt.Errorf("base_branch is required")
 	}
 	if branchName == "" {
-		return fmt.Errorf("branch_name is required")
+		return nil, fmt.Errorf("branch_name is required")
 	}
 	if worktreePath == "" {
-		return fmt.Errorf("worktree_path is required")
+		return nil, fmt.Errorf("worktree_path is required")
 	}
-	return withWorkspacePathLock(worktreePath, func() error {
+	result := &WorkspaceSetupResult{
+		RepoPath:     repoPath,
+		BaseBranch:   baseBranch,
+		BranchName:   branchName,
+		WorktreePath: worktreePath,
+	}
+	if err := withWorkspacePathLock(worktreePath, func() error {
 		return withWorkspaceRepoLock(repoPath, func() error {
 			if _, err := os.Stat(worktreePath); err == nil {
 				return fmt.Errorf("worktree path already exists: %s", worktreePath)
 			} else if !os.IsNotExist(err) {
 				return fmt.Errorf("stat worktree path: %w", err)
 			}
+			baseCommit, err := runGit(repoPath, "rev-parse", baseBranch)
+			if err != nil {
+				return fmt.Errorf("resolve base branch commit: %w", err)
+			}
+			result.RequestedBaseCommitSHA = strings.TrimSpace(baseCommit)
 			existingBranch, err := runGit(
 				repoPath,
 				"branch",
@@ -178,9 +198,17 @@ func SetupWorkspace(
 			if _, err := runGit(repoPath, args...); err != nil {
 				return fmt.Errorf("git worktree add: %w", err)
 			}
+			headCommit, err := runGit(worktreePath, "rev-parse", "HEAD")
+			if err != nil {
+				return fmt.Errorf("resolve initial workspace head: %w", err)
+			}
+			result.InitialHeadCommitSHA = strings.TrimSpace(headCommit)
 			return nil
 		})
-	})
+	}); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func EnsureRepoCheckout(repoURL string, repoPath string, defaultBranch string) error {
