@@ -87,6 +87,73 @@ func TestSetupWorkspaceReusesExistingBranch(t *testing.T) {
 	}
 }
 
+func TestSetupWorkspaceUsesFreshRemoteTrackingBaseForNewBranch(t *testing.T) {
+	originPath, repoPath := initGitRepoWithOrigin(t)
+	worktreePath := filepath.Join(t.TempDir(), "worktrees", "task-fresh-remote-base")
+
+	if _, err := runGit(repoPath, "checkout", "-b", "echo-integration"); err != nil {
+		t.Fatalf("git checkout -b echo-integration: %v", err)
+	}
+	if _, err := runGit(repoPath, "push", "-u", "origin", "echo-integration"); err != nil {
+		t.Fatalf("git push -u origin echo-integration: %v", err)
+	}
+	if _, err := runGit(repoPath, "checkout", "main"); err != nil {
+		t.Fatalf("git checkout main: %v", err)
+	}
+
+	otherClone := filepath.Join(t.TempDir(), "other-clone")
+	if _, err := runGit(
+		t.TempDir(),
+		"clone",
+		"--origin",
+		"origin",
+		originPath,
+		otherClone,
+	); err != nil {
+		t.Fatalf("git clone other clone: %v", err)
+	}
+	if _, err := runGit(otherClone, "checkout", "echo-integration"); err != nil {
+		t.Fatalf("git checkout echo-integration in other clone: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(otherClone, "remote-only.txt"), []byte("fresh remote head\n"), 0o644); err != nil {
+		t.Fatalf("write remote-only file: %v", err)
+	}
+	if _, err := runGit(otherClone, "add", "remote-only.txt"); err != nil {
+		t.Fatalf("git add remote-only file: %v", err)
+	}
+	if _, err := runGit(otherClone, "commit", "-m", "advance remote integration"); err != nil {
+		t.Fatalf("git commit remote-only file: %v", err)
+	}
+	if _, err := runGit(otherClone, "push", "origin", "echo-integration"); err != nil {
+		t.Fatalf("git push origin echo-integration from other clone: %v", err)
+	}
+
+	localBaseSHA, err := runGit(repoPath, "rev-parse", "echo-integration")
+	if err != nil {
+		t.Fatalf("git rev-parse local echo-integration: %v", err)
+	}
+	remoteBaseSHA, err := runGit(otherClone, "rev-parse", "echo-integration")
+	if err != nil {
+		t.Fatalf("git rev-parse remote echo-integration: %v", err)
+	}
+	localBaseSHA = strings.TrimSpace(localBaseSHA)
+	remoteBaseSHA = strings.TrimSpace(remoteBaseSHA)
+	if localBaseSHA == remoteBaseSHA {
+		t.Fatalf("expected stale local branch and fresher remote branch, got identical SHA %q", localBaseSHA)
+	}
+
+	result, err := SetupWorkspace(repoPath, "echo-integration", "echo/task-fresh-remote-base", worktreePath)
+	if err != nil {
+		t.Fatalf("SetupWorkspace: %v", err)
+	}
+	if result.RequestedBaseCommitSHA != remoteBaseSHA {
+		t.Fatalf("RequestedBaseCommitSHA = %q, want remote integration SHA %q", result.RequestedBaseCommitSHA, remoteBaseSHA)
+	}
+	if result.InitialHeadCommitSHA != remoteBaseSHA {
+		t.Fatalf("InitialHeadCommitSHA = %q, want remote integration SHA %q", result.InitialHeadCommitSHA, remoteBaseSHA)
+	}
+}
+
 func TestCleanupWorkspaceRemovesWorktree(t *testing.T) {
 	repoPath := initGitRepo(t)
 	worktreePath := filepath.Join(t.TempDir(), "worktrees", "task-2")

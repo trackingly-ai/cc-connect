@@ -168,7 +168,7 @@ func SetupWorkspace(
 			} else if !os.IsNotExist(err) {
 				return fmt.Errorf("stat worktree path: %w", err)
 			}
-			baseCommit, err := runGit(repoPath, "rev-parse", baseBranch)
+			baseRef, baseCommit, err := resolveAuthoritativeBaseRef(repoPath, baseBranch)
 			if err != nil {
 				return fmt.Errorf("resolve base branch commit: %w", err)
 			}
@@ -196,7 +196,7 @@ func SetupWorkspace(
 				// requested base branch that setup was asked to use.
 				args = append(args, worktreePath, branchName)
 			} else {
-				args = append(args, "-b", branchName, worktreePath, baseBranch)
+				args = append(args, "-b", branchName, worktreePath, baseRef)
 			}
 			if _, err := runGit(repoPath, args...); err != nil {
 				return fmt.Errorf("git worktree add: %w", err)
@@ -212,6 +212,52 @@ func SetupWorkspace(
 		return nil, err
 	}
 	return result, nil
+}
+
+func resolveAuthoritativeBaseRef(repoPath string, baseBranch string) (string, string, error) {
+	baseBranch = strings.TrimSpace(baseBranch)
+	if baseBranch == "" {
+		return "", "", fmt.Errorf("base_branch is required")
+	}
+	if _, err := runGit(repoPath, "remote", "get-url", "origin"); err == nil {
+		if _, err := runGit(repoPath, "fetch", "origin", "--prune"); err != nil {
+			return "", "", fmt.Errorf("fetch origin: %w", err)
+		}
+
+		remoteTrackingRef := remoteTrackingRefForBranch(baseBranch)
+		if remoteTrackingRef != "" {
+			remoteCommit, err := runGit(repoPath, "rev-parse", remoteTrackingRef)
+			if err == nil {
+				return remoteTrackingRef, strings.TrimSpace(remoteCommit), nil
+			}
+		}
+	}
+
+	baseCommit, err := runGit(repoPath, "rev-parse", baseBranch)
+	if err != nil {
+		return "", "", err
+	}
+	return baseBranch, strings.TrimSpace(baseCommit), nil
+}
+
+func remoteTrackingRefForBranch(branch string) string {
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return ""
+	}
+	if strings.HasPrefix(branch, "refs/remotes/") {
+		return branch
+	}
+	if strings.HasPrefix(branch, "origin/") {
+		return "refs/remotes/" + branch
+	}
+	if strings.HasPrefix(branch, "refs/heads/") {
+		return "refs/remotes/origin/" + strings.TrimPrefix(branch, "refs/heads/")
+	}
+	if strings.HasPrefix(branch, "refs/") {
+		return ""
+	}
+	return "refs/remotes/origin/" + branch
 }
 
 func EnsureRepoCheckout(repoURL string, repoPath string, defaultBranch string) error {
