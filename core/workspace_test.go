@@ -154,6 +154,31 @@ func TestSetupWorkspaceUsesFreshRemoteTrackingBaseForNewBranch(t *testing.T) {
 	}
 }
 
+func TestSetupWorkspaceFallsBackToLocalBaseWhenFetchFails(t *testing.T) {
+	repoPath := initGitRepo(t)
+	worktreePath := filepath.Join(t.TempDir(), "worktrees", "task-local-fallback")
+
+	if _, err := runGit(repoPath, "remote", "add", "origin", "ssh://git@example.invalid/repo.git"); err != nil {
+		t.Fatalf("git remote add origin: %v", err)
+	}
+	localMainSHA, err := runGit(repoPath, "rev-parse", "main")
+	if err != nil {
+		t.Fatalf("git rev-parse main: %v", err)
+	}
+	localMainSHA = strings.TrimSpace(localMainSHA)
+
+	result, err := SetupWorkspace(repoPath, "main", "echo/task-local-fallback", worktreePath)
+	if err != nil {
+		t.Fatalf("SetupWorkspace fallback after fetch failure: %v", err)
+	}
+	if result.RequestedBaseCommitSHA != localMainSHA {
+		t.Fatalf("RequestedBaseCommitSHA = %q, want local main SHA %q", result.RequestedBaseCommitSHA, localMainSHA)
+	}
+	if result.InitialHeadCommitSHA != localMainSHA {
+		t.Fatalf("InitialHeadCommitSHA = %q, want local main SHA %q", result.InitialHeadCommitSHA, localMainSHA)
+	}
+}
+
 func TestCleanupWorkspaceRemovesWorktree(t *testing.T) {
 	repoPath := initGitRepo(t)
 	worktreePath := filepath.Join(t.TempDir(), "worktrees", "task-2")

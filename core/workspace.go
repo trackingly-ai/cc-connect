@@ -161,6 +161,11 @@ func SetupWorkspace(
 		BranchName:   branchName,
 		WorktreePath: worktreePath,
 	}
+	baseRefOrCommit, baseCommit, err := resolveAuthoritativeBaseRef(repoPath, baseBranch)
+	if err != nil {
+		return nil, fmt.Errorf("resolve base branch commit: %w", err)
+	}
+	result.RequestedBaseCommitSHA = strings.TrimSpace(baseCommit)
 	if err := withWorkspacePathLock(worktreePath, func() error {
 		return withWorkspaceRepoLock(repoPath, func() error {
 			if _, err := os.Stat(worktreePath); err == nil {
@@ -168,11 +173,6 @@ func SetupWorkspace(
 			} else if !os.IsNotExist(err) {
 				return fmt.Errorf("stat worktree path: %w", err)
 			}
-			baseRef, baseCommit, err := resolveAuthoritativeBaseRef(repoPath, baseBranch)
-			if err != nil {
-				return fmt.Errorf("resolve base branch commit: %w", err)
-			}
-			result.RequestedBaseCommitSHA = strings.TrimSpace(baseCommit)
 			existingBranch, err := runGit(
 				repoPath,
 				"branch",
@@ -196,7 +196,7 @@ func SetupWorkspace(
 				// requested base branch that setup was asked to use.
 				args = append(args, worktreePath, branchName)
 			} else {
-				args = append(args, "-b", branchName, worktreePath, baseRef)
+				args = append(args, "-b", branchName, worktreePath, baseRefOrCommit)
 			}
 			if _, err := runGit(repoPath, args...); err != nil {
 				return fmt.Errorf("git worktree add: %w", err)
@@ -221,14 +221,22 @@ func resolveAuthoritativeBaseRef(repoPath string, baseBranch string) (string, st
 	}
 	if _, err := runGit(repoPath, "remote", "get-url", "origin"); err == nil {
 		if _, err := runGit(repoPath, "fetch", "origin", "--prune"); err != nil {
-			return "", "", fmt.Errorf("fetch origin: %w", err)
-		}
-
-		remoteTrackingRef := remoteTrackingRefForBranch(baseBranch)
-		if remoteTrackingRef != "" {
-			remoteCommit, err := runGit(repoPath, "rev-parse", remoteTrackingRef)
-			if err == nil {
-				return remoteTrackingRef, strings.TrimSpace(remoteCommit), nil
+			slog.Warn(
+				"workspace setup could not refresh origin; falling back to local base ref",
+				"repo_path",
+				repoPath,
+				"base_branch",
+				baseBranch,
+				"error",
+				err,
+			)
+		} else {
+			remoteTrackingRef := remoteTrackingRefForBranch(baseBranch)
+			if remoteTrackingRef != "" {
+				remoteCommit, err := runGit(repoPath, "rev-parse", remoteTrackingRef)
+				if err == nil {
+					return strings.TrimSpace(remoteCommit), strings.TrimSpace(remoteCommit), nil
+				}
 			}
 		}
 	}
@@ -255,6 +263,9 @@ func remoteTrackingRefForBranch(branch string) string {
 		return "refs/remotes/origin/" + strings.TrimPrefix(branch, "refs/heads/")
 	}
 	if strings.HasPrefix(branch, "refs/") {
+		// Only branch refs have a well-defined origin/<branch> remote-tracking
+		// counterpart. Other refs (for example tags) intentionally fall back to
+		// direct local resolution.
 		return ""
 	}
 	return "refs/remotes/origin/" + branch
