@@ -191,6 +191,9 @@ func SetupWorkspace(
 
 			args := []string{"worktree", "add", "--checkout"}
 			if branchExists {
+				// Reusing an existing branch keeps that branch tip as the worktree's
+				// initial HEAD, even though RequestedBaseCommitSHA still records the
+				// requested base branch that setup was asked to use.
 				args = append(args, worktreePath, branchName)
 			} else {
 				args = append(args, "-b", branchName, worktreePath, baseBranch)

@@ -45,6 +45,21 @@ func TestSetupWorkspaceReusesExistingBranch(t *testing.T) {
 	if _, err := runGit(repoPath, "branch", "echo/task-existing-branch", "main"); err != nil {
 		t.Fatalf("git branch: %v", err)
 	}
+	if _, err := runGit(repoPath, "checkout", "echo/task-existing-branch"); err != nil {
+		t.Fatalf("git checkout existing branch: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoPath, "branch-only.txt"), []byte("existing branch tip\n"), 0o644); err != nil {
+		t.Fatalf("write branch-only file: %v", err)
+	}
+	if _, err := runGit(repoPath, "add", "branch-only.txt"); err != nil {
+		t.Fatalf("git add branch-only file: %v", err)
+	}
+	if _, err := runGit(repoPath, "commit", "-m", "advance existing workspace branch"); err != nil {
+		t.Fatalf("git commit branch-only file: %v", err)
+	}
+	if _, err := runGit(repoPath, "checkout", "main"); err != nil {
+		t.Fatalf("git checkout main: %v", err)
+	}
 
 	result, err := SetupWorkspace(repoPath, "main", "echo/task-existing-branch", worktreePath)
 	if err != nil {
@@ -55,6 +70,12 @@ func TestSetupWorkspaceReusesExistingBranch(t *testing.T) {
 	}
 	if strings.TrimSpace(result.InitialHeadCommitSHA) == "" {
 		t.Fatalf("InitialHeadCommitSHA should be populated")
+	}
+	if result.RequestedBaseCommitSHA == result.InitialHeadCommitSHA {
+		t.Fatalf(
+			"RequestedBaseCommitSHA = InitialHeadCommitSHA = %q, want different SHAs for reused branch",
+			result.RequestedBaseCommitSHA,
+		)
 	}
 
 	branch, err := runGit(worktreePath, "rev-parse", "--abbrev-ref", "HEAD")
