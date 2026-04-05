@@ -196,10 +196,24 @@ func SetupWorkspace(
 				// requested base branch that setup was asked to use.
 				args = append(args, worktreePath, branchName)
 			} else {
-				args = append(args, "-b", branchName, worktreePath, baseRefOrCommit)
+				// Resolve the authoritative target commit before taking the repo
+				// lock, then attach the worktree via a ref and pin it to the
+				// resolved commit while still under the lock. This preserves the
+				// commit-pinned contract even if origin advances between fetch and
+				// worktree creation, and avoids relying on older Git versions to
+				// accept a bare SHA in `git worktree add -b <branch> <path> <sha>`.
+				args = append(args, "--detach", worktreePath, baseRefOrCommit)
 			}
 			if _, err := runGit(repoPath, args...); err != nil {
 				return fmt.Errorf("git worktree add: %w", err)
+			}
+			if !branchExists {
+				if _, err := runGit(worktreePath, "checkout", "--detach", baseCommit); err != nil {
+					return fmt.Errorf("pin initial workspace head: %w", err)
+				}
+				if _, err := runGit(worktreePath, "checkout", "-b", branchName, baseCommit); err != nil {
+					return fmt.Errorf("create workspace branch: %w", err)
+				}
 			}
 			headCommit, err := runGit(worktreePath, "rev-parse", "HEAD")
 			if err != nil {
@@ -235,7 +249,7 @@ func resolveAuthoritativeBaseRef(repoPath string, baseBranch string) (string, st
 			if remoteTrackingRef != "" {
 				remoteCommit, err := runGit(repoPath, "rev-parse", remoteTrackingRef)
 				if err == nil {
-					return strings.TrimSpace(remoteCommit), strings.TrimSpace(remoteCommit), nil
+					return remoteTrackingRef, strings.TrimSpace(remoteCommit), nil
 				}
 			}
 		}
