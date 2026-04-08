@@ -279,9 +279,9 @@ Recommended Gemini mechanism:
 2. Enumerate valid skill directories under those roots
 3. Create/update symlinks under `<managed-workspace>/.agents/skills`
 4. Remove stale symlinks previously managed by `cc-connect`
-5. Launch Gemini from the managed workspace and use
-   `--include-directories <repo-root>` for real work roots that must be visible
-   to the agent
+5. Launch Gemini from the managed workspace and use the Gemini CLI
+   `--include-directories <repo-root>` flag for real work roots that must be
+   visible to the agent
 6. Start a new Gemini session, or require a session refresh if the running
    session has already completed its startup-time skill discovery
 
@@ -514,6 +514,11 @@ Therefore:
   project if skill discovery is not live
 - for Mode A projects, the managed workspace should be created before session
   start and treated as part of session lifecycle state
+- because the managed workspace path is keyed by `<session-id>`, reload against
+  an existing live session should reconcile that session's current managed
+  workspace first; if skill roots changed incompatibly, Phase 2 should then
+  invalidate the native session and let the next session allocate a new managed
+  workspace path
 
 Recommended policy:
 
