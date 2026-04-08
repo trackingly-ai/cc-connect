@@ -300,6 +300,9 @@ func (e *Engine) prepareManagedSkillEnv(sessionKey string, envVars []string) ([]
 	if !enabled || len(roots) == 0 || strings.TrimSpace(e.dataDir) == "" {
 		return envVars, nil
 	}
+	if hasEnvKey(envVars, "CC_WORKTREE_PATH") {
+		return envVars, nil
+	}
 
 	workDir := "."
 	if wd, ok := e.agent.(interface{ GetWorkDir() string }); ok {
@@ -331,6 +334,16 @@ func (e *Engine) prepareManagedSkillEnv(sessionKey string, envVars []string) ([]
 		out = append(out, "CC_EXTRA_WORK_DIRS="+strings.Join(extraDirs, string(filepath.ListSeparator)))
 	}
 	return out, nil
+}
+
+func hasEnvKey(envVars []string, key string) bool {
+	prefix := key + "="
+	for i := len(envVars) - 1; i >= 0; i-- {
+		if strings.HasPrefix(envVars[i], prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *Engine) jobEnv(req JobRequest, jobID string, sessionID string) []string {

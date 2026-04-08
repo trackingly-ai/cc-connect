@@ -75,10 +75,13 @@ func TestSkillDirsUseQoderPaths(t *testing.T) {
 		t.Fatalf("unexpected agent type %T", agent)
 	}
 	dirs := q.SkillDirs()
-	if len(dirs) == 0 {
-		t.Fatal("expected skill dirs")
+	if len(dirs) < 2 {
+		t.Fatalf("expected qoder + legacy claude skill dirs, got %#v", dirs)
 	}
 	if got := dirs[0]; got != "/tmp/demo/.qoder/skills" {
 		t.Fatalf("first skill dir = %q, want %q", got, "/tmp/demo/.qoder/skills")
+	}
+	if got := dirs[1]; got != "/tmp/demo/.claude/skills" {
+		t.Fatalf("second skill dir = %q, want %q", got, "/tmp/demo/.claude/skills")
 	}
 }

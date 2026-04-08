@@ -81,3 +81,44 @@ func TestPrepareManagedSkillEnvCreatesWorkspaceAndExtraDir(t *testing.T) {
 		t.Fatalf("extra dirs = %#v, want [%q]", extraDirs, agent.workDir)
 	}
 }
+
+func TestPrepareManagedSkillEnvDisabledKeepsOriginalEnv(t *testing.T) {
+	agent := &managedSkillTestAgent{workDir: t.TempDir()}
+	e := NewEngine("demo", agent, nil, "", LangEnglish)
+	e.SetDataDir(t.TempDir())
+	e.SetManagedSkillConfig(false, nil)
+
+	env, err := e.prepareManagedSkillEnv("feishu:chat:user", []string{"CC_PROJECT=demo"})
+	if err != nil {
+		t.Fatalf("prepareManagedSkillEnv: %v", err)
+	}
+	if got := SessionWorkDirFromEnv(env, ""); got != "" {
+		t.Fatalf("unexpected managed workspace override: %q", got)
+	}
+	if extra := SessionExtraDirsFromEnv(env); len(extra) != 0 {
+		t.Fatalf("unexpected extra dirs: %#v", extra)
+	}
+}
+
+func TestPrepareManagedSkillEnvPreservesExistingWorktreeOverride(t *testing.T) {
+	agent := &managedSkillTestAgent{workDir: t.TempDir()}
+	e := NewEngine("demo", agent, nil, "", LangEnglish)
+	e.SetDataDir(t.TempDir())
+	e.SetManagedSkillConfig(true, []string{t.TempDir()})
+
+	env, err := e.prepareManagedSkillEnv("echo-job-1", []string{"CC_WORKTREE_PATH=/job/worktree"})
+	if err != nil {
+		t.Fatalf("prepareManagedSkillEnv: %v", err)
+	}
+	if got := SessionWorkDirFromEnv(env, ""); got != "/job/worktree" {
+		t.Fatalf("worktree override = %q, want %q", got, "/job/worktree")
+	}
+}
+
+func TestNativeSkillTargetDirIsCaseInsensitive(t *testing.T) {
+	got := nativeSkillTargetDir("Codex", "/tmp/work")
+	want := "/tmp/work/.agents/skills"
+	if got != want {
+		t.Fatalf("nativeSkillTargetDir() = %q, want %q", got, want)
+	}
+}

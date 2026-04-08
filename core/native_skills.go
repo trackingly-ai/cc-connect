@@ -128,20 +128,23 @@ func ensureManagedWorkspace(
 	if err := os.MkdirAll(targetDir, 0o755); err != nil {
 		return "", err
 	}
-	if err := clearDir(targetDir); err != nil {
+	manifestDir := filepath.Join(workspacePath, ".cc-connect")
+	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
+		return "", err
+	}
+	manifestPath := filepath.Join(manifestDir, "skills-manifest.json")
+	previous, _ := loadNativeSkillsManifest(manifestPath)
+	if err := reconcileManagedTarget(targetDir, previous, entries); err != nil {
 		return "", err
 	}
 	for _, entry := range entries {
 		dst := filepath.Join(targetDir, entry.Name)
+		_ = os.RemoveAll(dst)
 		if err := os.Symlink(entry.SourceDir, dst); err != nil {
 			if err := copyDir(entry.SourceDir, dst); err != nil {
 				return "", err
 			}
 		}
-	}
-	manifestDir := filepath.Join(workspacePath, ".cc-connect")
-	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
-		return "", err
 	}
 	manifest := nativeSkillsManifest{
 		Project:          projectName,
@@ -155,22 +158,37 @@ func ensureManagedWorkspace(
 	if err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(filepath.Join(manifestDir, "skills-manifest.json"), data, 0o644); err != nil {
+	if err := os.WriteFile(manifestPath, data, 0o644); err != nil {
 		return "", err
 	}
 	return workspacePath, nil
 }
 
-func clearDir(dir string) error {
-	entries, err := os.ReadDir(dir)
+func loadNativeSkillsManifest(path string) (*nativeSkillsManifest, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
+		return nil, err
 	}
-	for _, entry := range entries {
-		if err := os.RemoveAll(filepath.Join(dir, entry.Name())); err != nil {
+	var manifest nativeSkillsManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return nil, err
+	}
+	return &manifest, nil
+}
+
+func reconcileManagedTarget(targetDir string, previous *nativeSkillsManifest, desired []nativeSkillEntry) error {
+	if previous == nil {
+		return nil
+	}
+	desiredNames := make(map[string]struct{}, len(desired))
+	for _, entry := range desired {
+		desiredNames[entry.Name] = struct{}{}
+	}
+	for _, entry := range previous.Entries {
+		if _, ok := desiredNames[entry.Name]; ok {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(targetDir, entry.Name)); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 	}

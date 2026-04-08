@@ -24,7 +24,7 @@ func SessionWorkDirFromEnv(env []string, defaultDir string) string {
 
 // SessionExtraDirsFromEnv returns per-session extra work roots requested by the
 // bridge. The value is a filepath.ListSeparator-joined list in
-// CC_EXTRA_WORK_DIRS.
+// CC_EXTRA_WORK_DIRS. Later env entries win, matching SessionWorkDirFromEnv.
 func SessionExtraDirsFromEnv(env []string) []string {
 	for i := len(env) - 1; i >= 0; i-- {
 		entry := env[i]

@@ -35,3 +35,20 @@ func TestSessionWorkDirFromEnv(t *testing.T) {
 		})
 	}
 }
+
+func TestSessionExtraDirsFromEnv(t *testing.T) {
+	env := []string{
+		"CC_EXTRA_WORK_DIRS=/old/one:/old/two",
+		"CC_EXTRA_WORK_DIRS=/new/one:/new/two",
+	}
+	got := SessionExtraDirsFromEnv(env)
+	want := []string{"/new/one", "/new/two"}
+	if len(got) != len(want) {
+		t.Fatalf("len(got) = %d, want %d (%#v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
