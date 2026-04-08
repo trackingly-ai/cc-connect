@@ -94,14 +94,14 @@ using the repo `work_dir` as the agent's primary workspace.
 Instead, it should create and manage a session-scoped workspace:
 
 ```text
-<data_dir>/<agent-name>/<session-id>/
+<data_dir>/workspaces/<project-name>/<session_key_hash>/<skill_fingerprint>/
 ```
 
 Inside that managed workspace, `cc-connect` should materialize the merged
 effective skill set into the agent's native skill folder:
 
 ```text
-<data_dir>/<agent-name>/<session-id>/.<agent>/skills/
+<data_dir>/workspaces/<project-name>/<session_key_hash>/<skill_fingerprint>/.<agent>/skills/
 ```
 
 or the agent-specific equivalent such as `.agents/skills`.
@@ -441,21 +441,21 @@ project.skill_dirs -> effective skill set -> managed workspace native skill dire
 Proposed helper layout:
 
 ```text
-<data_dir>/<agent-name>/<session-id>/
-<data_dir>/<agent-name>/<session-id>/.cc-connect/skills-manifest.json
-<data_dir>/<agent-name>/<session-id>/.agents/skills/...
-<data_dir>/<agent-name>/<session-id>/.claude/skills/...
-<data_dir>/<agent-name>/<session-id>/.gemini/skills/...
-<data_dir>/<agent-name>/<session-id>/.qoder/skills/...
+<data_dir>/workspaces/<project-name>/<session_key_hash>/<skill_fingerprint>/
+<data_dir>/workspaces/<project-name>/<session_key_hash>/<skill_fingerprint>/.cc-connect/skills-manifest.json
+<data_dir>/workspaces/<project-name>/<session_key_hash>/<skill_fingerprint>/.agents/skills/...
+<data_dir>/workspaces/<project-name>/<session_key_hash>/<skill_fingerprint>/.claude/skills/...
+<data_dir>/workspaces/<project-name>/<session_key_hash>/<skill_fingerprint>/.gemini/skills/...
+<data_dir>/workspaces/<project-name>/<session_key_hash>/<skill_fingerprint>/.qoder/skills/...
 ```
 
 The manifest should record:
 
 - project name
 - agent type
-- session id
 - managed workspace path
-- real work roots passed separately to the agent CLI
+- session key hash
+- skill fingerprint
 - source roots
 - materialized target path
 - list of linked skills
@@ -514,11 +514,12 @@ Therefore:
   project if skill discovery is not live
 - for Mode A projects, the managed workspace should be created before session
   start and treated as part of session lifecycle state
-- because the managed workspace path is keyed by `<session-id>`, reload against
-  an existing live session should reconcile that session's current managed
-  workspace first; if skill roots changed incompatibly, Phase 2 should then
-  invalidate the native session and let the next session allocate a new managed
-  workspace path
+- because the managed workspace path is keyed by `session_key_hash` and
+  `skill_fingerprint`, the same chat session naturally reuses the same managed
+  workspace while the effective native skill set remains unchanged
+- if the effective native skill set changes, the `skill_fingerprint` changes
+  too, so the next session startup naturally lands in a new managed workspace
+  path
 
 Recommended policy:
 
@@ -585,7 +586,7 @@ Common framework:
 2. Allocate a managed workspace:
 
    ```text
-   <data_dir>/<agent-name>/<session-id>/
+   <data_dir>/workspaces/<project-name>/<session_key_hash>/<skill_fingerprint>/
    ```
 
 3. Resolve the agent-specific target directory inside that managed workspace
@@ -626,6 +627,51 @@ Empirical summary so far:
 - Qoder outside-path read: works when given an explicit absolute path
 - Codex `--add-dir`: extends writable sandbox scope
 - Codex `--add-dir`: does not load native skills from the added directory
+
+## Skill Fingerprint
+
+The `skill_fingerprint` should describe only the effective native skill set
+itself. It should not include absolute source paths, agent type, native target
+path, or other runtime launch parameters.
+
+Recommended definition:
+
+```text
+workspace_path =
+  <data_dir>/workspaces/<project-name>/<session_key_hash>/<skill_fingerprint>/
+```
+
+```text
+skill_fingerprint =
+  md5(
+    normalized list of:
+      rel
+      name
+      md5(SKILL.md)
+    sorted by name, then rel
+  )
+```
+
+Normalized skill entry shape:
+
+```text
+skill[0].rel=flaky-pytest
+skill[0].name=flaky-pytest
+skill[0].skill_md_md5=aaa...
+
+skill[1].rel=regression-check
+skill[1].name=regression-check
+skill[1].skill_md_md5=bbb...
+```
+
+Notes:
+
+- `rel` is the skill path relative to its logical skill-set root, not an
+  absolute filesystem path
+- `name` is the resolved native skill name exposed to the agent
+- entries should be sorted by `name`, then `rel`, before hashing
+- the final `skill_fingerprint` can use md5 because this is a deterministic
+  cache/workspace key rather than a security boundary
 
 ## Open Questions
 
