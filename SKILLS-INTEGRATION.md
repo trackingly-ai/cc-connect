@@ -205,25 +205,47 @@ Gemini therefore belongs in the same first implementation batch as Codex.
 
 ### Qoder
 
-Qoder documents native project-level and user-level skills.
+Qoder documents official native project-level and user-level skills and should
+be treated as a native integration target.
 
-Known documented path:
+Officially documented behavior:
 
-- `.qoder/skills/<skill-name>/SKILL.md`
+- user skills live at `~/.qoder/skills/{skill-name}/SKILL.md`
+- project skills live at `.qoder/skills/{skill-name}/SKILL.md`
+- project skills override user skills when names conflict
+- at startup, Qoder loads each skill's `name` and `description`
+- when a skill is selected, Qoder loads the full `SKILL.md`
+- updates take effect when Qoder CLI is started again
 
-Implication:
+Official reference:
 
-- `cc-connect` should materialize project skill roots into:
+- https://docs.qoder.com/cli/Skills
+
+Implication for `cc-connect`:
+
+- When a project uses `agent.type = "qoder"` and has project-specific
+  `skill_dirs`, `cc-connect` should materialize them into:
 
   ```text
   <workspace>/.qoder/skills/
   ```
 
-Pending confirmation from the exact Qoder docs the user provides:
+- Qoder should be included in the first native integration batch
+- because the docs do not explicitly promise symlink support or an external
+  overlay mechanism, the safest default is workspace-local materialization
 
-- whether symlinks are supported
-- whether project skills are discovered live or only on startup
-- how `--with-claude-config` interacts with `.qoder/skills`
+Recommended Qoder mechanism:
+
+1. Compute effective project skill roots
+2. Enumerate valid skill directories under those roots
+3. Materialize them under `<workspace>/.qoder/skills`
+4. Prefer deterministic reconcile behavior and assume a session restart is
+   required after changes, because the official docs describe startup-time
+   discovery
+
+Open Qoder-specific question:
+
+- whether symlink-based materialization is fully supported in practice
 
 ### Claude Code
 
