@@ -156,27 +156,52 @@ Recommended Codex mechanism:
 
 ### Gemini
 
-Gemini has an official native skills system and an official system prompt
-integration path.
+Gemini has an officially documented native skills system and should be treated
+as a first-batch native integration target.
 
-Documented references indicate:
+Officially documented behavior:
 
-- workspace and user skills are supported
-- skills are part of agent context
-- `activate_skill` is part of the tool flow
-- `GEMINI_SYSTEM_MD` supports system prompt customization
+- workspace skills are discovered from `.gemini/skills/` or the
+  `.agents/skills/` alias
+- user skills are discovered from `~/.gemini/skills/` or the
+  `~/.agents/skills/` alias
+- `gemini skills link <path>` creates symlinks for local skill repositories
+- at session start, Gemini injects the name and description of enabled skills
+  into the system prompt
+- when a skill is activated, Gemini adds the skill directory to allowed file
+  paths and loads the skill instructions and resources
 
-Implication:
+Official reference:
 
-- Gemini should also support a native per-project skill set
-- The likely native target is workspace-scoped skills, not bridge-only prompt
-  injection
+- https://geminicli.com/docs/cli/skills/
 
-Pending confirmation from the exact Gemini docs the user provides:
+Implication for `cc-connect`:
 
-- preferred on-disk workspace path
-- whether symlinks are acceptable
-- whether a new session is required for discovery
+- When a project uses `agent.type = "gemini"` and has project-specific
+  `skill_dirs`, `cc-connect` can safely materialize them into a workspace-native
+  skill directory
+- The preferred native target should be:
+
+  ```text
+  <workspace>/.agents/skills/
+  ```
+
+  because the alias is explicitly documented and interoperable across agent
+  tools
+
+- Symlink-based materialization is preferred and aligns with Gemini's own
+  documented `skills link` flow
+
+Recommended Gemini mechanism:
+
+1. Compute effective project skill roots
+2. Enumerate valid skill directories under those roots
+3. Create/update symlinks under `<workspace>/.agents/skills`
+4. Remove stale symlinks previously managed by `cc-connect`
+5. Start a new Gemini session, or require a session refresh if the running
+   session has already completed its startup-time skill discovery
+
+Gemini therefore belongs in the same first implementation batch as Codex.
 
 ### Qoder
 
