@@ -197,6 +197,7 @@ func main() {
 		}
 
 		engine := core.NewEngine(proj.Name, agent, platforms, sessionFile, lang)
+		engine.SetSkillDirs(resolveProjectSkillDirs(proj, agent))
 
 		// Wire global custom commands
 		for _, c := range cfg.Commands {
@@ -898,7 +899,47 @@ func reloadConfig(configPath, projName string, engine *core.Engine) (*core.Confi
 
 	// Reload disabled commands
 	engine.SetDisabledCommands(proj.DisabledCommands)
+	engine.SetSkillDirs(resolveProjectSkillDirs(*proj, engine.GetAgent()))
 
 	slog.Info("config reloaded", "project", projName)
 	return result, nil
+}
+
+func resolveProjectSkillDirs(proj config.ProjectConfig, ag core.Agent) []string {
+	var dirs []string
+	for _, dir := range proj.SkillDirs {
+		dir = strings.TrimSpace(dir)
+		if dir != "" {
+			dirs = append(dirs, dir)
+		}
+	}
+	if len(dirs) == 0 {
+		if sp, ok := ag.(core.SkillProvider); ok {
+			return sp.SkillDirs()
+		}
+		return nil
+	}
+	if proj.IncludeDefaultSkillDirs != nil && *proj.IncludeDefaultSkillDirs {
+		if sp, ok := ag.(core.SkillProvider); ok {
+			dirs = append(dirs, sp.SkillDirs()...)
+		}
+	}
+	return dedupeTrimmedStrings(dirs)
+}
+
+func dedupeTrimmedStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }

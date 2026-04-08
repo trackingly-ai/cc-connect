@@ -76,6 +76,63 @@ type = "claudecode"
 	}
 }
 
+func TestLoadParsesProjectSkillDirs(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	content := `
+[[projects]]
+name = "demo"
+skill_dirs = ["/tmp/tester-skills", "/tmp/shared-skills"]
+include_default_skill_dirs = true
+
+[projects.agent]
+type = "claudecode"
+
+[[projects.platforms]]
+type = "telegram"
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if len(cfg.Projects) != 1 {
+		t.Fatalf("unexpected project count: %d", len(cfg.Projects))
+	}
+	proj := cfg.Projects[0]
+	if len(proj.SkillDirs) != 2 || proj.SkillDirs[0] != "/tmp/tester-skills" || proj.SkillDirs[1] != "/tmp/shared-skills" {
+		t.Fatalf("unexpected skill dirs: %#v", proj.SkillDirs)
+	}
+	if proj.IncludeDefaultSkillDirs == nil || !*proj.IncludeDefaultSkillDirs {
+		t.Fatalf("expected include_default_skill_dirs=true, got %#v", proj.IncludeDefaultSkillDirs)
+	}
+}
+
+func TestLoadRejectsRelativeProjectSkillDir(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	content := `
+[[projects]]
+name = "demo"
+skill_dirs = ["relative/skills"]
+
+[projects.agent]
+type = "claudecode"
+
+[[projects.platforms]]
+type = "telegram"
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if _, err := Load(configPath); err == nil {
+		t.Fatal("expected relative skill dir validation error")
+	}
+}
+
 const minimalConfigTOML = `
 [[projects]]
 name = "demo"

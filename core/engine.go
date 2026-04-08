@@ -378,6 +378,10 @@ func (e *Engine) SetDisplaySaveFunc(fn func(thinkingMaxLen, toolMaxLen *int) err
 	e.displaySaveFunc = fn
 }
 
+func (e *Engine) SetSkillDirs(dirs []string) {
+	e.skills.SetDirs(dirs)
+}
+
 // ConfigReloadResult describes what was updated by a config reload.
 type ConfigReloadResult struct {
 	DisplayUpdated   bool

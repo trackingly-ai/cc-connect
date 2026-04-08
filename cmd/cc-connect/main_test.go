@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -24,6 +25,13 @@ func (a *buildJobManagerTestAgent) ListSessions(
 	return nil, nil
 }
 func (a *buildJobManagerTestAgent) Stop() error { return nil }
+
+type testSkillAgent struct {
+	buildJobManagerTestAgent
+	dirs []string
+}
+
+func (a *testSkillAgent) SkillDirs() []string { return append([]string(nil), a.dirs...) }
 
 type buildJobManagerTestSession struct{}
 
@@ -78,4 +86,39 @@ func TestBuildJobManagerRegistersProjectRunners(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("job %s did not complete in time", job.ID)
+}
+
+func TestResolveProjectSkillDirsFallsBackToAgentDefaults(t *testing.T) {
+	agent := &testSkillAgent{dirs: []string{"/default/a", "/default/b"}}
+	got := resolveProjectSkillDirs(config.ProjectConfig{Name: "demo"}, agent)
+	want := []string{"/default/a", "/default/b"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("resolveProjectSkillDirs() = %#v, want %#v", got, want)
+	}
+}
+
+func TestResolveProjectSkillDirsOverridesAgentDefaultsByDefault(t *testing.T) {
+	agent := &testSkillAgent{dirs: []string{"/default/a", "/default/b"}}
+	got := resolveProjectSkillDirs(config.ProjectConfig{
+		Name:      "demo",
+		SkillDirs: []string{"/project/tester", "/project/shared"},
+	}, agent)
+	want := []string{"/project/tester", "/project/shared"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("resolveProjectSkillDirs() = %#v, want %#v", got, want)
+	}
+}
+
+func TestResolveProjectSkillDirsCanIncludeAgentDefaults(t *testing.T) {
+	includeDefaults := true
+	agent := &testSkillAgent{dirs: []string{"/default/a", "/default/b", "/project/shared"}}
+	got := resolveProjectSkillDirs(config.ProjectConfig{
+		Name:                    "demo",
+		SkillDirs:               []string{"/project/tester", "/project/shared"},
+		IncludeDefaultSkillDirs: &includeDefaults,
+	}, agent)
+	want := []string{"/project/tester", "/project/shared", "/default/a", "/default/b"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("resolveProjectSkillDirs() = %#v, want %#v", got, want)
+	}
 }

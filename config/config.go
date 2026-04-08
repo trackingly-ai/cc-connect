@@ -129,12 +129,14 @@ type TTSConfig struct {
 
 // ProjectConfig binds one agent (with a specific work_dir) to one or more platforms.
 type ProjectConfig struct {
-	Name             string            `toml:"name"`
-	Agent            AgentConfig       `toml:"agent"`
-	Platforms        []PlatformConfig  `toml:"platforms"`
-	Quiet            *bool             `toml:"quiet,omitempty"`             // project-level quiet mode; overrides global setting
-	DisabledCommands []string          `toml:"disabled_commands,omitempty"` // commands to disable for this project (e.g. ["restart", "upgrade"])
-	Echo             EchoProjectConfig `toml:"echo"`
+	Name                    string            `toml:"name"`
+	Agent                   AgentConfig       `toml:"agent"`
+	Platforms               []PlatformConfig  `toml:"platforms"`
+	Quiet                   *bool             `toml:"quiet,omitempty"`             // project-level quiet mode; overrides global setting
+	DisabledCommands        []string          `toml:"disabled_commands,omitempty"` // commands to disable for this project (e.g. ["restart", "upgrade"])
+	SkillDirs               []string          `toml:"skill_dirs,omitempty"`
+	IncludeDefaultSkillDirs *bool             `toml:"include_default_skill_dirs,omitempty"`
+	Echo                    EchoProjectConfig `toml:"echo"`
 }
 
 // EchoProjectConfig controls how a local project is exposed to Echo as a worker lane.
@@ -233,6 +235,11 @@ func (c *Config) validate() error {
 		for j, p := range proj.Platforms {
 			if p.Type == "" {
 				return fmt.Errorf("config: %s.platforms[%d].type is required", prefix, j)
+			}
+		}
+		for j, dir := range proj.SkillDirs {
+			if !filepath.IsAbs(dir) {
+				return fmt.Errorf("config: %s.skill_dirs[%d] must be an absolute path", prefix, j)
 			}
 		}
 	}
