@@ -37,14 +37,14 @@ enabled = true
 role = "architect"
 
 [[projects]]
-name = "echo-research-reviewer-claude"
+name = "echo-research-reviewer-qoder"
 
 [projects.agent]
-type = "claudecode"
+type = "qoder"
 
 [projects.agent.options]
 work_dir = "{{ECHO_REPO_DIR}}"
-mode = "{{CLAUDE_RESEARCH_REVIEWER_MODE}}"
+mode = "{{QODER_REVIEWER_MODE}}"
 
 [projects.echo]
 enabled = true
@@ -105,6 +105,20 @@ mode = "{{QODER_REVIEWER_MODE}}"
 [projects.echo]
 enabled = true
 role = "reviewer"
+
+[[projects]]
+name = "echo-test-engineer-claude"
+
+[projects.agent]
+type = "claudecode"
+
+[projects.agent.options]
+work_dir = "{{ECHO_REPO_DIR}}"
+mode = "{{CLAUDE_TEST_ENGINEER_MODE}}"
+
+[projects.echo]
+enabled = true
+role = "test_engineer"
 
 [[projects]]
 name = "echo-lander-codex"
