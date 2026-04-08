@@ -49,10 +49,10 @@ type claudeSession struct {
 
 var heicImageConverter = convertHEICImage
 
-func newClaudeSession(ctx context.Context, workDir, model, sessionID, mode string, allowedTools []string, extraEnv []string) (*claudeSession, error) {
+func newClaudeSession(ctx context.Context, workDir, model, sessionID, mode string, allowedTools []string, extraDirs []string, extraEnv []string) (*claudeSession, error) {
 	sessionCtx, cancel := context.WithCancel(ctx)
 
-	args := buildClaudeSessionArgs(model, sessionID, mode, allowedTools)
+	args := buildClaudeSessionArgs(model, sessionID, mode, allowedTools, extraDirs)
 
 	slog.Debug("claudeSession: starting", "args", core.RedactArgs(args), "dir", workDir, "mode", mode)
 
@@ -104,7 +104,7 @@ func newClaudeSession(ctx context.Context, workDir, model, sessionID, mode strin
 	return cs, nil
 }
 
-func buildClaudeSessionArgs(model, sessionID, mode string, allowedTools []string) []string {
+func buildClaudeSessionArgs(model, sessionID, mode string, allowedTools []string, extraDirs []string) []string {
 	args := []string{
 		"--output-format", "stream-json",
 		"--verbose",
@@ -123,6 +123,12 @@ func buildClaudeSessionArgs(model, sessionID, mode string, allowedTools []string
 	}
 	if len(allowedTools) > 0 {
 		args = append(args, "--allowedTools", strings.Join(allowedTools, ","))
+	}
+	for _, dir := range extraDirs {
+		if strings.TrimSpace(dir) == "" {
+			continue
+		}
+		args = append(args, "--add-dir", dir)
 	}
 	if sysPrompt := core.AgentSystemPrompt(); sysPrompt != "" {
 		args = append(args, "--append-system-prompt", sysPrompt)

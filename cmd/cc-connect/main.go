@@ -197,7 +197,9 @@ func main() {
 		}
 
 		engine := core.NewEngine(proj.Name, agent, platforms, sessionFile, lang)
+		engine.SetDataDir(cfg.DataDir)
 		engine.SetSkillDirs(resolveProjectSkillDirs(proj, agent))
+		engine.SetManagedSkillConfig(len(proj.SkillDirs) > 0, resolveProjectSkillDirs(proj, agent))
 
 		// Wire global custom commands
 		for _, c := range cfg.Commands {
@@ -900,6 +902,7 @@ func reloadConfig(configPath, projName string, engine *core.Engine) (*core.Confi
 	// Reload disabled commands
 	engine.SetDisabledCommands(proj.DisabledCommands)
 	engine.SetSkillDirs(resolveProjectSkillDirs(*proj, engine.GetAgent()))
+	engine.SetManagedSkillConfig(len(proj.SkillDirs) > 0, resolveProjectSkillDirs(*proj, engine.GetAgent()))
 
 	slog.Info("config reloaded", "project", projName)
 	return result, nil

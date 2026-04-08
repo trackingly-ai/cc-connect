@@ -26,6 +26,7 @@ type codexSession struct {
 	workDir   string
 	model     string
 	mode      string
+	extraDirs []string
 	extraEnv  []string
 	events    chan core.Event
 	closeOnce sync.Once
@@ -45,13 +46,14 @@ type codexSession struct {
 	closeTimeout time.Duration
 }
 
-func newCodexSession(ctx context.Context, workDir, model, mode, resumeID string, extraEnv []string) (*codexSession, error) {
+func newCodexSession(ctx context.Context, workDir, model, mode, resumeID string, extraDirs []string, extraEnv []string) (*codexSession, error) {
 	sessionCtx, cancel := context.WithCancel(ctx)
 
 	cs := &codexSession{
 		workDir:      workDir,
 		model:        model,
 		mode:         mode,
+		extraDirs:    append([]string(nil), extraDirs...),
 		extraEnv:     extraEnv,
 		events:       make(chan core.Event, 64),
 		ctx:          sessionCtx,
@@ -104,6 +106,12 @@ func (cs *codexSession) Send(prompt string, images []core.ImageAttachment, files
 
 	if cs.model != "" {
 		args = append(args, "--model", cs.model)
+	}
+	for _, dir := range cs.extraDirs {
+		if strings.TrimSpace(dir) == "" {
+			continue
+		}
+		args = append(args, "--add-dir", dir)
 	}
 	for _, imagePath := range imagePaths {
 		args = append(args, "--image", imagePath)

@@ -242,11 +242,16 @@ func (r engineJobRunner) Run(
 func (e *Engine) startAgentSession(
 	ctx context.Context,
 	sessionID string,
+	sessionKey string,
 	envVars []string,
 ) (AgentSession, error) {
 	e.agentStartMu.Lock()
 	defer e.agentStartMu.Unlock()
 
+	envVars, err := e.prepareManagedSkillEnv(sessionKey, envVars)
+	if err != nil {
+		return nil, err
+	}
 	if inj, ok := e.agent.(SessionEnvInjector); ok {
 		inj.SetSessionEnv(envVars)
 	}
@@ -265,7 +270,7 @@ func (e *Engine) StartJobSession(
 	if err := validateJobWorkspace(req.WorkspaceRef); err != nil {
 		return nil, err
 	}
-	return e.startAgentSession(ctx, "", e.jobEnv(req, jobID, sessionKey))
+	return e.startAgentSession(ctx, "", sessionKey, e.jobEnv(req, jobID, sessionKey))
 }
 
 func (e *Engine) sessionEnv(sessionKey string) []string {
@@ -285,6 +290,47 @@ func (e *Engine) sessionEnv(sessionKey string) []string {
 		}
 	}
 	return envVars
+}
+
+func (e *Engine) prepareManagedSkillEnv(sessionKey string, envVars []string) ([]string, error) {
+	e.managedSkillMu.RLock()
+	enabled := e.managedSkillEnabled
+	roots := append([]string(nil), e.managedSkillRoots...)
+	e.managedSkillMu.RUnlock()
+	if !enabled || len(roots) == 0 || strings.TrimSpace(e.dataDir) == "" {
+		return envVars, nil
+	}
+
+	workDir := "."
+	if wd, ok := e.agent.(interface{ GetWorkDir() string }); ok {
+		workDir = wd.GetWorkDir()
+	}
+	workDir = SessionWorkDirFromEnv(envVars, workDir)
+	if workDir != "" {
+		if abs, err := filepath.Abs(workDir); err == nil {
+			workDir = abs
+		}
+	}
+
+	workspacePath, err := ensureManagedWorkspace(e.dataDir, e.name, e.agent.Name(), sessionKey, roots)
+	if err != nil {
+		return nil, fmt.Errorf("prepare managed workspace: %w", err)
+	}
+
+	out := append([]string(nil), envVars...)
+	out = append(out, "CC_WORKTREE_PATH="+workspacePath)
+
+	var extraDirs []string
+	switch e.agent.Name() {
+	case "claudecode", "codex", "gemini":
+		if strings.TrimSpace(workDir) != "" {
+			extraDirs = append(extraDirs, workDir)
+		}
+	}
+	if len(extraDirs) > 0 {
+		out = append(out, "CC_EXTRA_WORK_DIRS="+strings.Join(extraDirs, string(filepath.ListSeparator)))
+	}
+	return out, nil
 }
 
 func (e *Engine) jobEnv(req JobRequest, jobID string, sessionID string) []string {

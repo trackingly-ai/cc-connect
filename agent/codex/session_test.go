@@ -45,7 +45,7 @@ func TestSend_HandlesLargeJSONLines(t *testing.T) {
 	t.Setenv("CODEX_PAYLOAD_FILE", payloadFile)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	cs, err := newCodexSession(context.Background(), workDir, "", "", "", nil)
+	cs, err := newCodexSession(context.Background(), workDir, "", "", "", nil, nil)
 	if err != nil {
 		t.Fatalf("newCodexSession: %v", err)
 	}
@@ -108,7 +108,7 @@ wait $child
 
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	cs, err := newCodexSession(context.Background(), workDir, "", "", "", nil)
+	cs, err := newCodexSession(context.Background(), workDir, "", "", "", nil, nil)
 	if err != nil {
 		t.Fatalf("newCodexSession: %v", err)
 	}
@@ -169,7 +169,7 @@ echo '{"type":"turn.completed"}'
 	t.Setenv("CODEX_ARGS_FILE", argsFile)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	cs, err := newCodexSession(context.Background(), workDir, "", "", "", nil)
+	cs, err := newCodexSession(context.Background(), workDir, "", "", "", nil, nil)
 	if err != nil {
 		t.Fatalf("newCodexSession: %v", err)
 	}
@@ -249,7 +249,7 @@ func TestSend_UsesStdinForMultilinePrompt(t *testing.T) {
 	t.Setenv("CODEX_STDIN_FILE", stdinFile)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	cs, err := newCodexSession(context.Background(), workDir, "", "", "", nil)
+	cs, err := newCodexSession(context.Background(), workDir, "", "", "", nil, nil)
 	if err != nil {
 		t.Fatalf("newCodexSession: %v", err)
 	}

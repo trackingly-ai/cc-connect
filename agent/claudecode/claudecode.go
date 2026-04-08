@@ -218,6 +218,7 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 	extraEnv := a.providerEnvLocked()
 	extraEnv = append(extraEnv, a.sessionEnv...)
 	workDir := core.SessionWorkDirFromEnv(extraEnv, a.workDir)
+	extraDirs := core.SessionExtraDirsFromEnv(extraEnv)
 
 	// Add Claude Code Router environment variables if configured
 	if a.routerURL != "" {
@@ -239,7 +240,7 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 	}
 	a.mu.Unlock()
 
-	return newClaudeSession(ctx, workDir, model, sessionID, a.mode, tools, extraEnv)
+	return newClaudeSession(ctx, workDir, model, sessionID, a.mode, tools, extraDirs, extraEnv)
 }
 
 func (a *Agent) ListSessions(ctx context.Context) ([]core.AgentSessionInfo, error) {

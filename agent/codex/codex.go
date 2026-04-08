@@ -192,6 +192,7 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 	extraEnv := a.providerEnvLocked()
 	extraEnv = append(extraEnv, a.sessionEnv...)
 	workDir := core.SessionWorkDirFromEnv(extraEnv, a.workDir)
+	extraDirs := core.SessionExtraDirsFromEnv(extraEnv)
 	if a.activeIdx >= 0 && a.activeIdx < len(a.providers) {
 		if m := a.providers[a.activeIdx].Model; m != "" {
 			model = m
@@ -199,7 +200,7 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 	}
 	a.mu.Unlock()
 
-	return newCodexSession(ctx, workDir, model, mode, sessionID, extraEnv)
+	return newCodexSession(ctx, workDir, model, mode, sessionID, extraDirs, extraEnv)
 }
 
 func (a *Agent) ListSessions(_ context.Context) ([]core.AgentSessionInfo, error) {

@@ -3,10 +3,10 @@ package claudecode
 import (
 	"bytes"
 	"encoding/json"
-	"io"
 	"image"
 	"image/color"
 	"image/png"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -54,6 +54,7 @@ func TestBuildClaudeSessionArgsUsesExpectedDefaults(t *testing.T) {
 		"357aaa11-8e6b-49dd-a6e3-b954cad2ca8d",
 		"bypassPermissions",
 		[]string{"Read", "Bash"},
+		nil,
 	)
 
 	requiredPairs := [][2]string{
@@ -78,7 +79,7 @@ func TestBuildClaudeSessionArgsUsesExpectedDefaults(t *testing.T) {
 }
 
 func TestBuildClaudeSessionArgsOmitsOptionalValues(t *testing.T) {
-	args := buildClaudeSessionArgs("", "", "default", nil)
+	args := buildClaudeSessionArgs("", "", "default", nil, nil)
 
 	for _, forbidden := range []string{
 		"--permission-mode",
@@ -93,7 +94,7 @@ func TestBuildClaudeSessionArgsOmitsOptionalValues(t *testing.T) {
 }
 
 func TestBuildClaudeSessionArgsDoesNotResumeSyntheticSessionKey(t *testing.T) {
-	args := buildClaudeSessionArgs("", "echo-job-job_bb5b7c746d3b2298", "default", nil)
+	args := buildClaudeSessionArgs("", "echo-job-job_bb5b7c746d3b2298", "default", nil, nil)
 
 	if slices.Contains(args, "--resume") {
 		t.Fatalf("args unexpectedly resumed synthetic session key: %v", args)

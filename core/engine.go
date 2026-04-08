@@ -149,6 +149,7 @@ type Engine struct {
 
 	commands *CommandRegistry
 	skills   *SkillRegistry
+	dataDir  string
 	aliases  map[string]string // trigger → command (e.g. "帮助" → "/help")
 	aliasMu  sync.RWMutex
 
@@ -185,6 +186,10 @@ type Engine struct {
 	quiet   bool // when true, suppress thinking and tool progress messages globally
 
 	agentStartMu sync.Mutex
+
+	managedSkillMu      sync.RWMutex
+	managedSkillEnabled bool
+	managedSkillRoots   []string
 }
 
 // interactiveState tracks a running interactive agent session and its permission state.
@@ -380,6 +385,17 @@ func (e *Engine) SetDisplaySaveFunc(fn func(thinkingMaxLen, toolMaxLen *int) err
 
 func (e *Engine) SetSkillDirs(dirs []string) {
 	e.skills.SetDirs(dirs)
+}
+
+func (e *Engine) SetDataDir(dataDir string) {
+	e.dataDir = dataDir
+}
+
+func (e *Engine) SetManagedSkillConfig(enabled bool, roots []string) {
+	e.managedSkillMu.Lock()
+	defer e.managedSkillMu.Unlock()
+	e.managedSkillEnabled = enabled
+	e.managedSkillRoots = append([]string(nil), roots...)
 }
 
 // ConfigReloadResult describes what was updated by a config reload.
@@ -1969,6 +1985,7 @@ func (e *Engine) getOrCreateInteractiveState(sessionKey string, p Platform, repl
 	agentSession, err := e.startAgentSession(
 		e.ctx,
 		session.AgentSessionID,
+		sessionKey,
 		envVars,
 	)
 	startElapsed := time.Since(startAt)
@@ -6263,7 +6280,7 @@ func (e *Engine) HandleRelay(ctx context.Context, fromProject, chatID, message s
 
 	envVars := e.sessionEnv(relaySessionKey)
 
-	agentSession, err := e.startAgentSession(ctx, session.AgentSessionID, envVars)
+	agentSession, err := e.startAgentSession(ctx, session.AgentSessionID, relaySessionKey, envVars)
 	if err != nil {
 		return "", fmt.Errorf("start relay session: %w", err)
 	}

@@ -28,6 +28,7 @@ type geminiSession struct {
 	workDir   string
 	model     string
 	mode      string
+	extraDirs []string
 	extraEnv  []string
 	events    chan core.Event
 	closeOnce sync.Once
@@ -40,18 +41,19 @@ type geminiSession struct {
 	pendingMsgs []string // buffered assistant messages awaiting classification
 }
 
-func newGeminiSession(ctx context.Context, cmd, workDir, model, mode, resumeID string, extraEnv []string) (*geminiSession, error) {
+func newGeminiSession(ctx context.Context, cmd, workDir, model, mode, resumeID string, extraDirs []string, extraEnv []string) (*geminiSession, error) {
 	sessionCtx, cancel := context.WithCancel(ctx)
 
 	gs := &geminiSession{
-		cmd:      cmd,
-		workDir:  workDir,
-		model:    model,
-		mode:     mode,
-		extraEnv: extraEnv,
-		events:   make(chan core.Event, 64),
-		ctx:      sessionCtx,
-		cancel:   cancel,
+		cmd:       cmd,
+		workDir:   workDir,
+		model:     model,
+		mode:      mode,
+		extraDirs: append([]string(nil), extraDirs...),
+		extraEnv:  extraEnv,
+		events:    make(chan core.Event, 64),
+		ctx:       sessionCtx,
+		cancel:    cancel,
 	}
 	gs.alive.Store(true)
 
@@ -122,6 +124,12 @@ func (gs *geminiSession) Send(prompt string, images []core.ImageAttachment, file
 	}
 	if gs.model != "" {
 		args = append(args, "-m", gs.model)
+	}
+	for _, dir := range gs.extraDirs {
+		if strings.TrimSpace(dir) == "" {
+			continue
+		}
+		args = append(args, "--include-directories", dir)
 	}
 
 	fileRefs := core.SaveFilesToDisk(gs.workDir, files)

@@ -64,3 +64,21 @@ func TestQoderSession(t *testing.T) {
 	}
 	fmt.Printf("Session ID: %s\n", sid)
 }
+
+func TestSkillDirsUseQoderPaths(t *testing.T) {
+	agent, err := New(map[string]any{"work_dir": "/tmp/demo"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	q, ok := agent.(*Agent)
+	if !ok {
+		t.Fatalf("unexpected agent type %T", agent)
+	}
+	dirs := q.SkillDirs()
+	if len(dirs) == 0 {
+		t.Fatal("expected skill dirs")
+	}
+	if got := dirs[0]; got != "/tmp/demo/.qoder/skills" {
+		t.Fatalf("first skill dir = %q, want %q", got, "/tmp/demo/.qoder/skills")
+	}
+}
