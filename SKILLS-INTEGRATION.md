@@ -2,6 +2,22 @@
 
 Status: draft design
 
+## Validation Status
+
+This document now distinguishes between:
+
+- documented behavior confirmed from official product docs
+- local behavior validated empirically on this machine with temporary test
+  workspaces
+
+The local validation described below used a minimal skill:
+
+- `name: test-skill`
+- `description: Use when the user says TRIGGER_SKILL_TEST. Reply exactly with SKILL_OK.`
+
+and tested whether each CLI could discover and activate the skill when launched
+from a temporary workspace.
+
 ## Goal
 
 Allow different `cc-connect` projects to expose different native skill sets to
@@ -173,6 +189,17 @@ Recommended Codex mechanism:
 5. Start a new Codex session, or require a new session if Codex only discovers
    skills at startup
 
+Local validation result:
+
+- validated in a temporary workspace using `.agents/skills/test-skill/SKILL.md`
+- `codex exec` explicitly reported that it was using `test-skill`
+- Codex read the skill file from `.agents/skills/test-skill/SKILL.md`
+- the run completed with `SKILL_OK`
+
+Current confidence:
+
+- documented and empirically validated
+
 ### Gemini
 
 Gemini has an officially documented native skills system and should be treated
@@ -222,6 +249,22 @@ Recommended Gemini mechanism:
 
 Gemini therefore belongs in the same first implementation batch as Codex.
 
+Local validation result:
+
+- validated in a temporary workspace with both `.agents/skills/test-skill` and
+  `.gemini/skills/test-skill`
+- Gemini reported a skill conflict and correctly preferred `.agents/skills`
+  over `.gemini/skills`, matching the documented precedence
+- Gemini then printed that it would activate `test-skill`
+- the specific run did not complete because the backend returned a model
+  capacity `429` error
+
+Current confidence:
+
+- documented and discovery path empirically validated
+- full end-to-end activation was attempted but interrupted by upstream capacity,
+  not by local skill discovery failure
+
 ### Qoder
 
 Qoder documents official native project-level and user-level skills and should
@@ -265,6 +308,20 @@ Recommended Qoder mechanism:
 Open Qoder-specific question:
 
 - whether symlink-based materialization is fully supported in practice
+
+Local validation result:
+
+- validated in a temporary workspace using `.qoder/skills/test-skill/SKILL.md`
+- Qoder completed the run with `SKILL_OK`
+- an additional local test used a symlinked skill directory under
+  `.qoder/skills/test-skill`
+- the symlinked version also completed with `SKILL_OK`
+
+Current confidence:
+
+- documented native project skills are confirmed
+- symlink behavior works empirically on this machine, although it is still not
+  explicitly promised by the docs
 
 ### Claude Code
 
@@ -313,6 +370,19 @@ Recommended Claude mechanism:
 4. Reconcile managed entries and remove stale ones
 5. Prefer a fresh Claude session after changes unless live detection is being
    explicitly relied upon
+
+Local validation result:
+
+- validated in a temporary workspace using `.claude/skills/test-skill/SKILL.md`
+- Claude completed the run with `SKILL_OK`
+- a second local test used an external overlay directory containing
+  `.claude/skills/test-skill/SKILL.md` and launched Claude with `--add-dir`
+- the overlay-based run also completed with `SKILL_OK`
+
+Current confidence:
+
+- documented and empirically validated for both project-local skills and the
+  `--add-dir` overlay path
 
 ## Materialization Model
 
@@ -459,6 +529,16 @@ Initial target mapping:
 
 This yields one reusable implementation with agent-specific target path
 selection rather than four separate integration models.
+
+Empirical summary so far:
+
+- Codex project-local skills: works
+- Claude project-local skills: works
+- Claude `--add-dir` overlay skills: works
+- Gemini project-local discovery and activation start: works, final response
+  blocked by upstream `429`
+- Qoder project-local skills: works
+- Qoder symlinked project-local skills: works on this machine
 
 ## Open Questions
 
