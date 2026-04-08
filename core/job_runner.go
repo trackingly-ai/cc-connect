@@ -300,19 +300,21 @@ func (e *Engine) prepareManagedSkillEnv(sessionKey string, envVars []string) ([]
 	if !enabled || len(roots) == 0 || strings.TrimSpace(e.dataDir) == "" {
 		return envVars, nil
 	}
-	defaultWorkDir := "."
+	// configuredWorkDir is the project's configured/default agent work_dir, which
+	// remains the extra attached root when a job injects a different worktree.
+	configuredWorkDir := "."
 	if wd, ok := e.agent.(interface{ GetWorkDir() string }); ok {
-		defaultWorkDir = wd.GetWorkDir()
+		configuredWorkDir = wd.GetWorkDir()
 	}
-	effectiveWorkDir := SessionWorkDirFromEnv(envVars, defaultWorkDir)
+	effectiveWorkDir := SessionWorkDirFromEnv(envVars, configuredWorkDir)
 	if effectiveWorkDir != "" {
 		if abs, err := filepath.Abs(effectiveWorkDir); err == nil {
 			effectiveWorkDir = abs
 		}
 	}
-	if defaultWorkDir != "" {
-		if abs, err := filepath.Abs(defaultWorkDir); err == nil {
-			defaultWorkDir = abs
+	if configuredWorkDir != "" {
+		if abs, err := filepath.Abs(configuredWorkDir); err == nil {
+			configuredWorkDir = abs
 		}
 	}
 
@@ -349,8 +351,8 @@ func (e *Engine) prepareManagedSkillEnv(sessionKey string, envVars []string) ([]
 	var extraDirs []string
 	switch e.agent.Name() {
 	case "claudecode", "codex", "gemini", "qoder":
-		if strings.TrimSpace(defaultWorkDir) != "" && defaultWorkDir != workspacePath {
-			extraDirs = append(extraDirs, defaultWorkDir)
+		if strings.TrimSpace(configuredWorkDir) != "" && configuredWorkDir != workspacePath {
+			extraDirs = append(extraDirs, configuredWorkDir)
 		}
 	}
 	if len(extraDirs) > 0 {

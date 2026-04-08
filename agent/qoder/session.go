@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -70,10 +71,17 @@ func (qs *qoderSession) Send(prompt string, images []core.ImageAttachment, files
 	}
 
 	args := []string{"-p", prompt, "-f", "stream-json", "-q"}
+	workDirKey := normalizedQoderWorkspacePath(qs.workDir)
+	seenDirs := make(map[string]struct{})
 	for _, dir := range qs.extraDirs {
-		if strings.TrimSpace(dir) == "" || dir == qs.workDir {
+		key := normalizedQoderWorkspacePath(dir)
+		if key == "" || key == workDirKey {
 			continue
 		}
+		if _, ok := seenDirs[key]; ok {
+			continue
+		}
+		seenDirs[key] = struct{}{}
 		args = append(args, "-w", dir)
 	}
 	args = append(args, "-w", qs.workDir)
@@ -118,6 +126,14 @@ func (qs *qoderSession) Send(prompt string, images []core.ImageAttachment, files
 	go qs.readLoop(cmd, stdout, &stderrBuf)
 
 	return nil
+}
+
+func normalizedQoderWorkspacePath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	return filepath.Clean(path)
 }
 
 func (qs *qoderSession) readLoop(cmd *exec.Cmd, stdout io.ReadCloser, stderrBuf *bytes.Buffer) {

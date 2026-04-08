@@ -292,16 +292,21 @@ func ensureGitExcludePatterns(excludePath string, patterns []string) error {
 		return err
 	}
 	existing := string(existingData)
+	existingLines := make(map[string]struct{})
+	for _, line := range strings.Split(existing, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		existingLines[line] = struct{}{}
+	}
 	var toAppend []string
 	for _, pattern := range patterns {
 		pattern = strings.TrimSpace(filepath.ToSlash(pattern))
 		if pattern == "" {
 			continue
 		}
-		if strings.Contains(existing, "\n"+pattern+"\n") ||
-			strings.HasPrefix(existing, pattern+"\n") ||
-			strings.HasSuffix(existing, "\n"+pattern) ||
-			existing == pattern {
+		if _, ok := existingLines[pattern]; ok {
 			continue
 		}
 		toAppend = append(toAppend, pattern)
