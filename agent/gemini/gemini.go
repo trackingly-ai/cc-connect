@@ -257,9 +257,15 @@ func (a *Agent) SkillDirs() []string {
 	if err != nil {
 		absDir = a.workDir
 	}
-	dirs := []string{filepath.Join(absDir, ".gemini", "skills")}
+	dirs := []string{
+		filepath.Join(absDir, ".agents", "skills"),
+		filepath.Join(absDir, ".gemini", "skills"),
+	}
 	if home, err := os.UserHomeDir(); err == nil {
-		dirs = append(dirs, filepath.Join(home, ".gemini", "skills"))
+		dirs = append(dirs,
+			filepath.Join(home, ".agents", "skills"),
+			filepath.Join(home, ".gemini", "skills"),
+		)
 	}
 	return dirs
 }
