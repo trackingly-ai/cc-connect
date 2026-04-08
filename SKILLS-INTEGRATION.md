@@ -72,6 +72,22 @@ For agents with a documented native skill discovery mechanism, `cc-connect`
 should materialize the configured project skill roots into the agent's native
 workspace-scoped location before a session starts.
 
+Preferred default strategy:
+
+- use project-local native skill folders inside the workspace
+
+Why this should be the default:
+
+- all currently confirmed target agents support a project/workspace-level native
+  skills location
+- it gives one consistent mental model across agents
+- it allows `cc-connect` to reuse most of the same reconcile logic and
+  scaffolding
+- it keeps role-specific skill sets attached to the project lane instead of a
+  user-global location
+- it avoids making first-batch support depend on agent-specific secondary
+  features such as `--add-dir` or CLI-side skill management commands
+
 Preferred approach:
 
 1. Resolve the project's effective skill roots from config
@@ -81,14 +97,17 @@ Preferred approach:
 
 Preferred materialization mode:
 
-- Use symlinks, not copies
+- start with a shared workspace-local materialization model
+- prefer symlinks where the agent explicitly documents or demonstrates support
+- fall back to managed copies only where symlink behavior is undocumented or
+  unsupported
 
 Reasons:
 
-- Avoid stale duplicated skill contents
-- Reflect skill changes immediately on disk
-- Match Codex's documented support for symlinked skill folders
-- Keep project-specific skill sets lightweight
+- maximize shared code across agents
+- keep the first implementation simple and predictable
+- preserve a single "project role owns project-native skills" mental model
+- avoid stale duplicated skill contents where symlinks are supported
 
 ## Why Per-Project Matters
 
@@ -249,32 +268,51 @@ Open Qoder-specific question:
 
 ### Claude Code
 
-Claude Code should be treated more carefully.
+Claude Code documents official native skills support and should be treated as a
+native integration target.
 
-Claude clearly supports:
+Officially documented behavior:
 
-- `CLAUDE.md`
-- subagents
-- slash commands
-- plugins
-- appended system prompts
+- personal skills live at `~/.claude/skills/<skill-name>/SKILL.md`
+- project skills live at `.claude/skills/<skill-name>/SKILL.md`
+- plugin skills are also supported
+- nested `.claude/skills` directories are discovered when working in
+  subdirectories
+- skills are loaded automatically when relevant or invoked directly as
+  `/skill-name`
+- `.claude/commands/` remains supported, but skills are the preferred format
+- `--add-dir` can load `.claude/skills/` from additional directories as a
+  documented exception
 
-What is not yet treated as sufficiently documented here:
+Official references:
 
-- a stable, official native local skills root equivalent to Codex's
-  `.agents/skills`
+- https://code.claude.com/docs/en/skills
+- https://docs.anthropic.com/en/docs/claude-code/settings
+- https://docs.anthropic.com/en/docs/claude-code/sub-agents
 
-So for Claude the safe default design is:
+Implication for `cc-connect`:
 
-- do not assume a native skill directory until the docs confirm it
-- prefer native role injection through:
-  - `CLAUDE.md`
-  - `.claude/agents`
-  - `.claude/commands`
-  - plugins
+- Claude belongs in the first native integration batch
+- the default integration path should still be the shared project-local model:
 
-If later documentation confirms a native skill location, Claude can be moved to
-the same materialization model as Codex/Gemini/Qoder.
+  ```text
+  <workspace>/.claude/skills/
+  ```
+
+- this keeps Claude aligned with the common "project-local native skills"
+  strategy used across the supported agents
+- `--add-dir` remains a useful future optimization for overlay-based skill sets,
+  but it should not be the primary first-batch design because a project-local
+  folder model is simpler and shared across agents
+
+Recommended Claude mechanism:
+
+1. Compute effective project skill roots
+2. Enumerate valid skill directories under those roots
+3. Materialize them under `<workspace>/.claude/skills`
+4. Reconcile managed entries and remove stale ones
+5. Prefer a fresh Claude session after changes unless live detection is being
+   explicitly relied upon
 
 ## Materialization Model
 
@@ -289,6 +327,8 @@ Proposed helper layout:
 ```text
 <workspace>/.cc-connect/skills-manifest.json
 <workspace>/.agents/skills/...
+<workspace>/.claude/skills/...
+<workspace>/.gemini/skills/...
 <workspace>/.qoder/skills/...
 ```
 
@@ -374,11 +414,16 @@ Recommended policy:
 Implement native materialization for:
 
 - Codex
+- Claude
 - Gemini
 - Qoder
 
-Keep Claude on bridge-level or instruction-file integration until its native
-skill path is confirmed.
+Use the same high-level workflow for all four:
+
+1. resolve project skill roots
+2. enumerate valid skills
+3. reconcile the agent's project-local native skills folder in the workspace
+4. refresh or recreate the native session when needed
 
 ### Phase 2
 
@@ -394,28 +439,30 @@ Optionally add status/diagnostics:
 
 ## Recommended First Implementation
 
-Start with Codex because the official support is explicit.
+Start with the common project-local materialization framework because all four
+currently researched agents support a native project/workspace skills folder.
 
-Codex implementation details:
+Common framework:
 
-1. Detect projects where:
-   - `agent.type == "codex"`
-   - effective skill roots are non-empty
-2. Materialize into:
-   - `<workspace>/.agents/skills`
-3. Use symlinks from target skill names to the real source skill directories
+1. Detect projects where effective skill roots are non-empty
+2. Resolve the agent-specific target directory inside the workspace
+3. Reconcile materialized skills into that target
 4. Reconcile on startup and on config reload
-5. Restart or recreate the Codex session if the materialized skill set changes
+5. Restart or recreate the native session if the materialized skill set changes
 
-This gives `cc-connect` a documented, native, per-project skill mechanism for
-Codex without inventing a custom protocol.
+Initial target mapping:
+
+- Codex -> `<workspace>/.agents/skills`
+- Claude -> `<workspace>/.claude/skills`
+- Gemini -> `<workspace>/.agents/skills`
+- Qoder -> `<workspace>/.qoder/skills`
+
+This yields one reusable implementation with agent-specific target path
+selection rather than four separate integration models.
 
 ## Open Questions
 
-- What exact workspace path should Gemini use for native project-scoped skills?
 - Does Qoder officially support symlinked skill directories?
-- Does Claude Code officially support a native local skill root, or should it
-  remain on subagents/commands/plugins only?
 - Should `cc-connect` expose a diagnostic command for native skill mapping
   status?
 
@@ -423,6 +470,8 @@ Codex without inventing a custom protocol.
 
 - Codex agent skills:
   https://developers.openai.com/codex/cli/agent-skills
+- Claude skills:
+  https://code.claude.com/docs/en/skills
 - Gemini skills:
   https://geminicli.com/docs/cli/skills/
 - Gemini system prompt:
