@@ -907,15 +907,10 @@ func reloadConfig(configPath, projName string, engine *core.Engine) (*core.Confi
 
 func resolveProjectSkillDirs(proj config.ProjectConfig, ag core.Agent) []string {
 	var dirs []string
-	for _, dir := range proj.SkillDirs {
-		dir = strings.TrimSpace(dir)
-		if dir != "" {
-			dirs = append(dirs, dir)
-		}
-	}
+	dirs = append(dirs, proj.SkillDirs...)
 	if len(dirs) == 0 {
 		if sp, ok := ag.(core.SkillProvider); ok {
-			return sp.SkillDirs()
+			return dedupeTrimmedStrings(sp.SkillDirs())
 		}
 		return nil
 	}

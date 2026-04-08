@@ -97,6 +97,15 @@ func TestResolveProjectSkillDirsFallsBackToAgentDefaults(t *testing.T) {
 	}
 }
 
+func TestResolveProjectSkillDirsDedupesAgentDefaultsOnFallback(t *testing.T) {
+	agent := &testSkillAgent{dirs: []string{"/default/a", " /default/a ", "/default/b"}}
+	got := resolveProjectSkillDirs(config.ProjectConfig{Name: "demo"}, agent)
+	want := []string{"/default/a", "/default/b"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("resolveProjectSkillDirs() = %#v, want %#v", got, want)
+	}
+}
+
 func TestResolveProjectSkillDirsOverridesAgentDefaultsByDefault(t *testing.T) {
 	agent := &testSkillAgent{dirs: []string{"/default/a", "/default/b"}}
 	got := resolveProjectSkillDirs(config.ProjectConfig{

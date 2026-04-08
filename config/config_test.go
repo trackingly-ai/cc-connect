@@ -133,6 +133,36 @@ type = "telegram"
 	}
 }
 
+func TestLoadTrimsProjectSkillDirsBeforeValidation(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	content := `
+[[projects]]
+name = "demo"
+skill_dirs = ["  /tmp/tester-skills  "]
+
+[projects.agent]
+type = "claudecode"
+
+[[projects.platforms]]
+type = "telegram"
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if len(cfg.Projects) != 1 || len(cfg.Projects[0].SkillDirs) != 1 {
+		t.Fatalf("unexpected parsed skill dirs: %#v", cfg.Projects)
+	}
+	if cfg.Projects[0].SkillDirs[0] != "  /tmp/tester-skills  " {
+		t.Fatalf("Load should preserve original TOML value, got %q", cfg.Projects[0].SkillDirs[0])
+	}
+}
+
 const minimalConfigTOML = `
 [[projects]]
 name = "demo"

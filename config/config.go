@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/BurntSushi/toml"
@@ -238,6 +239,7 @@ func (c *Config) validate() error {
 			}
 		}
 		for j, dir := range proj.SkillDirs {
+			dir = filepath.Clean(strings.TrimSpace(dir))
 			if !filepath.IsAbs(dir) {
 				return fmt.Errorf("config: %s.skill_dirs[%d] must be an absolute path", prefix, j)
 			}
