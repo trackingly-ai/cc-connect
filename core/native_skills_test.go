@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -100,18 +101,57 @@ func TestPrepareManagedSkillEnvDisabledKeepsOriginalEnv(t *testing.T) {
 	}
 }
 
-func TestPrepareManagedSkillEnvPreservesExistingWorktreeOverride(t *testing.T) {
-	agent := &managedSkillTestAgent{workDir: t.TempDir()}
-	e := NewEngine("demo", agent, nil, "", LangEnglish)
-	e.SetDataDir(t.TempDir())
-	e.SetManagedSkillConfig(true, []string{t.TempDir()})
+func TestPrepareManagedSkillEnvMaterializesIntoExistingWorktreeAndAddsGitExclude(t *testing.T) {
+	dataDir := t.TempDir()
+	repoDir := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exec.Command("git", "-C", repoDir, "init", "--initial-branch=main").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	skillRoot := filepath.Join(t.TempDir(), "skills")
+	if err := os.MkdirAll(filepath.Join(skillRoot, "flaky-pytest"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(skillRoot, "flaky-pytest", "SKILL.md"),
+		[]byte("---\nname: flaky-pytest\ndescription: test\n---\nBody"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
 
-	env, err := e.prepareManagedSkillEnv("echo-job-1", []string{"CC_WORKTREE_PATH=/job/worktree"})
+	defaultWorkDir := t.TempDir()
+	agent := &managedSkillTestAgent{workDir: defaultWorkDir}
+	e := NewEngine("demo", agent, nil, "", LangEnglish)
+	e.SetDataDir(dataDir)
+	e.SetManagedSkillConfig(true, []string{skillRoot})
+
+	env, err := e.prepareManagedSkillEnv("echo-job-1", []string{"CC_WORKTREE_PATH=" + repoDir})
 	if err != nil {
 		t.Fatalf("prepareManagedSkillEnv: %v", err)
 	}
-	if got := SessionWorkDirFromEnv(env, ""); got != "/job/worktree" {
-		t.Fatalf("worktree override = %q, want %q", got, "/job/worktree")
+	if got := SessionWorkDirFromEnv(env, ""); got != repoDir {
+		t.Fatalf("worktree override = %q, want %q", got, repoDir)
+	}
+	target := filepath.Join(repoDir, ".agents", "skills", "flaky-pytest")
+	if _, err := os.Lstat(target); err != nil {
+		t.Fatalf("expected materialized skill at %s: %v", target, err)
+	}
+	extraDirs := SessionExtraDirsFromEnv(env)
+	if len(extraDirs) != 1 || extraDirs[0] != defaultWorkDir {
+		t.Fatalf("extra dirs = %#v, want [%q]", extraDirs, defaultWorkDir)
+	}
+	excludeData, err := os.ReadFile(filepath.Join(repoDir, ".git", "info", "exclude"))
+	if err != nil {
+		t.Fatalf("read git exclude: %v", err)
+	}
+	exclude := string(excludeData)
+	for _, want := range []string{".agents/skills/", ".cc-connect/skills-manifest.json"} {
+		if !strings.Contains(exclude, want) {
+			t.Fatalf("exclude missing %q: %s", want, exclude)
+		}
 	}
 }
 

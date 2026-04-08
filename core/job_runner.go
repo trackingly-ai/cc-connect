@@ -300,34 +300,57 @@ func (e *Engine) prepareManagedSkillEnv(sessionKey string, envVars []string) ([]
 	if !enabled || len(roots) == 0 || strings.TrimSpace(e.dataDir) == "" {
 		return envVars, nil
 	}
-	if hasEnvKey(envVars, "CC_WORKTREE_PATH") {
-		return envVars, nil
-	}
-
-	workDir := "."
+	defaultWorkDir := "."
 	if wd, ok := e.agent.(interface{ GetWorkDir() string }); ok {
-		workDir = wd.GetWorkDir()
+		defaultWorkDir = wd.GetWorkDir()
 	}
-	workDir = SessionWorkDirFromEnv(envVars, workDir)
-	if workDir != "" {
-		if abs, err := filepath.Abs(workDir); err == nil {
-			workDir = abs
+	effectiveWorkDir := SessionWorkDirFromEnv(envVars, defaultWorkDir)
+	if effectiveWorkDir != "" {
+		if abs, err := filepath.Abs(effectiveWorkDir); err == nil {
+			effectiveWorkDir = abs
+		}
+	}
+	if defaultWorkDir != "" {
+		if abs, err := filepath.Abs(defaultWorkDir); err == nil {
+			defaultWorkDir = abs
 		}
 	}
 
-	workspacePath, err := ensureManagedWorkspace(e.dataDir, e.name, e.agent.Name(), sessionKey, roots)
-	if err != nil {
-		return nil, fmt.Errorf("prepare managed workspace: %w", err)
+	workspacePath := effectiveWorkDir
+	injectedWorktree := hasEnvKey(envVars, "CC_WORKTREE_PATH")
+	if injectedWorktree {
+		entries, err := nativeSkillEntriesFromRoots(roots)
+		if err != nil {
+			return nil, fmt.Errorf("prepare managed workspace: %w", err)
+		}
+		if err := materializeNativeSkillsWorkspace(
+			e.name,
+			e.agent.Name(),
+			sessionKey,
+			workspacePath,
+			entries,
+			nativeSkillFingerprint(entries),
+		); err != nil {
+			return nil, fmt.Errorf("prepare managed workspace: %w", err)
+		}
+	} else {
+		var err error
+		workspacePath, err = ensureManagedWorkspace(e.dataDir, e.name, e.agent.Name(), sessionKey, roots)
+		if err != nil {
+			return nil, fmt.Errorf("prepare managed workspace: %w", err)
+		}
 	}
 
 	out := append([]string(nil), envVars...)
-	out = append(out, "CC_WORKTREE_PATH="+workspacePath)
+	if !injectedWorktree {
+		out = append(out, "CC_WORKTREE_PATH="+workspacePath)
+	}
 
 	var extraDirs []string
 	switch e.agent.Name() {
-	case "claudecode", "codex", "gemini":
-		if strings.TrimSpace(workDir) != "" {
-			extraDirs = append(extraDirs, workDir)
+	case "claudecode", "codex", "gemini", "qoder":
+		if strings.TrimSpace(defaultWorkDir) != "" && defaultWorkDir != workspacePath {
+			extraDirs = append(extraDirs, defaultWorkDir)
 		}
 	}
 	if len(extraDirs) > 0 {

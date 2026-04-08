@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -121,34 +122,48 @@ func ensureManagedWorkspace(
 	fingerprint := nativeSkillFingerprint(entries)
 	keyHash := sessionKeyHash(sessionKey)
 	workspacePath := filepath.Join(dataDir, "workspaces", projectName, keyHash, fingerprint)
+	if err := materializeNativeSkillsWorkspace(projectName, agentName, sessionKey, workspacePath, entries, fingerprint); err != nil {
+		return "", err
+	}
+	return workspacePath, nil
+}
+
+func materializeNativeSkillsWorkspace(
+	projectName string,
+	agentName string,
+	sessionKey string,
+	workspacePath string,
+	entries []nativeSkillEntry,
+	fingerprint string,
+) error {
 	targetDir := nativeSkillTargetDir(agentName, workspacePath)
 	if targetDir == "" {
-		return "", fmt.Errorf("agent %q does not have a managed native skill target", agentName)
+		return fmt.Errorf("agent %q does not have a managed native skill target", agentName)
 	}
 	if err := os.MkdirAll(targetDir, 0o755); err != nil {
-		return "", err
+		return err
 	}
 	manifestDir := filepath.Join(workspacePath, ".cc-connect")
 	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
-		return "", err
+		return err
 	}
 	manifestPath := filepath.Join(manifestDir, "skills-manifest.json")
 	previous, _ := loadNativeSkillsManifest(manifestPath)
 	if err := reconcileManagedTarget(targetDir, previous, entries); err != nil {
-		return "", err
+		return err
 	}
 	for _, entry := range entries {
 		dst := filepath.Join(targetDir, entry.Name)
 		_ = os.RemoveAll(dst)
 		if err := os.Symlink(entry.SourceDir, dst); err != nil {
 			if err := copyDir(entry.SourceDir, dst); err != nil {
-				return "", err
+				return err
 			}
 		}
 	}
 	manifest := nativeSkillsManifest{
 		Project:          projectName,
-		SessionKeyHash:   keyHash,
+		SessionKeyHash:   sessionKeyHash(sessionKey),
 		SkillFingerprint: fingerprint,
 		WorkspacePath:    workspacePath,
 		NativeTarget:     targetDir,
@@ -156,12 +171,15 @@ func ensureManagedWorkspace(
 	}
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
-		return "", err
+		return err
 	}
 	if err := os.WriteFile(manifestPath, data, 0o644); err != nil {
-		return "", err
+		return err
 	}
-	return workspacePath, nil
+	if err := ensureManagedWorkspaceGitExclude(workspacePath, targetDir, manifestPath); err != nil {
+		return err
+	}
+	return nil
 }
 
 func loadNativeSkillsManifest(path string) (*nativeSkillsManifest, error) {
@@ -225,4 +243,82 @@ func copyDir(src, dst string) error {
 		}
 	}
 	return nil
+}
+
+func ensureManagedWorkspaceGitExclude(workspacePath, targetDir, manifestPath string) error {
+	excludePath, err := gitExcludePath(workspacePath)
+	if err != nil || strings.TrimSpace(excludePath) == "" {
+		return nil
+	}
+	targetRel, err := filepath.Rel(workspacePath, targetDir)
+	if err != nil {
+		return err
+	}
+	manifestRel, err := filepath.Rel(workspacePath, manifestPath)
+	if err != nil {
+		return err
+	}
+	targetRel = filepath.ToSlash(filepath.Clean(targetRel))
+	manifestRel = filepath.ToSlash(filepath.Clean(manifestRel))
+	if targetRel == "." || strings.HasPrefix(targetRel, "../") || manifestRel == "." || strings.HasPrefix(manifestRel, "../") {
+		return nil
+	}
+	patterns := []string{targetRel + "/", manifestRel}
+	return ensureGitExcludePatterns(excludePath, patterns)
+}
+
+func gitExcludePath(workspacePath string) (string, error) {
+	cmd := exec.Command("git", "-C", workspacePath, "rev-parse", "--git-path", "info/exclude")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	path := strings.TrimSpace(string(out))
+	if path == "" {
+		return "", fmt.Errorf("empty git exclude path")
+	}
+	if filepath.IsAbs(path) {
+		return path, nil
+	}
+	return filepath.Join(workspacePath, path), nil
+}
+
+func ensureGitExcludePatterns(excludePath string, patterns []string) error {
+	if err := os.MkdirAll(filepath.Dir(excludePath), 0o755); err != nil {
+		return err
+	}
+	existingData, err := os.ReadFile(excludePath)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	existing := string(existingData)
+	var toAppend []string
+	for _, pattern := range patterns {
+		pattern = strings.TrimSpace(filepath.ToSlash(pattern))
+		if pattern == "" {
+			continue
+		}
+		if strings.Contains(existing, "\n"+pattern+"\n") ||
+			strings.HasPrefix(existing, pattern+"\n") ||
+			strings.HasSuffix(existing, "\n"+pattern) ||
+			existing == pattern {
+			continue
+		}
+		toAppend = append(toAppend, pattern)
+	}
+	if len(toAppend) == 0 {
+		return nil
+	}
+	var sb strings.Builder
+	if len(existing) > 0 {
+		sb.WriteString(existing)
+		if !strings.HasSuffix(existing, "\n") {
+			sb.WriteByte('\n')
+		}
+	}
+	for _, pattern := range toAppend {
+		sb.WriteString(pattern)
+		sb.WriteByte('\n')
+	}
+	return os.WriteFile(excludePath, []byte(sb.String()), 0o644)
 }

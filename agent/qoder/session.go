@@ -25,6 +25,7 @@ import (
 // Subsequent turns use `-r <sessionID>` to resume the conversation.
 type qoderSession struct {
 	workDir   string
+	extraDirs []string
 	model     string
 	mode      string
 	extraEnv  []string
@@ -37,17 +38,18 @@ type qoderSession struct {
 	alive     atomic.Bool
 }
 
-func newQoderSession(ctx context.Context, workDir, model, mode, resumeID string, extraEnv []string) (*qoderSession, error) {
+func newQoderSession(ctx context.Context, workDir string, extraDirs []string, model, mode, resumeID string, extraEnv []string) (*qoderSession, error) {
 	sessionCtx, cancel := context.WithCancel(ctx)
 
 	qs := &qoderSession{
-		workDir:  workDir,
-		model:    model,
-		mode:     mode,
-		extraEnv: extraEnv,
-		events:   make(chan core.Event, 64),
-		ctx:      sessionCtx,
-		cancel:   cancel,
+		workDir:   workDir,
+		extraDirs: append([]string(nil), extraDirs...),
+		model:     model,
+		mode:      mode,
+		extraEnv:  extraEnv,
+		events:    make(chan core.Event, 64),
+		ctx:       sessionCtx,
+		cancel:    cancel,
 	}
 	qs.alive.Store(true)
 
@@ -67,7 +69,14 @@ func (qs *qoderSession) Send(prompt string, images []core.ImageAttachment, files
 		return fmt.Errorf("session is closed")
 	}
 
-	args := []string{"-p", prompt, "-f", "stream-json", "-q", "-w", qs.workDir}
+	args := []string{"-p", prompt, "-f", "stream-json", "-q"}
+	for _, dir := range qs.extraDirs {
+		if strings.TrimSpace(dir) == "" || dir == qs.workDir {
+			continue
+		}
+		args = append(args, "-w", dir)
+	}
+	args = append(args, "-w", qs.workDir)
 	for _, attachment := range attachments {
 		args = append(args, "--attachment", attachment)
 	}
