@@ -76,6 +76,35 @@ type = "claudecode"
 	}
 }
 
+func TestLoadAllowsHeadlessProjectsWhenRoleConfigured(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	content := `
+[[projects]]
+name = "gemini-reviewer"
+role = "reviewer"
+
+[projects.agent]
+type = "gemini"
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Projects) != 1 {
+		t.Fatalf("unexpected project count: %d", len(cfg.Projects))
+	}
+	if cfg.Projects[0].Role != "reviewer" {
+		t.Fatalf("unexpected project role: %q", cfg.Projects[0].Role)
+	}
+	if len(cfg.Projects[0].Platforms) != 0 {
+		t.Fatalf("expected headless role project without platforms, got %#v", cfg.Projects[0].Platforms)
+	}
+}
+
 func TestLoadParsesProjectSkillDirs(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.toml")
 	content := `

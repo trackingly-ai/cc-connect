@@ -231,8 +231,9 @@ func (c *Config) validate() error {
 		if proj.Agent.Type == "" {
 			return fmt.Errorf("config: %s.agent.type is required", prefix)
 		}
-		if len(proj.Platforms) == 0 && c.Echo.ServerURL == "" {
-			return fmt.Errorf("config: %s needs at least one [[projects.platforms]]", prefix)
+		hasRole := strings.TrimSpace(proj.Role) != "" || strings.TrimSpace(proj.Echo.Role) != ""
+		if len(proj.Platforms) == 0 && c.Echo.ServerURL == "" && !hasRole {
+			return fmt.Errorf("config: %s needs at least one [[projects.platforms]] or a project role", prefix)
 		}
 		for j, p := range proj.Platforms {
 			if p.Type == "" {

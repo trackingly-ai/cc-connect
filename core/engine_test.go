@@ -974,6 +974,44 @@ func TestReviewerSelectorCardExcludesCurrentProject(t *testing.T) {
 	}
 }
 
+func TestReviewerProjectsPreferReviewerRoleWhenPresent(t *testing.T) {
+	rm := NewRelayManager("")
+	origin := NewEngine("codex", &stubAgent{}, nil, "", LangEnglish)
+	plain := NewEngine("gemini", &stubAgent{}, nil, "", LangEnglish)
+	reviewer1 := NewEngine("qoder-reviewer", &stubAgent{}, nil, "", LangEnglish)
+	reviewer2 := NewEngine("gemini-reviewer", &stubAgent{}, nil, "", LangEnglish)
+	reviewer1.SetRole("reviewer")
+	reviewer2.SetRole("reviewer")
+	rm.RegisterEngine(origin.name, origin)
+	rm.RegisterEngine(plain.name, plain)
+	rm.RegisterEngine(reviewer1.name, reviewer1)
+	rm.RegisterEngine(reviewer2.name, reviewer2)
+	origin.SetRelayManager(rm)
+
+	got := origin.reviewerProjects()
+	want := []string{"gemini-reviewer", "qoder-reviewer"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("reviewerProjects = %#v, want %#v", got, want)
+	}
+}
+
+func TestReviewerProjectsFallbackToAllOtherProjectsWhenNoReviewerRole(t *testing.T) {
+	rm := NewRelayManager("")
+	origin := NewEngine("codex", &stubAgent{}, nil, "", LangEnglish)
+	other1 := NewEngine("qoder", &stubAgent{}, nil, "", LangEnglish)
+	other2 := NewEngine("gemini", &stubAgent{}, nil, "", LangEnglish)
+	rm.RegisterEngine(origin.name, origin)
+	rm.RegisterEngine(other1.name, other1)
+	rm.RegisterEngine(other2.name, other2)
+	origin.SetRelayManager(rm)
+
+	got := origin.reviewerProjects()
+	want := []string{"gemini", "qoder"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("reviewerProjects = %#v, want %#v", got, want)
+	}
+}
+
 func TestStartReviewCycleRunsReviewerAndOriginRevision(t *testing.T) {
 	rm := NewRelayManager("")
 	originAgent := &scriptedRecordingAgent{responses: []string{
@@ -1008,6 +1046,12 @@ func TestStartReviewCycleRunsReviewerAndOriginRevision(t *testing.T) {
 	if !strings.Contains(reviewerSends[0].prompt, "Do not include praise") {
 		t.Fatalf("reviewer prompt = %q, want findings-only instruction", reviewerSends[0].prompt)
 	}
+	if !strings.Contains(reviewerSends[0].prompt, "`comprehensive-review`") || !strings.Contains(reviewerSends[0].prompt, "`code-review`") {
+		t.Fatalf("reviewer prompt = %q, want code-review skill hint", reviewerSends[0].prompt)
+	}
+	if !strings.Contains(reviewerSends[0].prompt, "`security-review`") {
+		t.Fatalf("reviewer prompt = %q, want security-review skill hint", reviewerSends[0].prompt)
+	}
 
 	originSends := originAgent.session.Sends()
 	if len(originSends) != 2 {
@@ -1016,11 +1060,17 @@ func TestStartReviewCycleRunsReviewerAndOriginRevision(t *testing.T) {
 	if !strings.Contains(originSends[0].prompt, "Prepare a structured review packet") {
 		t.Fatalf("origin packet prompt = %q, want review packet instruction", originSends[0].prompt)
 	}
+	if !strings.Contains(originSends[0].prompt, "`review-scope`") || !strings.Contains(originSends[0].prompt, "`review-packet`") {
+		t.Fatalf("origin packet prompt = %q, want review packet skill hints", originSends[0].prompt)
+	}
 	if !strings.Contains(originSends[1].prompt, "Reviewer feedback from qoder:") {
 		t.Fatalf("origin revision prompt = %q, want reviewer feedback section", originSends[1].prompt)
 	}
 	if !strings.Contains(originSends[1].prompt, "reviewer summary") {
 		t.Fatalf("origin revision prompt = %q, want reviewer summary text", originSends[1].prompt)
+	}
+	if !strings.Contains(originSends[1].prompt, "`review-feedback-triage`") {
+		t.Fatalf("origin revision prompt = %q, want review-feedback-triage skill hint", originSends[1].prompt)
 	}
 
 	originPlatform.mu.Lock()

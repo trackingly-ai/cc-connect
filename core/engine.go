@@ -121,6 +121,7 @@ type RateLimitCfg struct {
 // Engine routes messages between platforms and the agent for a single project.
 type Engine struct {
 	name         string
+	role         string
 	agent        Agent
 	platforms    []Platform
 	sessions     *SessionManager
@@ -399,6 +400,14 @@ func (e *Engine) SetManagedSkillConfig(enabled bool, roots []string) {
 	defer e.managedSkillMu.Unlock()
 	e.managedSkillEnabled = enabled
 	e.managedSkillRoots = append([]string(nil), roots...)
+}
+
+func (e *Engine) SetRole(role string) {
+	e.role = strings.TrimSpace(role)
+}
+
+func (e *Engine) Role() string {
+	return strings.TrimSpace(e.role)
 }
 
 func (e *Engine) storePreparedSkillMeta(sessionKey string, meta map[string]any) {
@@ -988,16 +997,25 @@ func (e *Engine) reviewerProjects() []string {
 	if e.relayManager == nil {
 		return nil
 	}
-	names := e.relayManager.ListEngineNames()
-	out := make([]string, 0, len(names))
-	for _, name := range names {
-		if name == "" || name == e.name {
+	e.relayManager.mu.RLock()
+	defer e.relayManager.mu.RUnlock()
+	all := make([]string, 0, len(e.relayManager.engines))
+	reviewers := make([]string, 0, len(e.relayManager.engines))
+	for name, engine := range e.relayManager.engines {
+		if name == "" || name == e.name || engine == nil {
 			continue
 		}
-		out = append(out, name)
+		all = append(all, name)
+		if strings.EqualFold(strings.TrimSpace(engine.Role()), "reviewer") {
+			reviewers = append(reviewers, name)
+		}
 	}
-	sort.Strings(out)
-	return out
+	sort.Strings(all)
+	sort.Strings(reviewers)
+	if len(reviewers) > 0 {
+		return reviewers
+	}
+	return all
 }
 
 func (e *Engine) reconstructPlatformReply(sessionKey string) (Platform, any, error) {
@@ -5764,7 +5782,7 @@ func (e *Engine) sendTTSReply(p Platform, replyCtx any, text string) {
 
 func buildReviewPrompt(originProject, reviewerProject, summary string) string {
 	return fmt.Sprintf(
-		"Please review the following review packet.\n\nOriginal agent: %s\nReviewer: %s\n\nReview packet:\n%s\n\nUse the packet to determine whether you should inspect working tree changes, the latest commit, or summary-only context. Report only findings that matter. Prioritize bugs, regressions, risky assumptions, unclear implementation details, and missing validation or tests. Order findings from highest severity to lowest severity. Do not include praise, strengths, or 'What Works Well' style sections. If no major issue is found, say that explicitly and keep the response brief.",
+		"Please review the following review packet.\n\nOriginal agent: %s\nReviewer: %s\n\nReview packet:\n%s\n\nIf your available native skills include `comprehensive-review`, `code-review`, or `security-review`, use the best-fitting skill before answering. Prefer `comprehensive-review` for broad or risky changes, `code-review` for a normal pass, and add `security-review` when the packet suggests auth, permissions, secrets, shell execution, file access, or external integrations. If those skills are unavailable, follow the instructions below directly.\n\nUse the packet to determine whether you should inspect working tree changes, the latest commit, or summary-only context. Report only findings that matter. Prioritize bugs, regressions, risky assumptions, unclear implementation details, and missing validation or tests. Order findings from highest severity to lowest severity. Do not include praise, strengths, or 'What Works Well' style sections. If no major issue is found, say that explicitly and keep the response brief.",
 		originProject,
 		reviewerProject,
 		strings.TrimSpace(summary),
@@ -5773,7 +5791,7 @@ func buildReviewPrompt(originProject, reviewerProject, summary string) string {
 
 func buildReviewPacketPrompt(originProject, reviewerProject, summary string) string {
 	return fmt.Sprintf(
-		"Prepare a structured review packet for a second agent.\n\nOriginal agent: %s\nReviewer: %s\n\nOriginal summary:\n%s\n\nReturn only a <review_packet>...</review_packet> block.\nDecide whether the task is repo-related.\nIf repo-related, specify the correct review target:\n- working_tree if there are relevant uncommitted changes\n- last_commit if the work is already committed\n- summary_only if code state is not needed\nInclude only the files, commit IDs, repo path, branch, and context necessary for review. Do not include prose outside the XML block.",
+		"Prepare a structured review packet for a second agent.\n\nOriginal agent: %s\nReviewer: %s\n\nOriginal summary:\n%s\n\nIf your available native skills include `review-scope`, use it first to determine how wide the review should be. If your available native skills include `review-packet`, use it to produce the final handoff packet. If those skills are unavailable, follow the instructions below directly.\n\nReturn only a <review_packet>...</review_packet> block.\nDecide whether the task is repo-related.\nIf repo-related, specify the correct review target:\n- working_tree if there are relevant uncommitted changes\n- last_commit if the work is already committed\n- summary_only if code state is not needed\nInclude only the files, commit IDs, repo path, branch, and context necessary for review. Do not include prose outside the XML block.",
 		originProject,
 		reviewerProject,
 		strings.TrimSpace(summary),
@@ -5797,7 +5815,7 @@ func extractReviewPacket(content string) string {
 
 func buildRevisionPrompt(originProject, reviewerProject, originSummary, reviewSummary string) string {
 	return fmt.Sprintf(
-		"Please revise your previous work based on the following review feedback.\n\nYour previous summary:\n%s\n\nReviewer feedback from %s:\n%s\n\nUpdate the work accordingly and provide an updated final summary.",
+		"Please revise your previous work based on the following review feedback.\n\nYour previous summary:\n%s\n\nReviewer feedback from %s:\n%s\n\nIf your available native skills include `review-feedback-triage`, use it to classify and prioritize the review comments before changing the implementation. If the skill is unavailable, do that triage yourself.\n\nUpdate the work accordingly and provide an updated final summary.",
 		strings.TrimSpace(originSummary),
 		reviewerProject,
 		strings.TrimSpace(reviewSummary),
