@@ -107,11 +107,13 @@ func (cs *codexSession) Send(prompt string, images []core.ImageAttachment, files
 	if cs.model != "" {
 		args = append(args, "--model", cs.model)
 	}
-	for _, dir := range cs.extraDirs {
-		if strings.TrimSpace(dir) == "" {
-			continue
+	if !isResume {
+		for _, dir := range cs.extraDirs {
+			if strings.TrimSpace(dir) == "" {
+				continue
+			}
+			args = append(args, "--add-dir", dir)
 		}
-		args = append(args, "--add-dir", dir)
 	}
 	for _, imagePath := range imagePaths {
 		args = append(args, "--image", imagePath)

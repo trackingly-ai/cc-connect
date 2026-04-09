@@ -75,6 +75,75 @@ func TestAgentSessionSmoke_UsesManagedWorkspaceAndExtraDirs(t *testing.T) {
 	}
 }
 
+func TestResumeOmitsAddDir(t *testing.T) {
+	baseDir := t.TempDir()
+	repoDir := filepath.Join(baseDir, "repo")
+	binDir := filepath.Join(baseDir, "bin")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+
+	argsFile := filepath.Join(baseDir, "codex-args.txt")
+	cwdFile := filepath.Join(baseDir, "codex-cwd.txt")
+	script := "#!/bin/sh\n" +
+		"pwd > \"$CODEX_CWD_FILE\"\n" +
+		"printf '%s\\n' \"$@\" > \"$CODEX_ARGS_FILE\"\n" +
+		"printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"codex-smoke\"}'\n" +
+		"printf '%s\\n' '{\"type\":\"turn.completed\"}'\n"
+	scriptPath := filepath.Join(binDir, "codex")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake codex: %v", err)
+	}
+
+	t.Setenv("CODEX_ARGS_FILE", argsFile)
+	t.Setenv("CODEX_CWD_FILE", cwdFile)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	agentRaw, err := New(map[string]any{"work_dir": repoDir})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	agent := agentRaw.(*Agent)
+	agent.SetSessionEnv([]string{
+		"CC_EXTRA_WORK_DIRS=" + repoDir,
+	})
+
+	sess, err := agent.StartSession(context.Background(), "")
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	defer func() { _ = sess.Close() }()
+
+	// First send — initial exec, should have --add-dir
+	if err := sess.Send("hello", nil, nil); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	waitForResult(t, sess.Events())
+	args := readArgsFile(t, argsFile)
+	if !containsArgPair(args, "--add-dir", repoDir) {
+		t.Fatalf("initial exec should have --add-dir %q: %#v", repoDir, args)
+	}
+
+	// Second send — resume, should NOT have --add-dir
+	os.Remove(argsFile)
+	if err := sess.Send("world", nil, nil); err != nil {
+		t.Fatalf("Send resume: %v", err)
+	}
+	waitForResult(t, sess.Events())
+	args = readArgsFile(t, argsFile)
+	for _, arg := range args {
+		if arg == "--add-dir" {
+			t.Fatalf("resume should not have --add-dir: %#v", args)
+		}
+	}
+	if !containsArg(args, "resume") {
+		t.Fatalf("resume args should contain 'resume': %#v", args)
+	}
+}
+
 func TestSkillDirsPreferAgentsAlias(t *testing.T) {
 	a := &Agent{workDir: "/tmp/demo"}
 	dirs := a.SkillDirs()
@@ -134,6 +203,15 @@ func waitForArtifact(t *testing.T, path string) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", path)
+}
+
+func containsArg(args []string, target string) bool {
+	for _, a := range args {
+		if a == target {
+			return true
+		}
+	}
+	return false
 }
 
 func containsArgPair(args []string, flag, value string) bool {
