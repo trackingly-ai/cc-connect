@@ -105,6 +105,25 @@ type = "gemini"
 	}
 }
 
+func TestLoadRejectsHeadlessProjectsForNonReviewerRoleWithoutEcho(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	content := `
+[[projects]]
+name = "misc-worker"
+role = "support"
+
+[projects.agent]
+type = "gemini"
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if _, err := Load(configPath); err == nil {
+		t.Fatal("expected headless non-reviewer role to be rejected without echo")
+	}
+}
+
 func TestLoadParsesProjectSkillDirs(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.toml")
 	content := `
