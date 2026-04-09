@@ -28,6 +28,19 @@ type nativeSkillsManifest struct {
 	Entries          []nativeSkillEntry `json:"entries"`
 }
 
+func nativeSkillTargetKind(agentName string) string {
+	switch strings.ToLower(strings.TrimSpace(agentName)) {
+	case "claudecode":
+		return ".claude/skills"
+	case "codex", "gemini":
+		return ".agents/skills"
+	case "qoder":
+		return ".qoder/skills"
+	default:
+		return ""
+	}
+}
+
 func nativeSkillEntriesFromRoots(roots []string) ([]nativeSkillEntry, error) {
 	var entries []nativeSkillEntry
 	seen := make(map[string]struct{})
@@ -96,16 +109,11 @@ func sessionKeyHash(sessionKey string) string {
 }
 
 func nativeSkillTargetDir(agentName, workspacePath string) string {
-	switch strings.ToLower(strings.TrimSpace(agentName)) {
-	case "claudecode":
-		return filepath.Join(workspacePath, ".claude", "skills")
-	case "codex", "gemini":
-		return filepath.Join(workspacePath, ".agents", "skills")
-	case "qoder":
-		return filepath.Join(workspacePath, ".qoder", "skills")
-	default:
+	targetKind := nativeSkillTargetKind(agentName)
+	if targetKind == "" {
 		return ""
 	}
+	return filepath.Join(workspacePath, filepath.FromSlash(targetKind))
 }
 
 func ensureManagedWorkspace(
@@ -126,6 +134,54 @@ func ensureManagedWorkspace(
 		return "", err
 	}
 	return workspacePath, nil
+}
+
+func buildNativeSkillsMeta(
+	projectName string,
+	agentName string,
+	workspacePath string,
+	entries []nativeSkillEntry,
+	fingerprint string,
+	roots []string,
+) map[string]any {
+	normalizedRoots := make([]string, 0, len(roots))
+	for _, root := range roots {
+		root = strings.TrimSpace(root)
+		if root == "" {
+			continue
+		}
+		normalizedRoots = append(normalizedRoots, root)
+	}
+	skillNames := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		skillNames = append(skillNames, entry.Name)
+	}
+	sort.Strings(skillNames)
+	meta := map[string]any{
+		"managed_native_skills_enabled": len(normalizedRoots) > 0,
+		"project":                       strings.TrimSpace(projectName),
+		"agent_type":                    strings.TrimSpace(agentName),
+		"skill_roots":                   normalizedRoots,
+		"skill_count":                   len(skillNames),
+		"skill_names":                   skillNames,
+		"native_target_kind":            nativeSkillTargetKind(agentName),
+	}
+	if strings.TrimSpace(workspacePath) != "" {
+		meta["workspace_path"] = workspacePath
+		targetDir := nativeSkillTargetDir(agentName, workspacePath)
+		if targetDir != "" {
+			meta["native_target"] = targetDir
+			meta["manifest_path"] = filepath.Join(
+				workspacePath,
+				".cc-connect",
+				"skills-manifest.json",
+			)
+		}
+	}
+	if strings.TrimSpace(fingerprint) != "" {
+		meta["skill_fingerprint"] = fingerprint
+	}
+	return meta
 }
 
 func materializeNativeSkillsWorkspace(

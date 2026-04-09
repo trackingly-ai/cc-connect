@@ -137,6 +137,16 @@ func TestPrepareManagedSkillEnvMaterializesIntoExistingWorktreeAndAddsGitExclude
 	if len(extraDirs) != 1 || extraDirs[0] != defaultWorkDir {
 		t.Fatalf("extra dirs = %#v, want [%q]", extraDirs, defaultWorkDir)
 	}
+	skillsMeta := SessionNativeSkillsMetaFromEnv(env)
+	if skillsMeta["workspace_path"] != repoDir {
+		t.Fatalf("workspace_path = %#v, want %q", skillsMeta["workspace_path"], repoDir)
+	}
+	if skillsMeta["native_target_kind"] != ".agents/skills" {
+		t.Fatalf("native_target_kind = %#v", skillsMeta["native_target_kind"])
+	}
+	if skillsMeta["skill_count"] != float64(1) {
+		t.Fatalf("skill_count = %#v", skillsMeta["skill_count"])
+	}
 	excludeData, err := os.ReadFile(filepath.Join(repoDir, ".git", "info", "exclude"))
 	if err != nil {
 		t.Fatalf("read git exclude: %v", err)
@@ -245,6 +255,37 @@ func TestNativeSkillTargetDirIsCaseInsensitive(t *testing.T) {
 	want := "/tmp/work/.agents/skills"
 	if got != want {
 		t.Fatalf("nativeSkillTargetDir() = %q, want %q", got, want)
+	}
+}
+
+func TestBuildNativeSkillsMetaIncludesManifestAndSkillNames(t *testing.T) {
+	entries := []nativeSkillEntry{
+		{Name: "playwright-smoke", Rel: "playwright-smoke"},
+		{Name: "env-readiness", Rel: "env-readiness"},
+	}
+	meta := buildNativeSkillsMeta(
+		"echo-test-engineer-claude",
+		"claudecode",
+		"/tmp/worktree",
+		entries,
+		"abc123",
+		[]string{"/skills/shared", "/skills/tester"},
+	)
+	if got := meta["project"]; got != "echo-test-engineer-claude" {
+		t.Fatalf("project = %#v", got)
+	}
+	if got := meta["native_target_kind"]; got != ".claude/skills" {
+		t.Fatalf("native_target_kind = %#v", got)
+	}
+	if got := meta["manifest_path"]; got != "/tmp/worktree/.cc-connect/skills-manifest.json" {
+		t.Fatalf("manifest_path = %#v", got)
+	}
+	names, ok := meta["skill_names"].([]string)
+	if !ok {
+		t.Fatalf("skill_names type = %T", meta["skill_names"])
+	}
+	if len(names) != 2 || names[0] != "env-readiness" || names[1] != "playwright-smoke" {
+		t.Fatalf("skill_names = %#v", names)
 	}
 }
 

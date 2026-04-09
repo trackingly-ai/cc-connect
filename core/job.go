@@ -46,9 +46,10 @@ type JobRequest struct {
 }
 
 type JobResult struct {
-	Output    string `json:"output,omitempty"`
-	Summary   string `json:"summary,omitempty"`
-	SessionID string `json:"session_id,omitempty"`
+	Output     string         `json:"output,omitempty"`
+	Summary    string         `json:"summary,omitempty"`
+	SessionID  string         `json:"session_id,omitempty"`
+	SkillsMeta map[string]any `json:"skills_meta,omitempty"`
 }
 
 type JobEvent struct {
@@ -73,6 +74,7 @@ type Job struct {
 	Output       string          `json:"output,omitempty"`
 	Summary      string          `json:"summary,omitempty"`
 	SessionID    string          `json:"session_id,omitempty"`
+	SkillsMeta   map[string]any  `json:"skills_meta,omitempty"`
 	Error        string          `json:"error,omitempty"`
 	ErrorCode    string          `json:"error_code,omitempty"`
 	CreatedAt    time.Time       `json:"created_at"`
@@ -436,6 +438,7 @@ func (jm *JobManager) runJob(managed *managedJob) {
 			job.Output = result.Output
 			job.Summary = result.Summary
 			job.SessionID = result.SessionID
+			job.SkillsMeta = result.SkillsMeta
 		}
 	})
 }

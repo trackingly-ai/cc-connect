@@ -190,6 +190,9 @@ type Engine struct {
 	managedSkillMu      sync.RWMutex
 	managedSkillEnabled bool
 	managedSkillRoots   []string
+
+	preparedSkillMetaMu sync.Mutex
+	preparedSkillMeta   map[string]map[string]any
 }
 
 // interactiveState tracks a running interactive agent session and its permission state.
@@ -396,6 +399,30 @@ func (e *Engine) SetManagedSkillConfig(enabled bool, roots []string) {
 	defer e.managedSkillMu.Unlock()
 	e.managedSkillEnabled = enabled
 	e.managedSkillRoots = append([]string(nil), roots...)
+}
+
+func (e *Engine) storePreparedSkillMeta(sessionKey string, meta map[string]any) {
+	e.preparedSkillMetaMu.Lock()
+	defer e.preparedSkillMetaMu.Unlock()
+	if e.preparedSkillMeta == nil {
+		e.preparedSkillMeta = make(map[string]map[string]any)
+	}
+	if meta == nil {
+		delete(e.preparedSkillMeta, sessionKey)
+		return
+	}
+	e.preparedSkillMeta[sessionKey] = meta
+}
+
+func (e *Engine) takePreparedSkillMeta(sessionKey string) map[string]any {
+	e.preparedSkillMetaMu.Lock()
+	defer e.preparedSkillMetaMu.Unlock()
+	if e.preparedSkillMeta == nil {
+		return nil
+	}
+	meta := e.preparedSkillMeta[sessionKey]
+	delete(e.preparedSkillMeta, sessionKey)
+	return meta
 }
 
 // ConfigReloadResult describes what was updated by a config reload.

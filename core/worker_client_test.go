@@ -46,6 +46,10 @@ func (workerTestRunner) Run(
 		Output:    "final output",
 		Summary:   summarizeJobOutput("final output"),
 		SessionID: "session-1",
+		SkillsMeta: map[string]any{
+			"skill_count":        2,
+			"native_target_kind": ".claude/skills",
+		},
 	}, nil
 }
 
@@ -71,6 +75,7 @@ func (workerBlockingRunner) Run(
 
 func TestBuildWorkerAgentRegistrations(t *testing.T) {
 	enabled := true
+	includeDefaultSkills := true
 	agents, err := buildWorkerAgentRegistrations(
 		config.EchoConfig{OrgID: "coding-team"},
 		[]config.ProjectConfig{
@@ -82,6 +87,8 @@ func TestBuildWorkerAgentRegistrations(t *testing.T) {
 						"mode": "bypassPermissions",
 					},
 				},
+				SkillDirs:               []string{"/tmp/manager-skills"},
+				IncludeDefaultSkillDirs: &includeDefaultSkills,
 			},
 			{
 				Name: "custom-review",
@@ -114,6 +121,26 @@ func TestBuildWorkerAgentRegistrations(t *testing.T) {
 	}
 	if agents[1].ID != "agent-reviewer-qoder-9" {
 		t.Fatalf("unexpected explicit agent id: %q", agents[1].ID)
+	}
+	managerSkills, ok := agents[0].Metadata["skills"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected metadata.skills map, got %#v", agents[0].Metadata)
+	}
+	if got := managerSkills["native_target_kind"]; got != ".claude/skills" {
+		t.Fatalf("native_target_kind = %#v, want %q", got, ".claude/skills")
+	}
+	if got := managerSkills["managed_native_skills_enabled"]; got != true {
+		t.Fatalf("managed_native_skills_enabled = %#v, want true", got)
+	}
+	if got := managerSkills["include_default_skill_dirs"]; got != true {
+		t.Fatalf("include_default_skill_dirs = %#v, want true", got)
+	}
+	roots, ok := managerSkills["skill_roots"].([]string)
+	if !ok {
+		t.Fatalf("skill_roots type = %T", managerSkills["skill_roots"])
+	}
+	if len(roots) != 1 || roots[0] != "/tmp/manager-skills" {
+		t.Fatalf("skill_roots = %#v", roots)
 	}
 }
 
@@ -207,6 +234,8 @@ func TestWorkerClientRegistersAndHeartbeats(t *testing.T) {
 	receivedTypes := []string{}
 	receivedHostID := ""
 	receivedAgentCount := 0
+	var registerAgentsPayload map[string]any
+	var resultJobPayload map[string]any
 	taskProgressSeen := false
 	taskResultSeen := false
 
@@ -236,6 +265,7 @@ func TestWorkerClientRegistersAndHeartbeats(t *testing.T) {
 			case "register_agents":
 				agents, _ := payload["agents"].([]any)
 				receivedAgentCount = len(agents)
+				registerAgentsPayload = payload
 				_ = conn.WriteJSON(map[string]any{"type": "agents_registered", "request_id": payload["request_id"], "host_id": "host-local", "count": len(agents)})
 				_ = conn.WriteJSON(map[string]any{
 					"type":          "assign_task",
@@ -255,6 +285,7 @@ func TestWorkerClientRegistersAndHeartbeats(t *testing.T) {
 			case "task_result":
 				mu.Lock()
 				taskResultSeen = true
+				resultJobPayload, _ = payload["job"].(map[string]any)
 				mu.Unlock()
 			default:
 				_ = conn.WriteJSON(map[string]any{"type": "error", "message": "unexpected"})
@@ -320,6 +351,25 @@ func TestWorkerClientRegistersAndHeartbeats(t *testing.T) {
 	if receivedAgentCount != 1 {
 		t.Fatalf("unexpected registered agent count: %d", receivedAgentCount)
 	}
+	registeredAgents, ok := registerAgentsPayload["agents"].([]any)
+	if !ok || len(registeredAgents) != 1 {
+		t.Fatalf("unexpected register_agents payload: %#v", registerAgentsPayload)
+	}
+	registeredAgent, ok := registeredAgents[0].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected agent payload: %#v", registeredAgents[0])
+	}
+	metadata, ok := registeredAgent["metadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected metadata on registered agent: %#v", registeredAgent)
+	}
+	skills, ok := metadata["skills"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected metadata.skills on registered agent: %#v", metadata)
+	}
+	if got := skills["native_target_kind"]; got != ".claude/skills" {
+		t.Fatalf("native_target_kind = %#v, want %q", got, ".claude/skills")
+	}
 	if len(receivedTypes) < 4 {
 		t.Fatalf("expected hello/register_host/register_agents/heartbeat, got %#v", receivedTypes)
 	}
@@ -328,6 +378,16 @@ func TestWorkerClientRegistersAndHeartbeats(t *testing.T) {
 	}
 	if !taskResultSeen {
 		t.Fatal("expected task_result to be sent")
+	}
+	if resultJobPayload == nil {
+		t.Fatal("expected task_result job payload")
+	}
+	skillsMeta, ok := resultJobPayload["skills_meta"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected skills_meta on task_result payload: %#v", resultJobPayload)
+	}
+	if got := skillsMeta["native_target_kind"]; got != ".claude/skills" {
+		t.Fatalf("native_target_kind = %#v, want %q", got, ".claude/skills")
 	}
 }
 

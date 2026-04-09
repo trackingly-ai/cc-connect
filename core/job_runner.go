@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -103,11 +104,16 @@ func (r engineJobRunner) Run(
 	jobID string,
 	onEvent func(JobEvent),
 ) (*JobResult, error) {
+	sessionKey := "echo-job-" + strings.TrimSpace(jobID)
+	if sessionKey == "echo-job-" {
+		sessionKey = "echo-job-anonymous"
+	}
 	agentSession, err := r.engine.StartJobSession(ctx, req, jobID)
 	if err != nil {
 		return nil, fmt.Errorf("start job session: %w", err)
 	}
 	defer agentSession.Close()
+	skillsMeta := r.engine.takePreparedSkillMeta(sessionKey)
 
 	if err := agentSession.Send(req.Prompt, nil, nil); err != nil {
 		return nil, fmt.Errorf("send job prompt: %w", err)
@@ -127,9 +133,10 @@ func (r engineJobRunner) Run(
 					return nil, fmt.Errorf("job session exited without result")
 				}
 				return &JobResult{
-					Output:    output,
-					Summary:   summarizeJobOutput(output),
-					SessionID: sessionID,
+					Output:     output,
+					Summary:    summarizeJobOutput(output),
+					SessionID:  sessionID,
+					SkillsMeta: skillsMeta,
 				}, nil
 			}
 
@@ -198,9 +205,10 @@ func (r engineJobRunner) Run(
 					})
 				}
 				return &JobResult{
-					Output:    output,
-					Summary:   summarizeJobOutput(output),
-					SessionID: sessionID,
+					Output:     output,
+					Summary:    summarizeJobOutput(output),
+					SessionID:  sessionID,
+					SkillsMeta: skillsMeta,
 				}, nil
 			case EventError:
 				errValue := event.Error
@@ -252,6 +260,7 @@ func (e *Engine) startAgentSession(
 	if err != nil {
 		return nil, err
 	}
+	e.storePreparedSkillMeta(sessionKey, SessionNativeSkillsMetaFromEnv(envVars))
 	if inj, ok := e.agent.(SessionEnvInjector); ok {
 		inj.SetSessionEnv(envVars)
 	}
@@ -320,27 +329,35 @@ func (e *Engine) prepareManagedSkillEnv(sessionKey string, envVars []string) ([]
 
 	workspacePath := effectiveWorkDir
 	injectedWorktree := hasEnvKey(envVars, "CC_WORKTREE_PATH")
+	var entries []nativeSkillEntry
+	var fingerprint string
+	var err error
 	if injectedWorktree {
-		entries, err := nativeSkillEntriesFromRoots(roots)
+		entries, err = nativeSkillEntriesFromRoots(roots)
 		if err != nil {
 			return nil, fmt.Errorf("prepare managed workspace: %w", err)
 		}
+		fingerprint = nativeSkillFingerprint(entries)
 		if err := materializeNativeSkillsWorkspace(
 			e.name,
 			e.agent.Name(),
 			sessionKey,
 			workspacePath,
 			entries,
-			nativeSkillFingerprint(entries),
+			fingerprint,
 		); err != nil {
 			return nil, fmt.Errorf("prepare managed workspace: %w", err)
 		}
 	} else {
-		var err error
 		workspacePath, err = ensureManagedWorkspace(e.dataDir, e.name, e.agent.Name(), sessionKey, roots)
 		if err != nil {
 			return nil, fmt.Errorf("prepare managed workspace: %w", err)
 		}
+		entries, err = nativeSkillEntriesFromRoots(roots)
+		if err != nil {
+			return nil, fmt.Errorf("prepare managed workspace: %w", err)
+		}
+		fingerprint = nativeSkillFingerprint(entries)
 	}
 
 	out := append([]string(nil), envVars...)
@@ -357,6 +374,18 @@ func (e *Engine) prepareManagedSkillEnv(sessionKey string, envVars []string) ([]
 	}
 	if len(extraDirs) > 0 {
 		out = append(out, "CC_EXTRA_WORK_DIRS="+strings.Join(extraDirs, string(filepath.ListSeparator)))
+	}
+	if metaJSON, err := json.Marshal(
+		buildNativeSkillsMeta(
+			e.name,
+			e.agent.Name(),
+			workspacePath,
+			entries,
+			fingerprint,
+			roots,
+		),
+	); err == nil {
+		out = append(out, "CC_NATIVE_SKILLS_META="+string(metaJSON))
 	}
 	return out, nil
 }

@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"strings"
 )
@@ -44,6 +45,27 @@ func SessionExtraDirsFromEnv(env []string) []string {
 			dirs = append(dirs, dir)
 		}
 		return dirs
+	}
+	return nil
+}
+
+// SessionNativeSkillsMetaFromEnv returns the last JSON payload provided via
+// CC_NATIVE_SKILLS_META. Later env entries win, matching SessionWorkDirFromEnv.
+func SessionNativeSkillsMetaFromEnv(env []string) map[string]any {
+	for i := len(env) - 1; i >= 0; i-- {
+		entry := env[i]
+		if !strings.HasPrefix(entry, "CC_NATIVE_SKILLS_META=") {
+			continue
+		}
+		raw := strings.TrimSpace(strings.TrimPrefix(entry, "CC_NATIVE_SKILLS_META="))
+		if raw == "" {
+			return nil
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+			return nil
+		}
+		return payload
 	}
 	return nil
 }

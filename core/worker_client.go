@@ -42,12 +42,13 @@ type WorkerClient struct {
 }
 
 type workerAgentRegistration struct {
-	ID             string `json:"id"`
-	OrgID          string `json:"org_id"`
-	Role           string `json:"role"`
-	CCProject      string `json:"cc_project"`
-	AgentType      string `json:"agent_type"`
-	PromptTemplate string `json:"prompt_template"`
+	ID             string         `json:"id"`
+	OrgID          string         `json:"org_id"`
+	Role           string         `json:"role"`
+	CCProject      string         `json:"cc_project"`
+	AgentType      string         `json:"agent_type"`
+	PromptTemplate string         `json:"prompt_template"`
+	Metadata       map[string]any `json:"metadata,omitempty"`
 }
 
 func NewWorkerClient(
@@ -846,9 +847,34 @@ func buildWorkerAgentRegistrations(
 			CCProject:      proj.Name,
 			AgentType:      agentType,
 			PromptTemplate: promptTemplate,
+			Metadata:       buildWorkerAgentMetadata(proj, agentType),
 		})
 	}
 	return agents, nil
+}
+
+func buildWorkerAgentMetadata(
+	proj config.ProjectConfig,
+	agentType string,
+) map[string]any {
+	skillRoots := make([]string, 0, len(proj.SkillDirs))
+	for _, root := range proj.SkillDirs {
+		root = strings.TrimSpace(root)
+		if root == "" {
+			continue
+		}
+		skillRoots = append(skillRoots, root)
+	}
+	return map[string]any{
+		"skills": map[string]any{
+			"project":                       strings.TrimSpace(proj.Name),
+			"agent_type":                    strings.TrimSpace(agentType),
+			"managed_native_skills_enabled": len(skillRoots) > 0,
+			"include_default_skill_dirs":    proj.IncludeDefaultSkillDirs != nil && *proj.IncludeDefaultSkillDirs,
+			"skill_roots":                   skillRoots,
+			"native_target_kind":            nativeSkillTargetKind(agentType),
+		},
+	}
 }
 
 func validateEchoWorkerMode(
@@ -1027,6 +1053,7 @@ func workerJobPayload(job *Job) map[string]any {
 		"output":        job.Output,
 		"summary":       job.Summary,
 		"session_id":    job.SessionID,
+		"skills_meta":   job.SkillsMeta,
 		"error":         job.Error,
 		"error_code":    job.ErrorCode,
 		"created_at":    job.CreatedAt.Format(time.RFC3339Nano),
