@@ -1074,6 +1074,16 @@ func TestStartReviewCycleRunsReviewerAndOriginRevision(t *testing.T) {
 	}
 
 	originPlatform.mu.Lock()
+	sentText := strings.Join(originPlatform.sent, "\n")
+	originPlatform.mu.Unlock()
+	if !strings.Contains(sentText, "codex review-packet: prompt:") || !strings.Contains(sentText, "Prepare a structured review packet for a second agent.") {
+		t.Fatalf("origin platform sent = %q, want visible review-packet prompt", sentText)
+	}
+	if !strings.Contains(sentText, "codex review-packet: <review_packet>") {
+		t.Fatalf("origin platform sent = %q, want visible review-packet output", sentText)
+	}
+
+	originPlatform.mu.Lock()
 	if len(originPlatform.cards) == 0 {
 		originPlatform.mu.Unlock()
 		t.Fatal("expected follow-up action card after revision turn")

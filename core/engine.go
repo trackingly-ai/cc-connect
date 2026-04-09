@@ -5903,6 +5903,7 @@ func (e *Engine) startReviewCycle(sessionKey, reviewerProject string) error {
 	e.reviewMu.Unlock()
 
 	packetPrompt := buildReviewPacketPrompt(e.name, reviewerProject, originSummary)
+	packetPrefix := e.name + " review-packet: "
 	packetStart := time.Now()
 	slog.Info("review: preparing packet",
 		"origin_project", e.name,
@@ -5911,9 +5912,12 @@ func (e *Engine) startReviewCycle(sessionKey, reviewerProject string) error {
 		"origin_session", originSession.ID,
 		"origin_agent_session", originSession.AgentSessionID,
 	)
+	if err := e.sendChunksWithPrefix(originPlatform, originReplyCtx, packetPrefix+"prompt: ", packetPrompt); err != nil {
+		return err
+	}
 	reviewPacket, err := e.runManagedTurn(originStateForReviewPacket(e, sessionKey, originPlatform, originReplyCtx, originSession), originSession, sessionKey, packetPrompt, managedTurnOpts{
 		AutoApprove: true,
-		Silent:      true,
+		Prefix:      packetPrefix,
 	})
 	if err != nil {
 		slog.Warn("review: packet preparation failed",
