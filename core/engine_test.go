@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // --- stubs for Engine tests ---
@@ -1292,6 +1293,71 @@ func TestSendChunksWithPrefix_PrefixesEveryChunk(t *testing.T) {
 		}
 		if len(msg) > maxPlatformMessageLen {
 			t.Fatalf("chunk %d len = %d, want <= %d", i, len(msg), maxPlatformMessageLen)
+		}
+	}
+}
+
+func TestSendChunksWithPrefix_EmptyPrefixPreservesChunks(t *testing.T) {
+	p := &stubPlatformEngine{n: "test"}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+
+	content := strings.Repeat("a", maxPlatformMessageLen+32)
+
+	if err := e.sendChunksWithPrefix(p, "ctx", "", content); err != nil {
+		t.Fatalf("sendChunksWithPrefix: %v", err)
+	}
+	if len(p.sent) < 2 {
+		t.Fatalf("sent chunks = %d, want at least 2", len(p.sent))
+	}
+	if strings.Join(p.sent, "") != content {
+		t.Fatalf("joined chunks != original content")
+	}
+	for i, msg := range p.sent {
+		if len(msg) > maxPlatformMessageLen {
+			t.Fatalf("chunk %d len = %d, want <= %d", i, len(msg), maxPlatformMessageLen)
+		}
+	}
+}
+
+func TestSendChunksWithPrefix_OversizedPrefixFallsBackToBoundedChunks(t *testing.T) {
+	p := &stubPlatformEngine{n: "test"}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+
+	prefix := strings.Repeat("p", maxPlatformMessageLen+10)
+	content := "body"
+
+	if err := e.sendChunksWithPrefix(p, "ctx", prefix, content); err != nil {
+		t.Fatalf("sendChunksWithPrefix: %v", err)
+	}
+	if len(p.sent) < 2 {
+		t.Fatalf("sent chunks = %d, want at least 2", len(p.sent))
+	}
+	if strings.Join(p.sent, "") != prefix+content {
+		t.Fatalf("joined chunks != prefixed content")
+	}
+	for i, msg := range p.sent {
+		if len(msg) > maxPlatformMessageLen {
+			t.Fatalf("chunk %d len = %d, want <= %d", i, len(msg), maxPlatformMessageLen)
+		}
+	}
+}
+
+func TestSplitMessage_KeepsUTF8Boundaries(t *testing.T) {
+	text := strings.Repeat("你", maxPlatformMessageLen/3+8)
+
+	chunks := splitMessage(text, maxPlatformMessageLen)
+	if len(chunks) < 2 {
+		t.Fatalf("chunks = %d, want at least 2", len(chunks))
+	}
+	if strings.Join(chunks, "") != text {
+		t.Fatalf("joined chunks != original text")
+	}
+	for i, chunk := range chunks {
+		if !utf8.ValidString(chunk) {
+			t.Fatalf("chunk %d is not valid UTF-8", i)
+		}
+		if len(chunk) > maxPlatformMessageLen {
+			t.Fatalf("chunk %d len = %d, want <= %d", i, len(chunk), maxPlatformMessageLen)
 		}
 	}
 }

@@ -1065,13 +1065,23 @@ func (e *Engine) sendChunksWithPrefix(p Platform, replyCtx any, prefix, content 
 	if text == "" {
 		return nil
 	}
-	chunkLimit := maxPlatformMessageLen
-	if prefix != "" {
-		chunkLimit -= len(prefix)
-		if chunkLimit <= 0 {
-			chunkLimit = maxPlatformMessageLen
+	if prefix == "" {
+		for _, chunk := range splitMessage(text, maxPlatformMessageLen) {
+			if err := p.Send(e.ctx, replyCtx, chunk); err != nil {
+				return err
+			}
 		}
+		return nil
 	}
+	if len(prefix) >= maxPlatformMessageLen {
+		for _, chunk := range splitMessage(prefix+text, maxPlatformMessageLen) {
+			if err := p.Send(e.ctx, replyCtx, chunk); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	chunkLimit := maxPlatformMessageLen - len(prefix)
 	for _, chunk := range splitMessage(text, chunkLimit) {
 		if prefix != "" {
 			chunk = prefix + chunk
@@ -5770,6 +5780,16 @@ func splitMessage(text string, maxLen int) []string {
 		// Try to split at newline boundary
 		if idx := strings.LastIndex(text[:end], "\n"); idx > 0 && idx >= end/2 {
 			end = idx + 1
+		}
+		for end > 0 && !utf8.ValidString(text[:end]) {
+			end--
+		}
+		if end == 0 {
+			_, size := utf8.DecodeRuneInString(text)
+			if size <= 0 {
+				size = 1
+			}
+			end = size
 		}
 
 		chunk := text[:end]
