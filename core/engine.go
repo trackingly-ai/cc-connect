@@ -1065,10 +1065,17 @@ func (e *Engine) sendChunksWithPrefix(p Platform, replyCtx any, prefix, content 
 	if text == "" {
 		return nil
 	}
+	chunkLimit := maxPlatformMessageLen
 	if prefix != "" {
-		text = prefix + text
+		chunkLimit -= len(prefix)
+		if chunkLimit <= 0 {
+			chunkLimit = maxPlatformMessageLen
+		}
 	}
-	for _, chunk := range splitMessage(text, maxPlatformMessageLen) {
+	for _, chunk := range splitMessage(text, chunkLimit) {
+		if prefix != "" {
+			chunk = prefix + chunk
+		}
 		if err := p.Send(e.ctx, replyCtx, chunk); err != nil {
 			return err
 		}

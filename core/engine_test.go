@@ -1273,6 +1273,29 @@ func TestRunManagedTurn_HidesToolResultByDefault(t *testing.T) {
 	}
 }
 
+func TestSendChunksWithPrefix_PrefixesEveryChunk(t *testing.T) {
+	p := &stubPlatformEngine{n: "test"}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+
+	content := strings.Repeat("a", maxPlatformMessageLen+32)
+	prefix := "codex review-packet: "
+
+	if err := e.sendChunksWithPrefix(p, "ctx", prefix, content); err != nil {
+		t.Fatalf("sendChunksWithPrefix: %v", err)
+	}
+	if len(p.sent) < 2 {
+		t.Fatalf("sent chunks = %d, want at least 2", len(p.sent))
+	}
+	for i, msg := range p.sent {
+		if !strings.HasPrefix(msg, prefix) {
+			t.Fatalf("chunk %d = %q, want prefix %q", i, msg, prefix)
+		}
+		if len(msg) > maxPlatformMessageLen {
+			t.Fatalf("chunk %d len = %d, want <= %d", i, len(msg), maxPlatformMessageLen)
+		}
+	}
+}
+
 func TestProcessInteractiveEvents_BindsSessionIDFromResultEvent(t *testing.T) {
 	e := newTestEngine()
 	p := &stubPlatformEngine{n: "test"}
