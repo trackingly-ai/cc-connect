@@ -1248,6 +1248,31 @@ func TestRunManagedTurn_UsesToolResultContentAndHonorsQuiet(t *testing.T) {
 	}
 }
 
+func TestRunManagedTurn_HidesToolResultByDefault(t *testing.T) {
+	p := &stubPlatformEngine{n: "test"}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	session := e.sessions.GetOrCreateActive("test:user3")
+	state := newInteractiveState(&scriptedAgentSession{
+		events: make(chan Event, 3),
+		queue: []Event{
+			{Type: EventToolResult, Content: "default hidden tool output"},
+			{Type: EventText, Content: "final"},
+			{Type: EventResult, Done: true},
+		},
+	}, p, "ctx", false)
+
+	got, err := e.runManagedTurn(state, session, "test:user3", "prompt", managedTurnOpts{Prefix: "qoder: "})
+	if err != nil {
+		t.Fatalf("runManagedTurn: %v", err)
+	}
+	if got != "final" {
+		t.Fatalf("final = %q, want final", got)
+	}
+	if strings.Contains(strings.Join(p.sent, "\n"), "default hidden tool output") {
+		t.Fatalf("sent = %#v, want tool output hidden by default", p.sent)
+	}
+}
+
 func TestProcessInteractiveEvents_BindsSessionIDFromResultEvent(t *testing.T) {
 	e := newTestEngine()
 	p := &stubPlatformEngine{n: "test"}
