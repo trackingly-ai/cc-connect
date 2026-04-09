@@ -1218,7 +1218,7 @@ func TestRunManagedTurn_UsesToolResultContentAndHonorsQuiet(t *testing.T) {
 		},
 	}, p, "ctx", false)
 
-	got, err := e.runManagedTurn(state, session, "test:user1", "prompt", managedTurnOpts{Prefix: "qoder: "})
+	got, err := e.runManagedTurn(state, session, "test:user1", "prompt", managedTurnOpts{Prefix: "qoder: ", ShowToolResults: true})
 	if err != nil {
 		t.Fatalf("runManagedTurn: %v", err)
 	}
@@ -1240,7 +1240,7 @@ func TestRunManagedTurn_UsesToolResultContentAndHonorsQuiet(t *testing.T) {
 		},
 	}, quietPlatform, "ctx", true)
 
-	if _, err := e.runManagedTurn(quietState, quietSession, "test:user2", "prompt", managedTurnOpts{Prefix: "qoder: "}); err != nil {
+	if _, err := e.runManagedTurn(quietState, quietSession, "test:user2", "prompt", managedTurnOpts{Prefix: "qoder: ", ShowToolResults: true}); err != nil {
 		t.Fatalf("runManagedTurn quiet: %v", err)
 	}
 	if strings.Contains(strings.Join(quietPlatform.sent, "\n"), "hidden tool output") {

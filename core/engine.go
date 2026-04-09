@@ -268,6 +268,7 @@ type managedTurnOpts struct {
 	AutoApprove       bool
 	OfferFollowUpCard bool
 	Silent            bool
+	ShowToolResults   bool
 }
 
 // resolve safely closes the Resolved channel exactly once.
@@ -1214,7 +1215,7 @@ func (e *Engine) runManagedTurn(state *interactiveState, session *Session, agent
 				}
 			}
 		case EventToolResult:
-			if opts.Silent || quiet {
+			if opts.Silent || quiet || !opts.ShowToolResults {
 				continue
 			}
 			result := strings.TrimSpace(event.ToolResult)
