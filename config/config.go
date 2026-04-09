@@ -131,6 +131,7 @@ type TTSConfig struct {
 // ProjectConfig binds one agent (with a specific work_dir) to one or more platforms.
 type ProjectConfig struct {
 	Name                    string            `toml:"name"`
+	Role                    string            `toml:"role,omitempty"`
 	Agent                   AgentConfig       `toml:"agent"`
 	Platforms               []PlatformConfig  `toml:"platforms"`
 	Quiet                   *bool             `toml:"quiet,omitempty"`             // project-level quiet mode; overrides global setting
@@ -144,7 +145,7 @@ type ProjectConfig struct {
 type EchoProjectConfig struct {
 	Enabled        *bool  `toml:"enabled"`
 	AgentID        string `toml:"agent_id"`
-	Role           string `toml:"role"`
+	Role           string `toml:"role"` // deprecated: prefer project-level role
 	PromptTemplate string `toml:"prompt_template"`
 	OrgID          string `toml:"org_id"`
 }

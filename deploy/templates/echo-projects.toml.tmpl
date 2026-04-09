@@ -10,6 +10,7 @@ heartbeat_interval_sec = 30
 
 [[projects]]
 name = "echo-manager-claude"
+role = "manager"
 
 [projects.agent]
 type = "claudecode"
@@ -20,10 +21,10 @@ mode = "{{CLAUDE_MANAGER_MODE}}"
 
 [projects.echo]
 enabled = true
-role = "manager"
 
 [[projects]]
 name = "echo-architect-codex"
+role = "architect"
 
 [projects.agent]
 type = "codex"
@@ -34,10 +35,10 @@ mode = "{{CODEX_ARCHITECT_MODE}}"
 
 [projects.echo]
 enabled = true
-role = "architect"
 
 [[projects]]
 name = "echo-research-reviewer-qoder"
+role = "research_reviewer"
 
 [projects.agent]
 type = "qoder"
@@ -48,10 +49,10 @@ mode = "{{QODER_REVIEWER_MODE}}"
 
 [projects.echo]
 enabled = true
-role = "research_reviewer"
 
 [[projects]]
 name = "echo-researcher-codex"
+role = "researcher"
 
 [projects.agent]
 type = "codex"
@@ -62,10 +63,10 @@ mode = "{{CODEX_ARCHITECT_MODE}}"
 
 [projects.echo]
 enabled = true
-role = "researcher"
 
 [[projects]]
 name = "echo-design-reviewer-qoder"
+role = "design_reviewer"
 
 [projects.agent]
 type = "qoder"
@@ -76,10 +77,10 @@ mode = "{{QODER_REVIEWER_MODE}}"
 
 [projects.echo]
 enabled = true
-role = "design_reviewer"
 
 [[projects]]
 name = "echo-coder-codex"
+role = "coder"
 
 [projects.agent]
 type = "codex"
@@ -90,10 +91,10 @@ mode = "{{CODEX_CODER_MODE}}"
 
 [projects.echo]
 enabled = true
-role = "coder"
 
 [[projects]]
 name = "echo-reviewer-qoder"
+role = "reviewer"
 
 [projects.agent]
 type = "qoder"
@@ -104,10 +105,10 @@ mode = "{{QODER_REVIEWER_MODE}}"
 
 [projects.echo]
 enabled = true
-role = "reviewer"
 
 [[projects]]
 name = "echo-test-engineer-claude"
+role = "test_engineer"
 
 [projects.agent]
 type = "claudecode"
@@ -118,10 +119,10 @@ mode = "{{CLAUDE_TEST_ENGINEER_MODE}}"
 
 [projects.echo]
 enabled = true
-role = "test_engineer"
 
 [[projects]]
 name = "echo-lander-codex"
+role = "lander"
 
 [projects.agent]
 type = "codex"
@@ -132,4 +133,3 @@ mode = "{{CODEX_LANDER_MODE}}"
 
 [projects.echo]
 enabled = true
-role = "lander"

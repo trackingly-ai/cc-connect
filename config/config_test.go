@@ -111,6 +111,36 @@ type = "telegram"
 	}
 }
 
+func TestLoadParsesProjectLevelRole(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	content := `
+[[projects]]
+name = "tester"
+role = "test_engineer"
+
+[projects.agent]
+type = "claudecode"
+
+[[projects.platforms]]
+type = "telegram"
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if len(cfg.Projects) != 1 {
+		t.Fatalf("unexpected project count: %d", len(cfg.Projects))
+	}
+	if cfg.Projects[0].Role != "test_engineer" {
+		t.Fatalf("unexpected project role: %q", cfg.Projects[0].Role)
+	}
+}
+
 func TestLoadRejectsRelativeProjectSkillDir(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.toml")
 	content := `

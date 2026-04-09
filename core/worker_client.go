@@ -813,8 +813,15 @@ func buildWorkerAgentRegistrations(
 		if !enabled {
 			continue
 		}
+		if usesLegacyEchoRole(proj) {
+			slog.Warn(
+				"echo project is using deprecated [projects.echo].role; move role to the project top level",
+				"project", proj.Name,
+				"legacy_role", strings.TrimSpace(proj.Echo.Role),
+			)
+		}
 		if role == "" {
-			return nil, fmt.Errorf("project %q must set [projects.echo].role or use an echo-* project name", proj.Name)
+			return nil, fmt.Errorf("project %q must set role (or legacy [projects.echo].role) or use an echo-* project name", proj.Name)
 		}
 		agentType := strings.TrimSpace(proj.Agent.Type)
 		if agentType == "" {
@@ -928,7 +935,10 @@ func resolveEchoProjectEnabled(proj config.ProjectConfig) (bool, string) {
 	if proj.Echo.Enabled != nil && !*proj.Echo.Enabled {
 		return false, ""
 	}
-	role := strings.TrimSpace(proj.Echo.Role)
+	role := strings.TrimSpace(proj.Role)
+	if role == "" {
+		role = strings.TrimSpace(proj.Echo.Role)
+	}
 	if role != "" {
 		return true, role
 	}
@@ -939,6 +949,10 @@ func resolveEchoProjectEnabled(proj config.ProjectConfig) (bool, string) {
 		return true, ""
 	}
 	return false, ""
+}
+
+func usesLegacyEchoRole(proj config.ProjectConfig) bool {
+	return strings.TrimSpace(proj.Role) == "" && strings.TrimSpace(proj.Echo.Role) != ""
 }
 
 func inferEchoRole(projectName string) (string, bool) {

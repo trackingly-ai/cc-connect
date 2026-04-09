@@ -81,6 +81,7 @@ func TestBuildWorkerAgentRegistrations(t *testing.T) {
 		[]config.ProjectConfig{
 			{
 				Name: "echo-manager-claude",
+				Role: "manager",
 				Agent: config.AgentConfig{
 					Type: "claudecode",
 					Options: map[string]any{
@@ -174,6 +175,7 @@ func TestBuildWorkerAgentRegistrationsAllowsReviewerWithoutYoloMode(t *testing.T
 		[]config.ProjectConfig{
 			{
 				Name: "echo-reviewer-qoder",
+				Role: "reviewer",
 				Agent: config.AgentConfig{
 					Type: "qoder",
 					Options: map[string]any{
@@ -192,6 +194,52 @@ func TestBuildWorkerAgentRegistrationsAllowsReviewerWithoutYoloMode(t *testing.T
 	}
 	if len(agents) != 1 {
 		t.Fatalf("unexpected agent count: %d", len(agents))
+	}
+}
+
+func TestBuildWorkerAgentRegistrationsUsesProjectLevelRoleBeforeLegacyEchoRole(t *testing.T) {
+	enabled := true
+	agents, err := buildWorkerAgentRegistrations(
+		config.EchoConfig{OrgID: "coding-team"},
+		[]config.ProjectConfig{
+			{
+				Name: "custom-tester",
+				Role: "test_engineer",
+				Agent: config.AgentConfig{
+					Type: "claudecode",
+					Options: map[string]any{
+						"mode": "bypassPermissions",
+					},
+				},
+				Echo: config.EchoProjectConfig{
+					Enabled: &enabled,
+					Role:    "reviewer",
+				},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("buildWorkerAgentRegistrations: %v", err)
+	}
+	if len(agents) != 1 {
+		t.Fatalf("unexpected agent count: %d", len(agents))
+	}
+	if agents[0].Role != "test_engineer" {
+		t.Fatalf("unexpected role: %q", agents[0].Role)
+	}
+}
+
+func TestUsesLegacyEchoRoleOnlyWhenProjectRoleIsUnset(t *testing.T) {
+	if !usesLegacyEchoRole(config.ProjectConfig{
+		Echo: config.EchoProjectConfig{Role: "coder"},
+	}) {
+		t.Fatal("expected legacy echo role detection when only nested role is set")
+	}
+	if usesLegacyEchoRole(config.ProjectConfig{
+		Role: "coder",
+		Echo: config.EchoProjectConfig{Role: "reviewer"},
+	}) {
+		t.Fatal("did not expect legacy echo role detection when project-level role is set")
 	}
 }
 
