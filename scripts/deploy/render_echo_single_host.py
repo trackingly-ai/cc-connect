@@ -5,6 +5,15 @@ import os
 import shlex
 from pathlib import Path
 
+_DEFAULT_PRIVATE_RUNTIME_ENV_PATH = (
+    Path.home()
+    / ".local"
+    / "share"
+    / "echo-single-host"
+    / "config"
+    / "private-runtime.env"
+)
+
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
@@ -48,10 +57,21 @@ def _write_shell_env(path: Path, values: dict[str, str]) -> None:
     )
 
 
-def _build_values(env_file: Path | None) -> dict[str, str]:
+def _load_env_sources(
+    env_file: Path | None, runtime_env_file: Path | None
+) -> dict[str, str]:
+    loaded = _load_env_file(runtime_env_file)
+    loaded.update(_load_env_file(env_file))
+    return loaded
+
+
+def _build_values(
+    env_file: Path | None,
+    runtime_env_file: Path | None = _DEFAULT_PRIVATE_RUNTIME_ENV_PATH,
+) -> dict[str, str]:
     repo_root = _repo_root()
     home = Path.home()
-    env = _load_env_file(env_file)
+    env = _load_env_sources(env_file, runtime_env_file)
 
     def get(name: str, default: str) -> str:
         return env.get(name) or os.environ.get(name) or default
@@ -84,7 +104,7 @@ def _build_values(env_file: Path | None) -> dict[str, str]:
         "CC_CONNECT_BINARY": str(cc_connect_binary),
         "ECHO_SERVER_URL": get("ECHO_SERVER_URL", "http://127.0.0.1:8000"),
         "ECHO_WORKER_TOKEN": get(
-            "ECHO_WORKER_TOKEN", get("ECHO_WORKER_GATEWAY_TOKEN", "")
+            "ECHO_WORKER_GATEWAY_TOKEN", get("ECHO_WORKER_TOKEN", "replace-me")
         ),
         "CC_HOST_ID": get("CC_HOST_ID", "host-local"),
         "CC_HOST_LABEL": get("CC_HOST_LABEL", "Local Host"),
@@ -100,12 +120,32 @@ def _build_values(env_file: Path | None) -> dict[str, str]:
         "QODER_REVIEWER_MODE": get("QODER_REVIEWER_MODE", "yolo"),
         "CODEX_LANDER_MODE": get("CODEX_LANDER_MODE", "yolo"),
     }
+    _validate_worker_gateway_config(values, runtime_env_file)
     return values
 
 
-def render(env_file: Path | None) -> dict[str, str]:
+def _validate_worker_gateway_config(
+    values: dict[str, str], runtime_env_file: Path | None
+) -> None:
+    token = values["ECHO_WORKER_TOKEN"].strip()
+    if token == "" or token == "replace-me":
+        hint = (
+            f" Provide ECHO_WORKER_GATEWAY_TOKEN in {runtime_env_file}."
+            if runtime_env_file is not None
+            else ""
+        )
+        raise ValueError(
+            "cc-connect worker token is missing or still set to replace-me."
+            f"{hint}"
+        )
+
+
+def render(
+    env_file: Path | None,
+    runtime_env_file: Path | None = _DEFAULT_PRIVATE_RUNTIME_ENV_PATH,
+) -> dict[str, str]:
     repo_root = _repo_root()
-    values = _build_values(env_file)
+    values = _build_values(env_file, runtime_env_file)
 
     rendered_dir = Path(values["RENDERED_DIR"])
     config_dir = Path(values["CONFIG_DIR"])
@@ -156,8 +196,17 @@ def main() -> int:
         default=None,
         help="Optional env override file. Defaults are derived automatically.",
     )
+    parser.add_argument(
+        "--runtime-env-file",
+        type=Path,
+        default=_DEFAULT_PRIVATE_RUNTIME_ENV_PATH,
+        help=(
+            "Optional private runtime env file for non-committed secrets such as "
+            f"worker gateway tokens. Defaults to {_DEFAULT_PRIVATE_RUNTIME_ENV_PATH}."
+        ),
+    )
     args = parser.parse_args()
-    values = render(args.env_file)
+    values = render(args.env_file, args.runtime_env_file)
     print(f"Rendered cc-connect deployment assets to {values['RENDERED_DIR']}")
     print(f"cc-connect deploy env: {values['DEPLOY_ENV_PATH']}")
     print(f"cc-connect config: {values['CC_CONNECT_CONFIG_PATH']}")
