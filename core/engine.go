@@ -3684,10 +3684,14 @@ func (e *Engine) cmdModel(p Platform, msg *Message, args []string) {
 	fetchCtx, cancel := context.WithTimeout(e.ctx, 10*time.Second)
 	defer cancel()
 	models := switcher.AvailableModels(fetchCtx)
+	current := switcher.GetModel()
+	selectableModels := modelPickerOptions(p.Name(), e.agent.Name(), current, models)
+	if len(selectableModels) == 0 {
+		selectableModels = models
+	}
 
 	if len(args) == 0 {
 		var sb strings.Builder
-		current := switcher.GetModel()
 		if current == "" {
 			sb.WriteString(e.i18n.T(MsgModelDefault))
 		} else {
@@ -3696,7 +3700,7 @@ func (e *Engine) cmdModel(p Platform, msg *Message, args []string) {
 		}
 		sb.WriteString("\n")
 		sb.WriteString(e.i18n.T(MsgModelListTitle))
-		for i, m := range models {
+		for i, m := range selectableModels {
 			marker := "  "
 			if m.Name == current {
 				marker = "> "
@@ -3710,17 +3714,21 @@ func (e *Engine) cmdModel(p Platform, msg *Message, args []string) {
 		sb.WriteString("\n")
 		sb.WriteString(e.i18n.T(MsgModelUsage))
 
-		// Build button rows (max 3 per row); use numeric index to stay within
-		// Telegram's 64-byte callback_data limit for long model names.
+		buttonsPerRow := 3
+		if strings.EqualFold(p.Name(), "feishu") {
+			buttonsPerRow = 1
+		}
+
+		// Build button rows; use numeric index to stay within callback limits.
 		var buttons [][]ButtonOption
 		var row []ButtonOption
-		for i, m := range models {
+		for i, m := range selectableModels {
 			label := m.Name
 			if m.Name == current {
 				label = "▶ " + label
 			}
 			row = append(row, ButtonOption{Text: label, Data: fmt.Sprintf("cmd:/model %d", i+1)})
-			if len(row) >= 3 {
+			if len(row) >= buttonsPerRow {
 				buttons = append(buttons, row)
 				row = nil
 			}
@@ -3733,8 +3741,8 @@ func (e *Engine) cmdModel(p Platform, msg *Message, args []string) {
 	}
 
 	target := args[0]
-	if idx, err := strconv.Atoi(target); err == nil && idx >= 1 && idx <= len(models) {
-		target = models[idx-1].Name
+	if idx, err := strconv.Atoi(target); err == nil && idx >= 1 && idx <= len(selectableModels) {
+		target = selectableModels[idx-1].Name
 	}
 
 	switcher.SetModel(target)
@@ -3746,6 +3754,87 @@ func (e *Engine) cmdModel(p Platform, msg *Message, args []string) {
 	e.sessions.Save()
 
 	e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgModelChanged, target))
+}
+
+func modelPickerOptions(platformName, agentName, current string, available []ModelOption) []ModelOption {
+	if !strings.EqualFold(platformName, "feishu") {
+		return available
+	}
+
+	base := feishuPreferredModels(agentName)
+	if len(base) == 0 {
+		return available
+	}
+
+	availableByName := make(map[string]ModelOption, len(available))
+	for _, m := range available {
+		availableByName[strings.ToLower(strings.TrimSpace(m.Name))] = m
+	}
+
+	options := make([]ModelOption, 0, len(base)+1)
+	if current = strings.TrimSpace(current); current != "" && !containsModelOption(base, current) {
+		if m, ok := availableByName[strings.ToLower(current)]; ok {
+			options = append(options, m)
+		} else {
+			options = append(options, ModelOption{Name: current, Desc: "Current model"})
+		}
+	}
+
+	for _, m := range base {
+		if live, ok := availableByName[strings.ToLower(m.Name)]; ok {
+			if strings.TrimSpace(live.Desc) != "" {
+				m.Desc = live.Desc
+			}
+		}
+		if !containsModelOption(options, m.Name) {
+			options = append(options, m)
+		}
+	}
+	return options
+}
+
+func feishuPreferredModels(agentName string) []ModelOption {
+	switch strings.ToLower(strings.TrimSpace(agentName)) {
+	case "claudecode":
+		return []ModelOption{
+			{Name: "sonnet", Desc: "Claude Sonnet (balanced)"},
+			{Name: "opus", Desc: "Claude Opus (most capable)"},
+			{Name: "haiku", Desc: "Claude Haiku (fastest)"},
+		}
+	case "codex":
+		return []ModelOption{
+			{Name: "o4-mini", Desc: "O4 Mini (fast reasoning)"},
+			{Name: "o3", Desc: "O3 (most capable reasoning)"},
+			{Name: "gpt-4.1", Desc: "GPT-4.1 (balanced)"},
+			{Name: "codex-mini-latest", Desc: "Codex Mini (code-optimized)"},
+		}
+	case "gemini":
+		return []ModelOption{
+			{Name: "gemini-2.5-pro", Desc: "Gemini 2.5 Pro (most capable)"},
+			{Name: "gemini-2.5-flash", Desc: "Gemini 2.5 Flash (fast)"},
+			{Name: "gemini-2.0-flash", Desc: "Gemini 2.0 Flash (lightweight)"},
+		}
+	case "qoder":
+		return []ModelOption{
+			{Name: "auto", Desc: "Auto (recommended)"},
+			{Name: "ultimate", Desc: "Ultimate (most capable)"},
+			{Name: "performance", Desc: "Performance (balanced)"},
+			{Name: "efficient", Desc: "Efficient (fast)"},
+			{Name: "lite", Desc: "Lite (lightweight)"},
+		}
+	default:
+		return nil
+	}
+}
+
+func containsModelOption(options []ModelOption, name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	for _, option := range options {
+		if strings.ToLower(strings.TrimSpace(option.Name)) == name {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *Engine) cmdMode(p Platform, msg *Message, args []string) {
@@ -4465,6 +4554,18 @@ func (e *Engine) replyWithButtons(p Platform, replyCtx any, content string, butt
 	if bs, ok := p.(InlineButtonSender); ok {
 		if err := bs.SendWithButtons(e.ctx, replyCtx, content, buttons); err == nil {
 			return
+		} else {
+			buttonCount := 0
+			for _, row := range buttons {
+				buttonCount += len(row)
+			}
+			slog.Warn("replyWithButtons: falling back to plain text",
+				"platform", p.Name(),
+				"button_rows", len(buttons),
+				"button_count", buttonCount,
+				"content_len", len(content),
+				"error", err,
+			)
 		}
 	}
 	e.reply(p, replyCtx, content)

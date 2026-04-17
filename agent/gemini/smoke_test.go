@@ -72,6 +72,53 @@ func TestAgentSessionSmoke_UsesManagedWorkspaceAndExtraDirs(t *testing.T) {
 	}
 }
 
+func TestAgentSessionSmoke_PassesModelToGeminiCLI(t *testing.T) {
+	baseDir := t.TempDir()
+	repoDir := filepath.Join(baseDir, "repo")
+	binDir := filepath.Join(baseDir, "bin")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+
+	argsFile := filepath.Join(baseDir, "gemini-args.txt")
+	script := "#!/bin/sh\n" +
+		"printf '%s\\n' \"$@\" > \"$GEMINI_ARGS_FILE\"\n" +
+		"printf '%s\\n' '{\"type\":\"init\",\"session_id\":\"gemini-model\",\"model\":\"gemini-2.5-flash\"}'\n" +
+		"printf '%s\\n' '{\"type\":\"result\",\"status\":\"success\"}'\n"
+	scriptPath := filepath.Join(binDir, "gemini")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake gemini: %v", err)
+	}
+
+	t.Setenv("GEMINI_ARGS_FILE", argsFile)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	agentRaw, err := New(map[string]any{"work_dir": repoDir, "model": "gemini-2.5-flash"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	agent := agentRaw.(*Agent)
+
+	sess, err := agent.StartSession(context.Background(), "")
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	defer func() { _ = sess.Close() }()
+
+	if err := sess.Send("hello", nil, nil); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	waitForGeminiResult(t, sess.Events())
+	args := readGeminiArgs(t, argsFile)
+	if !containsGeminiArgPair(args, "-m", "gemini-2.5-flash") {
+		t.Fatalf("args missing -m %q: %#v", "gemini-2.5-flash", args)
+	}
+}
+
 func TestSkillDirsPreferAgentsAlias(t *testing.T) {
 	a := &Agent{workDir: "/tmp/demo"}
 	dirs := a.SkillDirs()

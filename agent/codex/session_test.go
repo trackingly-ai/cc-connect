@@ -226,6 +226,70 @@ done:
 	}
 }
 
+func TestSend_PassesModelToCodexCLI(t *testing.T) {
+	workDir := t.TempDir()
+	binDir := filepath.Join(workDir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+
+	argsFile := filepath.Join(workDir, "args.txt")
+	script := `#!/bin/sh
+printf '%s\n' "$@" > "$CODEX_ARGS_FILE"
+echo '{"type":"thread.started","thread_id":"thread-model"}'
+echo '{"type":"turn.completed"}'
+`
+	scriptPath := filepath.Join(binDir, "codex")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake codex: %v", err)
+	}
+
+	t.Setenv("CODEX_ARGS_FILE", argsFile)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	cs, err := newCodexSession(context.Background(), workDir, "o3", "", "", nil, nil)
+	if err != nil {
+		t.Fatalf("newCodexSession: %v", err)
+	}
+	defer func() { _ = cs.Close() }()
+
+	if err := cs.Send("hello", nil, nil); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	timeout := time.After(5 * time.Second)
+	for {
+		select {
+		case evt := <-cs.Events():
+			if evt.Type == core.EventError {
+				t.Fatalf("unexpected error event: %v", evt.Error)
+			}
+			if evt.Type == core.EventResult && evt.Done {
+				goto done
+			}
+		case <-timeout:
+			t.Fatal("timed out waiting for result")
+		}
+	}
+
+done:
+	argsBytes, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("ReadFile args: %v", err)
+	}
+	args := strings.Split(strings.TrimSpace(string(argsBytes)), "\n")
+	modelIdx := -1
+	for i, arg := range args {
+		if arg == "--model" {
+			modelIdx = i
+			break
+		}
+	}
+	if modelIdx < 0 || modelIdx+1 >= len(args) || args[modelIdx+1] != "o3" {
+		t.Fatalf("args = %#v, want --model o3", args)
+	}
+}
+
 func TestSend_UsesStdinForMultilinePrompt(t *testing.T) {
 	workDir := t.TempDir()
 	binDir := filepath.Join(workDir, "bin")

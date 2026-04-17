@@ -21,6 +21,7 @@ type stubButtonPlatform struct {
 	sent        []string
 	buttonTexts []string
 	buttonData  []string
+	buttonRows  [][]ButtonOption
 	audio       [][]byte
 	audioFormat []string
 }
@@ -45,6 +46,8 @@ func (p *stubButtonPlatform) SendWithButtons(_ context.Context, _ any, content s
 	defer p.mu.Unlock()
 	p.sent = append(p.sent, content)
 	for _, row := range buttons {
+		rowCopy := append([]ButtonOption(nil), row...)
+		p.buttonRows = append(p.buttonRows, rowCopy)
 		for _, btn := range row {
 			p.buttonTexts = append(p.buttonTexts, btn.Text)
 			p.buttonData = append(p.buttonData, btn.Data)
@@ -76,6 +79,16 @@ func (p *stubButtonPlatform) buttonTextsSnapshot() []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return append([]string(nil), p.buttonTexts...)
+}
+
+func (p *stubButtonPlatform) buttonRowsSnapshot() [][]ButtonOption {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	rows := make([][]ButtonOption, len(p.buttonRows))
+	for i, row := range p.buttonRows {
+		rows[i] = append([]ButtonOption(nil), row...)
+	}
+	return rows
 }
 
 func (p *stubButtonPlatform) audioSnapshot() [][]byte {

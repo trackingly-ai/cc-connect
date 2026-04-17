@@ -50,6 +50,30 @@ func (a *namedStubAgent) ListSessions(_ context.Context) ([]AgentSessionInfo, er
 }
 func (a *namedStubAgent) Stop() error { return nil }
 
+type stubModelSwitchAgent struct {
+	name   string
+	model  string
+	models []ModelOption
+}
+
+func (a *stubModelSwitchAgent) Name() string { return a.name }
+func (a *stubModelSwitchAgent) StartSession(_ context.Context, _ string) (AgentSession, error) {
+	return &stubAgentSession{}, nil
+}
+func (a *stubModelSwitchAgent) ListSessions(_ context.Context) ([]AgentSessionInfo, error) {
+	return nil, nil
+}
+func (a *stubModelSwitchAgent) Stop() error { return nil }
+func (a *stubModelSwitchAgent) SetModel(model string) {
+	a.model = model
+}
+func (a *stubModelSwitchAgent) GetModel() string {
+	return a.model
+}
+func (a *stubModelSwitchAgent) AvailableModels(_ context.Context) []ModelOption {
+	return append([]ModelOption(nil), a.models...)
+}
+
 type stubAgentSession struct{}
 
 func (s *stubAgentSession) Send(_ string, _ []ImageAttachment, _ []FileAttachment) error {
@@ -478,6 +502,90 @@ func TestCmdList_FeishuUsesSessionCardButtons(t *testing.T) {
 	}
 	if !slices.Contains(values, "act:/sessions delete sess-1 1") {
 		t.Fatalf("buttons = %#v, want delete action", values)
+	}
+}
+
+func TestCmdModel_FeishuUsesStableAgentSpecificButtons(t *testing.T) {
+	tests := []struct {
+		name         string
+		agentName    string
+		current      string
+		models       []ModelOption
+		wantButtons  []string
+		wantFirstSet string
+	}{
+		{
+			name:      "gemini",
+			agentName: "gemini",
+			models: []ModelOption{
+				{Name: "gemini-3.1-pro-preview"},
+				{Name: "gemini-2.5-pro"},
+				{Name: "gemini-2.5-flash"},
+				{Name: "gemini-2.0-flash"},
+				{Name: "gemini-robotics-er-1.6-preview"},
+			},
+			wantButtons: []string{"gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"},
+		},
+		{
+			name:      "codex",
+			agentName: "codex",
+			models: []ModelOption{
+				{Name: "gpt-4.1"},
+				{Name: "gpt-4.1-mini"},
+				{Name: "o3"},
+				{Name: "o4-mini"},
+			},
+			wantButtons: []string{"o4-mini", "o3", "gpt-4.1", "codex-mini-latest"},
+		},
+		{
+			name:      "claudecode",
+			agentName: "claudecode",
+			current:   "claude-sonnet-4-6",
+			models: []ModelOption{
+				{Name: "claude-sonnet-4-6"},
+				{Name: "claude-opus-4-1"},
+			},
+			wantButtons:  []string{"▶ claude-sonnet-4-6", "sonnet", "opus", "haiku"},
+			wantFirstSet: "claude-sonnet-4-6",
+		},
+		{
+			name:      "qoder",
+			agentName: "qoder",
+			models: []ModelOption{
+				{Name: "auto"},
+				{Name: "ultimate"},
+				{Name: "performance"},
+				{Name: "efficient"},
+				{Name: "lite"},
+			},
+			wantButtons: []string{"auto", "ultimate", "performance", "efficient", "lite"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			agent := &stubModelSwitchAgent{name: tt.agentName, model: tt.current, models: tt.models}
+			p := &stubButtonPlatform{n: "feishu"}
+			e := NewEngine("test", agent, []Platform{p}, "", LangEnglish)
+
+			e.cmdModel(p, &Message{SessionKey: "feishu:chat:user", ReplyCtx: "ctx"}, nil)
+
+			if got := p.buttonTextsSnapshot(); !slices.Equal(got, tt.wantButtons) {
+				t.Fatalf("button texts = %#v, want %#v", got, tt.wantButtons)
+			}
+			for i, row := range p.buttonRowsSnapshot() {
+				if len(row) != 1 {
+					t.Fatalf("row %d len = %d, want 1", i, len(row))
+				}
+			}
+
+			if tt.wantFirstSet != "" {
+				e.cmdModel(p, &Message{SessionKey: "feishu:chat:user", ReplyCtx: "ctx"}, []string{"1"})
+				if got := agent.GetModel(); got != tt.wantFirstSet {
+					t.Fatalf("selected model = %q, want %q", got, tt.wantFirstSet)
+				}
+			}
+		})
 	}
 }
 

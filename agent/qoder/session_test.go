@@ -229,3 +229,66 @@ done:
 		t.Fatalf("workspace args = %#v, want [%q]", workspaces, workDir)
 	}
 }
+
+func TestSend_PassesModelToQoderCLI(t *testing.T) {
+	workDir := t.TempDir()
+	binDir := filepath.Join(workDir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+
+	argsFile := filepath.Join(workDir, "args.txt")
+	script := `#!/bin/sh
+printf '%s\n' "$@" > "$QODER_ARGS_FILE"
+echo '{"type":"result","session_id":"qoder-session-model","done":true,"message":{"content":[{"type":"text","text":"ok"}]}}'
+`
+	scriptPath := filepath.Join(binDir, "qodercli")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake qodercli: %v", err)
+	}
+
+	t.Setenv("QODER_ARGS_FILE", argsFile)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	qs, err := newQoderSession(context.Background(), workDir, nil, "ultimate", "", "", nil)
+	if err != nil {
+		t.Fatalf("newQoderSession: %v", err)
+	}
+	defer func() { _ = qs.Close() }()
+
+	if err := qs.Send("hello", nil, nil); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	timeout := time.After(5 * time.Second)
+	for {
+		select {
+		case evt := <-qs.Events():
+			if evt.Type == core.EventError {
+				t.Fatalf("unexpected error event: %v", evt.Error)
+			}
+			if evt.Type == core.EventResult && evt.Done {
+				goto done
+			}
+		case <-timeout:
+			t.Fatal("timed out waiting for result")
+		}
+	}
+
+done:
+	argsBytes, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("ReadFile args: %v", err)
+	}
+	args := strings.Split(strings.TrimSpace(string(argsBytes)), "\n")
+	modelIdx := -1
+	for i, arg := range args {
+		if arg == "--model" {
+			modelIdx = i
+			break
+		}
+	}
+	if modelIdx < 0 || modelIdx+1 >= len(args) || args[modelIdx+1] != "ultimate" {
+		t.Fatalf("args = %#v, want --model ultimate", args)
+	}
+}
