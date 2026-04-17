@@ -294,7 +294,6 @@ Add a new optional interface in `core/interfaces.go`:
 
 ```go
 type ReasoningLevelOption struct {
-    Key  string
     Name string
     Desc string
 }
@@ -302,7 +301,7 @@ type ReasoningLevelOption struct {
 type ReasoningLevelSwitcher interface {
     SetReasoningLevel(level string)
     GetReasoningLevel() string
-    AvailableReasoningLevels(ctx context.Context) []ReasoningLevelOption
+    AvailableReasoningLevels() []ReasoningLevelOption
 }
 ```
 
@@ -420,6 +419,7 @@ Recommended v1 implementation:
 - if `thinking_budget` is set:
   - write a transient Gemini config snippet for this session
   - set `thinkingConfig.thinkingBudget`
+  - inject it with `GEMINI_CLI_SYSTEM_SETTINGS_PATH`
 - else if `reasoning_level` is set:
   - map to the preset budget above
 
@@ -439,6 +439,8 @@ Changes:
 
 - no `ReasoningLevelSwitcher`
 - if `reasoning_level` is configured, log a warning that Qoder uses model tiers
+  instead
+- if `thinking_budget` is configured, log a warning that Qoder uses model tiers
   instead
 
 ## Help Text / i18n
@@ -476,6 +478,7 @@ Add tests for:
 
 - `/effort` on Feishu returns one button per row
 - `/effort 2` resolves against the displayed option list
+- invalid `/effort` values return usage and do not mutate state
 - unsupported agents fall back to a clear error message
 - Qoder path suggests `/model`
 
@@ -495,6 +498,7 @@ Add tests for:
 Add tests for:
 
 - `SetReasoningLevel("high")`
+- `SetReasoningLevel("auto")` normalizes back to default / omitted effort
 - launch args include:
 
 ```text
@@ -508,12 +512,14 @@ Add tests for:
 - preset mapping from `reasoning_level` to `thinking_budget`
 - explicit `thinking_budget` overrides preset
 - launch path receives the expected transient config / env
+- stale transient settings files are pruned on best-effort creation
 
 ### Qoder tests
 
 Add tests for:
 
 - `reasoning_level` is ignored with a warning
+- `thinking_budget` is ignored with a warning
 - `/effort` reports unsupported
 - `/model` remains the supported path
 

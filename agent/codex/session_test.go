@@ -12,6 +12,15 @@ import (
 	"github.com/chenhg5/cc-connect/core"
 )
 
+func TestAgentSetReasoningLevelNormalizesValue(t *testing.T) {
+	agent := &Agent{}
+	agent.SetReasoningLevel("extra-high")
+
+	if got := agent.GetReasoningLevel(); got != "xhigh" {
+		t.Fatalf("GetReasoningLevel() = %q, want xhigh", got)
+	}
+}
+
 func TestSend_HandlesLargeJSONLines(t *testing.T) {
 	workDir := t.TempDir()
 	binDir := filepath.Join(workDir, "bin")

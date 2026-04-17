@@ -388,6 +388,14 @@ mode = "default" # "default" | "acceptEdits" (edit) | "plan" | "auto" | "bypassP
 # Optional: specify a model / 可选：指定模型
 # model = "claude-sonnet-4-20250514"
 
+# Optional: reasoning / effort control (supported by Codex, Claude Code, Gemini)
+# 可选：推理强度控制（Codex、Claude Code、Gemini 支持）
+# reasoning_level = "high"  # Codex: low|medium|high|xhigh; Claude: auto|low|medium|high|max; Gemini: off|low|medium|high
+#
+# Gemini only: explicit thinking budget overrides reasoning_level
+# 仅 Gemini：显式 thinking budget 会覆盖 reasoning_level
+# thinking_budget = 1024
+
 # Claude Code Router Integration / Claude Code Router 集成
 # Route Claude Code requests through Claude Code Router to use different model providers.
 # 通过 Claude Code Router 路由 Claude Code 请求，使用不同的模型提供商。

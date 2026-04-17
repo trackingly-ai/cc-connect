@@ -79,6 +79,15 @@ func TestBuildClaudeSessionArgsUsesExpectedDefaults(t *testing.T) {
 	}
 }
 
+func TestAgentSetReasoningLevelAutoClearsExplicitEffort(t *testing.T) {
+	agent := &Agent{reasoningLevel: "high"}
+	agent.SetReasoningLevel("auto")
+
+	if got := agent.GetReasoningLevel(); got != "" {
+		t.Fatalf("GetReasoningLevel() = %q, want empty default", got)
+	}
+}
+
 func TestBuildClaudeSessionArgsOmitsOptionalValues(t *testing.T) {
 	args := buildClaudeSessionArgs("", "", "", "default", nil, nil)
 

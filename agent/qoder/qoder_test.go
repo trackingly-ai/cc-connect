@@ -1,9 +1,12 @@
 package qoder
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -83,5 +86,28 @@ func TestSkillDirsUseQoderPaths(t *testing.T) {
 	}
 	if got := dirs[1]; got != "/tmp/demo/.claude/skills" {
 		t.Fatalf("second skill dir = %q, want %q", got, "/tmp/demo/.claude/skills")
+	}
+}
+
+func TestNew_WarnsWhenReasoningOptionsAreIgnored(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	defer slog.SetDefault(prev)
+
+	if _, err := New(map[string]any{
+		"work_dir":        "/tmp/demo",
+		"reasoning_level": "high",
+		"thinking_budget": int64(1024),
+	}); err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	logs := buf.String()
+	if !strings.Contains(logs, "reasoning_level is ignored") {
+		t.Fatalf("logs = %q, want reasoning_level warning", logs)
+	}
+	if !strings.Contains(logs, "thinking_budget is ignored") {
+		t.Fatalf("logs = %q, want thinking_budget warning", logs)
 	}
 }
