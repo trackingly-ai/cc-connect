@@ -275,6 +275,7 @@ func writeGeminiSystemSettingsOverride(thinkingBudget int) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("geminiSession: mkdir settings dir: %w", err)
 	}
+	cleanupGeminiSettingsOverrides(dir, 24*time.Hour)
 	f, err := os.CreateTemp(dir, "settings-*.json")
 	if err != nil {
 		return "", fmt.Errorf("geminiSession: create settings override: %w", err)
@@ -297,6 +298,24 @@ func (gs *geminiSession) cleanupSettingsOverride() {
 	if gs.settingsPath != "" {
 		_ = os.Remove(gs.settingsPath)
 		gs.settingsPath = ""
+	}
+}
+
+func cleanupGeminiSettingsOverrides(dir string, maxAge time.Duration) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-maxAge)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "settings-") || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || info.ModTime().After(cutoff) {
+			continue
+		}
+		_ = os.Remove(filepath.Join(dir, entry.Name()))
 	}
 }
 

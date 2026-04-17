@@ -111,6 +111,14 @@ func TestBuildClaudeSessionArgsIncludesEffort(t *testing.T) {
 	}
 }
 
+func TestBuildClaudeSessionArgsOmitsEffortForAuto(t *testing.T) {
+	args := buildClaudeSessionArgs("sonnet", "", "", "default", nil, nil)
+
+	if slices.Contains(args, "--effort") {
+		t.Fatalf("args unexpectedly included --effort: %v", args)
+	}
+}
+
 func TestNormalizeClaudeImage_ReencodesToJPEG(t *testing.T) {
 	raw := mustPNGBytes(t)
 

@@ -3877,7 +3877,7 @@ func (e *Engine) cmdEffort(p Platform, msg *Message, args []string) {
 		sb.WriteString("\n")
 		sb.WriteString(e.i18n.T(MsgEffortUsage))
 
-		buttonsPerRow := 2
+		buttonsPerRow := 3
 		if strings.EqualFold(p.Name(), "feishu") {
 			buttonsPerRow = 1
 		}

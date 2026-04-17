@@ -682,6 +682,29 @@ func TestCmdEffort_QoderSuggestsModel(t *testing.T) {
 	}
 }
 
+func TestCmdEffort_InvalidValueShowsUsage(t *testing.T) {
+	agent := &stubReasoningSwitchAgent{
+		name: "codex",
+		levels: []ReasoningLevelOption{
+			{Name: "low"},
+			{Name: "medium"},
+			{Name: "high"},
+		},
+	}
+	p := &stubButtonPlatform{n: "telegram"}
+	e := NewEngine("test", agent, []Platform{p}, "", LangEnglish)
+
+	e.cmdEffort(p, &Message{SessionKey: "tg:chat:user", ReplyCtx: "ctx"}, []string{"invalid"})
+
+	sent := strings.Join(p.sentSnapshot(), "\n")
+	if !strings.Contains(sent, "/effort <number>") {
+		t.Fatalf("sent = %q, want usage", sent)
+	}
+	if got := agent.GetReasoningLevel(); got != "" {
+		t.Fatalf("reasoning level = %q, want unchanged empty", got)
+	}
+}
+
 func TestHandleCardNav_SessionsActionPreservesPage(t *testing.T) {
 	sessions := make([]AgentSessionInfo, 25)
 	for i := range sessions {

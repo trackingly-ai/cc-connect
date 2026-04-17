@@ -176,6 +176,70 @@ func TestAgentSessionSmoke_PassesReasoningOverrideToGeminiCLI(t *testing.T) {
 	}
 }
 
+func TestAgentSessionSmoke_ThinkingBudgetOverridesReasoningLevel(t *testing.T) {
+	baseDir := t.TempDir()
+	repoDir := filepath.Join(baseDir, "repo")
+	binDir := filepath.Join(baseDir, "bin")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+
+	argsFile := filepath.Join(baseDir, "gemini-args.txt")
+	settingsPathFile := filepath.Join(baseDir, "gemini-settings-path.txt")
+	script := "#!/bin/sh\n" +
+		"printf '%s\\n' \"$@\" > \"$GEMINI_ARGS_FILE\"\n" +
+		"printf '%s' \"$GEMINI_CLI_SYSTEM_SETTINGS_PATH\" > \"$GEMINI_SETTINGS_PATH_FILE\"\n" +
+		"printf '%s\\n' '{\"type\":\"init\",\"session_id\":\"gemini-budget\",\"model\":\"gemini-2.5-pro\"}'\n" +
+		"printf '%s\\n' '{\"type\":\"result\",\"status\":\"success\"}'\n"
+	scriptPath := filepath.Join(binDir, "gemini")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake gemini: %v", err)
+	}
+
+	t.Setenv("GEMINI_ARGS_FILE", argsFile)
+	t.Setenv("GEMINI_SETTINGS_PATH_FILE", settingsPathFile)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	agentRaw, err := New(map[string]any{
+		"work_dir":        repoDir,
+		"reasoning_level": "low",
+		"thinking_budget": int64(8192),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	agent := agentRaw.(*Agent)
+
+	sess, err := agent.StartSession(context.Background(), "")
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	defer func() { _ = sess.Close() }()
+
+	if err := sess.Send("hello", nil, nil); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	waitForGeminiResult(t, sess.Events())
+	settingsPath := strings.TrimSpace(readGeminiText(t, settingsPathFile))
+	if settingsPath == "" {
+		t.Fatal("expected GEMINI_CLI_SYSTEM_SETTINGS_PATH to be set")
+	}
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("read settings file: %v", err)
+	}
+	if !strings.Contains(string(data), "\"thinkingBudget\": 8192") {
+		t.Fatalf("settings file = %s, want thinkingBudget 8192", string(data))
+	}
+	if strings.Contains(string(data), "\"thinkingBudget\": 256") {
+		t.Fatalf("settings file = %s, unexpected low preset budget", string(data))
+	}
+}
+
 func TestSkillDirsPreferAgentsAlias(t *testing.T) {
 	a := &Agent{workDir: "/tmp/demo"}
 	dirs := a.SkillDirs()
