@@ -86,6 +86,11 @@ func TestAgentSetReasoningLevelAutoClearsExplicitEffort(t *testing.T) {
 	if got := agent.GetReasoningLevel(); got != "" {
 		t.Fatalf("GetReasoningLevel() = %q, want empty default", got)
 	}
+
+	args := buildClaudeSessionArgs("sonnet", agent.GetReasoningLevel(), "", "default", nil, nil)
+	if slices.Contains(args, "--effort") {
+		t.Fatalf("args unexpectedly included --effort after auto reset: %v", args)
+	}
 }
 
 func TestBuildClaudeSessionArgsOmitsOptionalValues(t *testing.T) {

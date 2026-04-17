@@ -395,6 +395,9 @@ mode = "default" # "default" | "acceptEdits" (edit) | "plan" | "auto" | "bypassP
 # Gemini only: explicit thinking budget overrides reasoning_level
 # 仅 Gemini：显式 thinking budget 会覆盖 reasoning_level
 # thinking_budget = 1024
+#
+# Note: Qoder does not support reasoning_level or thinking_budget; use /model to switch tiers
+# 注意：Qoder 不支持 reasoning_level 或 thinking_budget，请使用 /model 切换模型档位
 
 # Claude Code Router Integration / Claude Code Router 集成
 # Route Claude Code requests through Claude Code Router to use different model providers.

@@ -93,7 +93,7 @@ func TestNew_WarnsWhenReasoningOptionsAreIgnored(t *testing.T) {
 	var buf bytes.Buffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
-	defer slog.SetDefault(prev)
+	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	if _, err := New(map[string]any{
 		"work_dir":        "/tmp/demo",
