@@ -3800,9 +3800,10 @@ func feishuPreferredModels(agentName string) []ModelOption {
 	switch strings.ToLower(strings.TrimSpace(agentName)) {
 	case "claudecode":
 		return []ModelOption{
-			{Name: "sonnet", Desc: "Claude Sonnet (balanced)"},
-			{Name: "opus", Desc: "Claude Opus (most capable)"},
-			{Name: "haiku", Desc: "Claude Haiku (fastest)"},
+			{Name: "claude-opus-4-7", Desc: "Claude Opus 4.7"},
+			{Name: "claude-opus-4-7-1m", Desc: "Claude Opus 4.7 1M"},
+			{Name: "claude-sonnet-4-6", Desc: "Claude Sonnet 4.6"},
+			{Name: "claude-haiku-4-5", Desc: "Claude Haiku 4.5"},
 		}
 	case "codex":
 		return []ModelOption{

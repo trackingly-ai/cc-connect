@@ -579,11 +579,13 @@ func TestCmdModel_FeishuUsesStableAgentSpecificButtons(t *testing.T) {
 			agentName: "claudecode",
 			current:   "claude-sonnet-4-6",
 			models: []ModelOption{
+				{Name: "claude-opus-4-7"},
+				{Name: "claude-opus-4-7-1m"},
 				{Name: "claude-sonnet-4-6"},
-				{Name: "claude-opus-4-1"},
+				{Name: "claude-haiku-4-5"},
 			},
-			wantButtons:  []string{"▶ claude-sonnet-4-6", "sonnet", "opus", "haiku"},
-			wantFirstSet: "claude-sonnet-4-6",
+			wantButtons:  []string{"claude-opus-4-7", "claude-opus-4-7-1m", "▶ claude-sonnet-4-6", "claude-haiku-4-5"},
+			wantFirstSet: "claude-opus-4-7",
 		},
 		{
 			name:      "qoder",
