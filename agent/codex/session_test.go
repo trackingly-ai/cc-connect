@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,32 @@ func TestAgentSetReasoningLevelNormalizesValue(t *testing.T) {
 
 	if got := agent.GetReasoningLevel(); got != "xhigh" {
 		t.Fatalf("GetReasoningLevel() = %q, want xhigh", got)
+	}
+}
+
+func TestAvailableModelsFallsBackToCurrentGPT5Family(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("OPENAI_BASE_URL", "")
+
+	agent := &Agent{}
+	models := agent.AvailableModels(context.Background())
+	var names []string
+	for _, model := range models {
+		names = append(names, model.Name)
+	}
+
+	want := []string{
+		"gpt-5.4",
+		"gpt-5.2-codex",
+		"gpt-5.1-codex-max",
+		"gpt-5.4-mini",
+		"gpt-5.3-codex",
+		"gpt-5.3-codex-spark",
+		"gpt-5.2",
+		"gpt-5.1-codex-mini",
+	}
+	if !slices.Equal(names, want) {
+		t.Fatalf("AvailableModels() = %#v, want %#v", names, want)
 	}
 }
 

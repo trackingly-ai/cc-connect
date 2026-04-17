@@ -3806,10 +3806,14 @@ func feishuPreferredModels(agentName string) []ModelOption {
 		}
 	case "codex":
 		return []ModelOption{
-			{Name: "o4-mini", Desc: "O4 Mini (fast reasoning)"},
-			{Name: "o3", Desc: "O3 (most capable reasoning)"},
-			{Name: "gpt-4.1", Desc: "GPT-4.1 (balanced)"},
-			{Name: "codex-mini-latest", Desc: "Codex Mini (code-optimized)"},
+			{Name: "gpt-5.4", Desc: "GPT-5.4 (default)"},
+			{Name: "gpt-5.2-codex", Desc: "GPT-5.2-Codex (code-optimized)"},
+			{Name: "gpt-5.1-codex-max", Desc: "GPT-5.1-Codex-Max (deep review)"},
+			{Name: "gpt-5.4-mini", Desc: "GPT-5.4-Mini (fast)"},
+			{Name: "gpt-5.3-codex", Desc: "GPT-5.3-Codex (balanced coding)"},
+			{Name: "gpt-5.3-codex-spark", Desc: "GPT-5.3-Codex-Spark (fastest coding)"},
+			{Name: "gpt-5.2", Desc: "GPT-5.2 (general purpose)"},
+			{Name: "gpt-5.1-codex-mini", Desc: "GPT-5.1-Codex-Mini (lightweight)"},
 		}
 	case "gemini":
 		return []ModelOption{

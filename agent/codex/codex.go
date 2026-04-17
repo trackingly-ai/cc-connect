@@ -145,12 +145,14 @@ func (a *Agent) AvailableModels(ctx context.Context) []core.ModelOption {
 		return models
 	}
 	return []core.ModelOption{
-		{Name: "o4-mini", Desc: "O4 Mini (fast reasoning)"},
-		{Name: "o3", Desc: "O3 (most capable reasoning)"},
-		{Name: "gpt-4.1", Desc: "GPT-4.1 (balanced)"},
-		{Name: "gpt-4.1-mini", Desc: "GPT-4.1 Mini (fast)"},
-		{Name: "gpt-4.1-nano", Desc: "GPT-4.1 Nano (fastest)"},
-		{Name: "codex-mini-latest", Desc: "Codex Mini (code-optimized)"},
+		{Name: "gpt-5.4", Desc: "GPT-5.4 (default)"},
+		{Name: "gpt-5.2-codex", Desc: "GPT-5.2-Codex (code-optimized)"},
+		{Name: "gpt-5.1-codex-max", Desc: "GPT-5.1-Codex-Max (deep review)"},
+		{Name: "gpt-5.4-mini", Desc: "GPT-5.4-Mini (fast)"},
+		{Name: "gpt-5.3-codex", Desc: "GPT-5.3-Codex (balanced coding)"},
+		{Name: "gpt-5.3-codex-spark", Desc: "GPT-5.3-Codex-Spark (fastest coding)"},
+		{Name: "gpt-5.2", Desc: "GPT-5.2 (general purpose)"},
+		{Name: "gpt-5.1-codex-mini", Desc: "GPT-5.1-Codex-Mini (lightweight)"},
 	}
 }
 
@@ -159,6 +161,10 @@ var openaiChatModels = map[string]bool{
 	"gpt-4.1": true, "gpt-4.1-mini": true, "gpt-4.1-nano": true,
 	"gpt-4o": true, "gpt-4o-mini": true,
 	"codex-mini-latest": true,
+	"gpt-5.4":           true, "gpt-5.4-mini": true,
+	"gpt-5.3-codex": true, "gpt-5.3-codex-spark": true,
+	"gpt-5.2": true, "gpt-5.2-codex": true,
+	"gpt-5.1-codex-max": true, "gpt-5.1-codex-mini": true,
 }
 
 func (a *Agent) fetchModelsFromAPI(ctx context.Context) []core.ModelOption {
