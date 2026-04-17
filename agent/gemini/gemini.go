@@ -30,14 +30,16 @@ func init() {
 //   - "yolo":      auto-approve all tools (-y / --approval-mode yolo)
 //   - "plan":      read-only plan mode (--approval-mode plan)
 type Agent struct {
-	workDir    string
-	model      string
-	mode       string
-	cmd        string // CLI binary name, default "gemini"
-	providers  []core.ProviderConfig
-	activeIdx  int
-	sessionEnv []string
-	mu         sync.Mutex
+	workDir        string
+	model          string
+	reasoningLevel string
+	thinkingBudget int
+	mode           string
+	cmd            string // CLI binary name, default "gemini"
+	providers      []core.ProviderConfig
+	activeIdx      int
+	sessionEnv     []string
+	mu             sync.Mutex
 }
 
 func New(opts map[string]any) (core.Agent, error) {
@@ -46,6 +48,9 @@ func New(opts map[string]any) (core.Agent, error) {
 		workDir = "."
 	}
 	model, _ := opts["model"].(string)
+	reasoningLevel, _ := opts["reasoning_level"].(string)
+	reasoningLevel = normalizeReasoningLevel(reasoningLevel)
+	thinkingBudget := parseThinkingBudget(opts["thinking_budget"])
 	mode, _ := opts["mode"].(string)
 	mode = normalizeMode(mode)
 	cmd, _ := opts["cmd"].(string)
@@ -58,11 +63,13 @@ func New(opts map[string]any) (core.Agent, error) {
 	}
 
 	return &Agent{
-		workDir:   workDir,
-		model:     model,
-		mode:      mode,
-		cmd:       cmd,
-		activeIdx: -1,
+		workDir:        workDir,
+		model:          model,
+		reasoningLevel: reasoningLevel,
+		thinkingBudget: thinkingBudget,
+		mode:           mode,
+		cmd:            cmd,
+		activeIdx:      -1,
 	}, nil
 }
 
@@ -76,6 +83,57 @@ func normalizeMode(raw string) string {
 		return "plan"
 	default:
 		return "default"
+	}
+}
+
+func normalizeReasoningLevel(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "off", "none", "disabled":
+		return "off"
+	case "low":
+		return "low"
+	case "medium", "med":
+		return "medium"
+	case "high":
+		return "high"
+	default:
+		return ""
+	}
+}
+
+func parseThinkingBudget(raw any) int {
+	switch v := raw.(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	case string:
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return -1
+		}
+		var parsed int
+		if _, err := fmt.Sscanf(v, "%d", &parsed); err == nil {
+			return parsed
+		}
+	}
+	return -1
+}
+
+func geminiReasoningLevelForBudget(budget int) string {
+	switch budget {
+	case 0:
+		return "off"
+	case 256:
+		return "low"
+	case 1024:
+		return "medium"
+	case 4096:
+		return "high"
+	default:
+		return ""
 	}
 }
 
@@ -105,6 +163,35 @@ func (a *Agent) GetModel() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.model
+}
+
+func (a *Agent) SetReasoningLevel(level string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.reasoningLevel = normalizeReasoningLevel(level)
+	a.thinkingBudget = -1
+	slog.Info("gemini: reasoning level changed", "reasoning_level", a.reasoningLevel)
+}
+
+func (a *Agent) GetReasoningLevel() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.thinkingBudget >= 0 {
+		if preset := geminiReasoningLevelForBudget(a.thinkingBudget); preset != "" {
+			return preset
+		}
+		return fmt.Sprintf("custom (thinking_budget=%d)", a.thinkingBudget)
+	}
+	return a.reasoningLevel
+}
+
+func (a *Agent) AvailableReasoningLevels() []core.ReasoningLevelOption {
+	return []core.ReasoningLevelOption{
+		{Name: "off", Desc: "Disable thinking budget"},
+		{Name: "low", Desc: "Light reasoning"},
+		{Name: "medium", Desc: "Balanced reasoning"},
+		{Name: "high", Desc: "Deep reasoning"},
+	}
 }
 
 func (a *Agent) AvailableModels(ctx context.Context) []core.ModelOption {
@@ -175,6 +262,8 @@ func (a *Agent) SetSessionEnv(env []string) {
 func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentSession, error) {
 	a.mu.Lock()
 	model := a.model
+	reasoningLevel := a.reasoningLevel
+	thinkingBudget := a.thinkingBudget
 	mode := a.mode
 	cmd := a.cmd
 	workDir := a.workDir
@@ -189,7 +278,7 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 	}
 	a.mu.Unlock()
 
-	return newGeminiSession(ctx, cmd, workDir, model, mode, sessionID, extraDirs, extraEnv)
+	return newGeminiSession(ctx, cmd, workDir, model, reasoningLevel, thinkingBudget, mode, sessionID, extraDirs, extraEnv)
 }
 
 // ListSessions reads sessions from ~/.gemini/tmp/<project_hash>/chats/.

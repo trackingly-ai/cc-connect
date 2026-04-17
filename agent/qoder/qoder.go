@@ -34,6 +34,12 @@ func New(opts map[string]any) (core.Agent, error) {
 	model, _ := opts["model"].(string)
 	mode, _ := opts["mode"].(string)
 	mode = normalizeMode(mode)
+	if level, _ := opts["reasoning_level"].(string); strings.TrimSpace(level) != "" {
+		slog.Warn("qoder: reasoning_level is ignored; use model tiers instead", "reasoning_level", level)
+	}
+	if budget := parseThinkingBudget(opts["thinking_budget"]); budget >= 0 {
+		slog.Warn("qoder: thinking_budget is ignored; use model tiers instead", "thinking_budget", budget)
+	}
 
 	if _, err := exec.LookPath("qodercli"); err != nil {
 		return nil, fmt.Errorf("qoder: 'qodercli' not found in PATH, install with: curl -fsSL https://qoder.com/install | bash")
@@ -52,6 +58,19 @@ func normalizeMode(raw string) string {
 		return "yolo"
 	default:
 		return "default"
+	}
+}
+
+func parseThinkingBudget(raw any) int {
+	switch v := raw.(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	default:
+		return -1
 	}
 }
 

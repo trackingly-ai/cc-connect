@@ -2547,6 +2547,7 @@ var builtinCommands = []struct {
 	{[]string{"allow"}, "allow"},
 	{[]string{"model"}, "model"},
 	{[]string{"mode"}, "mode"},
+	{[]string{"effort", "reasoning"}, "effort"},
 	{[]string{"lang"}, "lang"},
 	{[]string{"quiet"}, "quiet"},
 	{[]string{"provider"}, "provider"},
@@ -2656,6 +2657,8 @@ func (e *Engine) handleCommand(p Platform, msg *Message, raw string) bool {
 		e.cmdModel(p, msg, args)
 	case "mode":
 		e.cmdMode(p, msg, args)
+	case "effort":
+		e.cmdEffort(p, msg, args)
 	case "lang":
 		e.cmdLang(p, msg, args)
 	case "quiet":
@@ -3835,6 +3838,104 @@ func containsModelOption(options []ModelOption, name string) bool {
 		}
 	}
 	return false
+}
+
+func (e *Engine) cmdEffort(p Platform, msg *Message, args []string) {
+	switcher, ok := e.agent.(ReasoningLevelSwitcher)
+	if !ok {
+		if strings.EqualFold(e.agent.Name(), "qoder") {
+			e.reply(p, msg.ReplyCtx, e.i18n.T(MsgEffortUseModel))
+			return
+		}
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgEffortNotSupported))
+		return
+	}
+
+	levels := switcher.AvailableReasoningLevels()
+	current := strings.TrimSpace(switcher.GetReasoningLevel())
+
+	if len(args) == 0 {
+		var sb strings.Builder
+		if current == "" {
+			sb.WriteString(e.i18n.T(MsgEffortDefault))
+		} else {
+			sb.WriteString(e.i18n.Tf(MsgEffortCurrent, current))
+		}
+		sb.WriteString("\n")
+		sb.WriteString(e.i18n.T(MsgEffortListTitle))
+		for i, level := range levels {
+			marker := "  "
+			if isCurrentReasoningOption(current, level.Name) {
+				marker = "> "
+			}
+			desc := strings.TrimSpace(level.Desc)
+			if desc != "" {
+				desc = " — " + desc
+			}
+			fmt.Fprintf(&sb, "%s%d. %s%s\n", marker, i+1, level.Name, desc)
+		}
+		sb.WriteString("\n")
+		sb.WriteString(e.i18n.T(MsgEffortUsage))
+
+		buttonsPerRow := 2
+		if strings.EqualFold(p.Name(), "feishu") {
+			buttonsPerRow = 1
+		}
+		var buttons [][]ButtonOption
+		var row []ButtonOption
+		for i, level := range levels {
+			label := level.Name
+			if isCurrentReasoningOption(current, level.Name) {
+				label = "▶ " + label
+			}
+			row = append(row, ButtonOption{Text: label, Data: fmt.Sprintf("cmd:/effort %d", i+1)})
+			if len(row) >= buttonsPerRow {
+				buttons = append(buttons, row)
+				row = nil
+			}
+		}
+		if len(row) > 0 {
+			buttons = append(buttons, row)
+		}
+		e.replyWithButtons(p, msg.ReplyCtx, sb.String(), buttons)
+		return
+	}
+
+	target := strings.TrimSpace(strings.ToLower(args[0]))
+	if idx, err := strconv.Atoi(target); err == nil && idx >= 1 && idx <= len(levels) {
+		target = strings.ToLower(strings.TrimSpace(levels[idx-1].Name))
+	}
+
+	resolved := ""
+	for _, level := range levels {
+		if strings.EqualFold(strings.TrimSpace(level.Name), target) {
+			resolved = level.Name
+			break
+		}
+	}
+	if resolved == "" {
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgEffortUsage))
+		return
+	}
+
+	switcher.SetReasoningLevel(resolved)
+	e.cleanupInteractiveState(msg.SessionKey)
+
+	s := e.sessions.GetOrCreateActive(msg.SessionKey)
+	s.AgentSessionID = ""
+	s.ClearHistory()
+	e.sessions.Save()
+
+	e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgEffortChanged, resolved))
+}
+
+func isCurrentReasoningOption(current, option string) bool {
+	current = strings.TrimSpace(strings.ToLower(current))
+	option = strings.TrimSpace(strings.ToLower(option))
+	if current == "" && option == "auto" {
+		return true
+	}
+	return current == option
 }
 
 func (e *Engine) cmdMode(p Platform, msg *Message, args []string) {

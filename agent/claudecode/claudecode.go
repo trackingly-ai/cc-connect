@@ -34,15 +34,16 @@ func init() {
 //   - "auto":              Claude's automatic permission classifier
 //   - "bypassPermissions": auto-approve everything (YOLO mode)
 type Agent struct {
-	workDir      string
-	model        string
-	mode         string // "default" | "acceptEdits" | "plan" | "auto" | "bypassPermissions" | "dontAsk"
-	allowedTools []string
-	providers    []core.ProviderConfig
-	activeIdx    int // -1 = no provider set
-	sessionEnv   []string
-	routerURL    string // Claude Code Router URL (e.g., "http://127.0.0.1:3456")
-	routerAPIKey string // Claude Code Router API key (optional)
+	workDir        string
+	model          string
+	reasoningLevel string
+	mode           string // "default" | "acceptEdits" | "plan" | "auto" | "bypassPermissions" | "dontAsk"
+	allowedTools   []string
+	providers      []core.ProviderConfig
+	activeIdx      int // -1 = no provider set
+	sessionEnv     []string
+	routerURL      string // Claude Code Router URL (e.g., "http://127.0.0.1:3456")
+	routerAPIKey   string // Claude Code Router API key (optional)
 
 	providerProxy *core.ProviderProxy // local proxy for third-party providers
 	proxyLocalURL string              // local URL of the proxy
@@ -56,6 +57,8 @@ func New(opts map[string]any) (core.Agent, error) {
 		workDir = "."
 	}
 	model, _ := opts["model"].(string)
+	reasoningLevel, _ := opts["reasoning_level"].(string)
+	reasoningLevel = normalizeReasoningLevel(reasoningLevel)
 	mode, _ := opts["mode"].(string)
 	mode = normalizePermissionMode(mode)
 
@@ -77,13 +80,14 @@ func New(opts map[string]any) (core.Agent, error) {
 	}
 
 	return &Agent{
-		workDir:      workDir,
-		model:        model,
-		mode:         mode,
-		allowedTools: allowedTools,
-		activeIdx:    -1,
-		routerURL:    routerURL,
-		routerAPIKey: routerAPIKey,
+		workDir:        workDir,
+		model:          model,
+		reasoningLevel: reasoningLevel,
+		mode:           mode,
+		allowedTools:   allowedTools,
+		activeIdx:      -1,
+		routerURL:      routerURL,
+		routerAPIKey:   routerAPIKey,
 	}, nil
 }
 
@@ -103,6 +107,23 @@ func normalizePermissionMode(raw string) string {
 		return "dontAsk"
 	default:
 		return "default"
+	}
+}
+
+func normalizeReasoningLevel(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "auto", "default":
+		return ""
+	case "low":
+		return "low"
+	case "medium", "med":
+		return "medium"
+	case "high":
+		return "high"
+	case "max":
+		return "max"
+	default:
+		return ""
 	}
 }
 
@@ -132,6 +153,29 @@ func (a *Agent) GetModel() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.model
+}
+
+func (a *Agent) SetReasoningLevel(level string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.reasoningLevel = normalizeReasoningLevel(level)
+	slog.Info("claudecode: reasoning level changed", "reasoning_level", a.reasoningLevel)
+}
+
+func (a *Agent) GetReasoningLevel() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.reasoningLevel
+}
+
+func (a *Agent) AvailableReasoningLevels() []core.ReasoningLevelOption {
+	return []core.ReasoningLevelOption{
+		{Name: "auto", Desc: "Use Claude default"},
+		{Name: "low", Desc: "Fastest, shallow reasoning"},
+		{Name: "medium", Desc: "Balanced"},
+		{Name: "high", Desc: "Deep reasoning"},
+		{Name: "max", Desc: "Deepest reasoning"},
+	}
 }
 
 func (a *Agent) AvailableModels(ctx context.Context) []core.ModelOption {
@@ -215,6 +259,8 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 	tools := make([]string, len(a.allowedTools))
 	copy(tools, a.allowedTools)
 	model := a.model
+	reasoningLevel := a.reasoningLevel
+	mode := a.mode
 	extraEnv := a.providerEnvLocked()
 	extraEnv = append(extraEnv, a.sessionEnv...)
 	workDir := core.SessionWorkDirFromEnv(extraEnv, a.workDir)
@@ -240,7 +286,7 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 	}
 	a.mu.Unlock()
 
-	return newClaudeSession(ctx, workDir, model, sessionID, a.mode, tools, extraDirs, extraEnv)
+	return newClaudeSession(ctx, workDir, model, reasoningLevel, sessionID, mode, tools, extraDirs, extraEnv)
 }
 
 func (a *Agent) ListSessions(ctx context.Context) ([]core.AgentSessionInfo, error) {

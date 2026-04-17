@@ -45,7 +45,7 @@ func TestSend_HandlesLargeJSONLines(t *testing.T) {
 	t.Setenv("CODEX_PAYLOAD_FILE", payloadFile)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	cs, err := newCodexSession(context.Background(), workDir, "", "", "", nil, nil)
+	cs, err := newCodexSession(context.Background(), workDir, "", "", "", "", nil, nil)
 	if err != nil {
 		t.Fatalf("newCodexSession: %v", err)
 	}
@@ -108,7 +108,7 @@ wait $child
 
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	cs, err := newCodexSession(context.Background(), workDir, "", "", "", nil, nil)
+	cs, err := newCodexSession(context.Background(), workDir, "", "", "", "", nil, nil)
 	if err != nil {
 		t.Fatalf("newCodexSession: %v", err)
 	}
@@ -169,7 +169,7 @@ echo '{"type":"turn.completed"}'
 	t.Setenv("CODEX_ARGS_FILE", argsFile)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	cs, err := newCodexSession(context.Background(), workDir, "", "", "", nil, nil)
+	cs, err := newCodexSession(context.Background(), workDir, "", "", "", "", nil, nil)
 	if err != nil {
 		t.Fatalf("newCodexSession: %v", err)
 	}
@@ -247,7 +247,7 @@ echo '{"type":"turn.completed"}'
 	t.Setenv("CODEX_ARGS_FILE", argsFile)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	cs, err := newCodexSession(context.Background(), workDir, "o3", "", "", nil, nil)
+	cs, err := newCodexSession(context.Background(), workDir, "o3", "", "", "", nil, nil)
 	if err != nil {
 		t.Fatalf("newCodexSession: %v", err)
 	}
@@ -290,6 +290,63 @@ done:
 	}
 }
 
+func TestSend_PassesReasoningLevelToCodexCLI(t *testing.T) {
+	workDir := t.TempDir()
+	binDir := filepath.Join(workDir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+
+	argsFile := filepath.Join(workDir, "args.txt")
+	script := `#!/bin/sh
+printf '%s\n' "$@" > "$CODEX_ARGS_FILE"
+echo '{"type":"thread.started","thread_id":"thread-effort"}'
+echo '{"type":"turn.completed"}'
+`
+	scriptPath := filepath.Join(binDir, "codex")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake codex: %v", err)
+	}
+
+	t.Setenv("CODEX_ARGS_FILE", argsFile)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	cs, err := newCodexSession(context.Background(), workDir, "", "high", "", "", nil, nil)
+	if err != nil {
+		t.Fatalf("newCodexSession: %v", err)
+	}
+	defer func() { _ = cs.Close() }()
+
+	if err := cs.Send("hello", nil, nil); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	timeout := time.After(5 * time.Second)
+	for {
+		select {
+		case evt := <-cs.Events():
+			if evt.Type == core.EventError {
+				t.Fatalf("unexpected error event: %v", evt.Error)
+			}
+			if evt.Type == core.EventResult && evt.Done {
+				goto done
+			}
+		case <-timeout:
+			t.Fatal("timed out waiting for result")
+		}
+	}
+
+done:
+	argsBytes, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("ReadFile args: %v", err)
+	}
+	args := strings.Split(strings.TrimSpace(string(argsBytes)), "\n")
+	if !containsCodexArgPair(args, "-c", "model_reasoning_effort=high") {
+		t.Fatalf("args = %#v, want -c model_reasoning_effort=high", args)
+	}
+}
+
 func TestSend_UsesStdinForMultilinePrompt(t *testing.T) {
 	workDir := t.TempDir()
 	binDir := filepath.Join(workDir, "bin")
@@ -313,7 +370,7 @@ func TestSend_UsesStdinForMultilinePrompt(t *testing.T) {
 	t.Setenv("CODEX_STDIN_FILE", stdinFile)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	cs, err := newCodexSession(context.Background(), workDir, "", "", "", nil, nil)
+	cs, err := newCodexSession(context.Background(), workDir, "", "", "", "", nil, nil)
 	if err != nil {
 		t.Fatalf("newCodexSession: %v", err)
 	}
@@ -366,4 +423,13 @@ func waitForFileContent(path string) ([]byte, error) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	return nil, os.ErrNotExist
+}
+
+func containsCodexArgPair(args []string, flag, value string) bool {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == flag && args[i+1] == value {
+			return true
+		}
+	}
+	return false
 }

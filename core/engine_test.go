@@ -74,6 +74,30 @@ func (a *stubModelSwitchAgent) AvailableModels(_ context.Context) []ModelOption 
 	return append([]ModelOption(nil), a.models...)
 }
 
+type stubReasoningSwitchAgent struct {
+	name   string
+	level  string
+	levels []ReasoningLevelOption
+}
+
+func (a *stubReasoningSwitchAgent) Name() string { return a.name }
+func (a *stubReasoningSwitchAgent) StartSession(_ context.Context, _ string) (AgentSession, error) {
+	return &stubAgentSession{}, nil
+}
+func (a *stubReasoningSwitchAgent) ListSessions(_ context.Context) ([]AgentSessionInfo, error) {
+	return nil, nil
+}
+func (a *stubReasoningSwitchAgent) Stop() error { return nil }
+func (a *stubReasoningSwitchAgent) SetReasoningLevel(level string) {
+	a.level = level
+}
+func (a *stubReasoningSwitchAgent) GetReasoningLevel() string {
+	return a.level
+}
+func (a *stubReasoningSwitchAgent) AvailableReasoningLevels() []ReasoningLevelOption {
+	return append([]ReasoningLevelOption(nil), a.levels...)
+}
+
 type stubAgentSession struct{}
 
 func (s *stubAgentSession) Send(_ string, _ []ImageAttachment, _ []FileAttachment) error {
@@ -611,6 +635,50 @@ func TestExecuteCardAction_SessionsSwitchAndDelete(t *testing.T) {
 	}
 	if !slices.Contains(agent.deleted, "sess-1") {
 		t.Fatalf("deleted = %#v, want sess-1", agent.deleted)
+	}
+}
+
+func TestCmdEffort_FeishuPickerAndSelection(t *testing.T) {
+	agent := &stubReasoningSwitchAgent{
+		name:  "claudecode",
+		level: "",
+		levels: []ReasoningLevelOption{
+			{Name: "auto"},
+			{Name: "low"},
+			{Name: "medium"},
+			{Name: "high"},
+			{Name: "max"},
+		},
+	}
+	p := &stubButtonPlatform{n: "feishu"}
+	e := NewEngine("test", agent, []Platform{p}, "", LangEnglish)
+
+	e.cmdEffort(p, &Message{SessionKey: "feishu:chat:user", ReplyCtx: "ctx"}, nil)
+
+	if got := p.buttonTextsSnapshot(); !slices.Equal(got, []string{"▶ auto", "low", "medium", "high", "max"}) {
+		t.Fatalf("button texts = %#v", got)
+	}
+	for i, row := range p.buttonRowsSnapshot() {
+		if len(row) != 1 {
+			t.Fatalf("row %d len = %d, want 1", i, len(row))
+		}
+	}
+
+	e.cmdEffort(p, &Message{SessionKey: "feishu:chat:user", ReplyCtx: "ctx"}, []string{"2"})
+	if got := agent.GetReasoningLevel(); got != "low" {
+		t.Fatalf("selected effort = %q, want low", got)
+	}
+}
+
+func TestCmdEffort_QoderSuggestsModel(t *testing.T) {
+	p := &stubButtonPlatform{n: "feishu"}
+	e := NewEngine("qoder", &namedStubAgent{name: "qoder"}, []Platform{p}, "", LangEnglish)
+
+	e.cmdEffort(p, &Message{SessionKey: "feishu:chat:user", ReplyCtx: "ctx"}, nil)
+
+	sent := strings.Join(p.sentSnapshot(), "\n")
+	if !strings.Contains(sent, "/model") {
+		t.Fatalf("sent = %q, want /model suggestion", sent)
 	}
 }
 

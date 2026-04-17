@@ -49,10 +49,10 @@ type claudeSession struct {
 
 var heicImageConverter = convertHEICImage
 
-func newClaudeSession(ctx context.Context, workDir, model, sessionID, mode string, allowedTools []string, extraDirs []string, extraEnv []string) (*claudeSession, error) {
+func newClaudeSession(ctx context.Context, workDir, model, reasoningLevel, sessionID, mode string, allowedTools []string, extraDirs []string, extraEnv []string) (*claudeSession, error) {
 	sessionCtx, cancel := context.WithCancel(ctx)
 
-	args := buildClaudeSessionArgs(model, sessionID, mode, allowedTools, extraDirs)
+	args := buildClaudeSessionArgs(model, reasoningLevel, sessionID, mode, allowedTools, extraDirs)
 
 	slog.Debug("claudeSession: starting", "args", core.RedactArgs(args), "dir", workDir, "mode", mode)
 
@@ -104,7 +104,7 @@ func newClaudeSession(ctx context.Context, workDir, model, sessionID, mode strin
 	return cs, nil
 }
 
-func buildClaudeSessionArgs(model, sessionID, mode string, allowedTools []string, extraDirs []string) []string {
+func buildClaudeSessionArgs(model, reasoningLevel, sessionID, mode string, allowedTools []string, extraDirs []string) []string {
 	args := []string{
 		"--output-format", "stream-json",
 		"--verbose",
@@ -120,6 +120,9 @@ func buildClaudeSessionArgs(model, sessionID, mode string, allowedTools []string
 	}
 	if model != "" {
 		args = append(args, "--model", model)
+	}
+	if reasoningLevel != "" {
+		args = append(args, "--effort", reasoningLevel)
 	}
 	if len(allowedTools) > 0 {
 		args = append(args, "--allowedTools", strings.Join(allowedTools, ","))

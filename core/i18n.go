@@ -144,6 +144,9 @@ const (
 	MsgQuietGlobalOff       MsgKey = "quiet_global_off"
 	MsgModeChanged          MsgKey = "mode_changed"
 	MsgModeNotSupported     MsgKey = "mode_not_supported"
+	MsgEffortChanged        MsgKey = "effort_changed"
+	MsgEffortNotSupported   MsgKey = "effort_not_supported"
+	MsgEffortUseModel       MsgKey = "effort_use_model"
 	MsgSessionRestarting    MsgKey = "session_restarting"
 	MsgSessionNotStarted    MsgKey = "session_not_started"
 	MsgLangChanged          MsgKey = "lang_changed"
@@ -256,9 +259,13 @@ const (
 	MsgQuietOnShort  MsgKey = "quiet_on_short"
 	MsgQuietOffShort MsgKey = "quiet_off_short"
 
-	MsgModelDefault   MsgKey = "model_default"
-	MsgModelListTitle MsgKey = "model_list_title"
-	MsgModelUsage     MsgKey = "model_usage"
+	MsgModelDefault    MsgKey = "model_default"
+	MsgModelListTitle  MsgKey = "model_list_title"
+	MsgModelUsage      MsgKey = "model_usage"
+	MsgEffortCurrent   MsgKey = "effort_current"
+	MsgEffortDefault   MsgKey = "effort_default"
+	MsgEffortListTitle MsgKey = "effort_list_title"
+	MsgEffortUsage     MsgKey = "effort_usage"
 
 	MsgModeUsage MsgKey = "mode_usage"
 
@@ -373,6 +380,7 @@ const (
 	MsgBuiltinCmdAllow    MsgKey = "allow"
 	MsgBuiltinCmdModel    MsgKey = "model"
 	MsgBuiltinCmdMode     MsgKey = "mode"
+	MsgBuiltinCmdEffort   MsgKey = "effort"
 	MsgBuiltinCmdLang     MsgKey = "lang"
 	MsgBuiltinCmdQuiet    MsgKey = "quiet"
 	MsgBuiltinCmdCompress MsgKey = "compress"
@@ -572,6 +580,27 @@ var messages = map[MsgKey]map[Language]string{
 		LangJapanese:           "このエージェントは権限モードの切り替えをサポートしていません。",
 		LangSpanish:            "Este agente no soporta el cambio de modo de permisos.",
 	},
+	MsgEffortChanged: {
+		LangEnglish:            "Reasoning effort switched to `%s`. New sessions will use this level.",
+		LangChinese:            "推理强度已切换为 `%s`，新会话将使用此级别。",
+		LangTraditionalChinese: "推理強度已切換為 `%s`，新會話將使用此級別。",
+		LangJapanese:           "推論強度を `%s` に切り替えました。新しいセッションで使用されます。",
+		LangSpanish:            "El nivel de razonamiento cambió a `%s`. Las nuevas sesiones usarán este nivel.",
+	},
+	MsgEffortNotSupported: {
+		LangEnglish:            "This agent does not support reasoning effort switching.",
+		LangChinese:            "当前 Agent 不支持推理强度切换。",
+		LangTraditionalChinese: "當前 Agent 不支援推理強度切換。",
+		LangJapanese:           "このエージェントは推論強度の切り替えをサポートしていません。",
+		LangSpanish:            "Este agente no soporta el cambio de nivel de razonamiento.",
+	},
+	MsgEffortUseModel: {
+		LangEnglish:            "This agent uses model tiers for reasoning depth. Use `/model` instead.",
+		LangChinese:            "当前 Agent 使用模型档位表达推理深度，请改用 `/model`。",
+		LangTraditionalChinese: "當前 Agent 使用模型檔位表達推理深度，請改用 `/model`。",
+		LangJapanese:           "このエージェントはモデル階層で推論深度を表します。`/model` を使用してください。",
+		LangSpanish:            "Este agente usa niveles de modelo para la profundidad de razonamiento. Use `/model`.",
+	},
 	MsgSessionRestarting: {
 		LangEnglish:            "🔄 Session process exited, restarting...",
 		LangChinese:            "🔄 会话进程已退出，正在重启...",
@@ -628,6 +657,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/memory [add|global|global add]\n  View/edit agent memory files\n\n" +
 			"/allow <tool>\n  Pre-allow a tool (next session)\n\n" +
 			"/model [name]\n  View/switch model\n\n" +
+			"/effort [level]\n  View/switch reasoning effort\n\n" +
 			"/mode [name]\n  View/switch permission mode\n\n" +
 			"/lang [en|zh|zh-TW|ja|es|auto]\n  View/switch language\n\n" +
 			"/quiet [global]\n  Toggle thinking/tool progress (global = all sessions)\n\n" +
@@ -664,6 +694,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/memory [add|global|global add]\n  查看/编辑 Agent 记忆文件\n\n" +
 			"/allow <工具名>\n  预授权工具（下次会话生效）\n\n" +
 			"/model [名称]\n  查看/切换模型\n\n" +
+			"/effort [级别]\n  查看/切换推理强度\n\n" +
 			"/mode [名称]\n  查看/切换权限模式\n\n" +
 			"/lang [en|zh|zh-TW|ja|es|auto]\n  查看/切换语言\n\n" +
 			"/quiet [global]\n  开关思考和工具进度消息（global = 全部会话）\n\n" +
@@ -700,6 +731,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/memory [add|global|global add]\n  查看/編輯 Agent 記憶檔案\n\n" +
 			"/allow <工具名>\n  預授權工具（下次會話生效）\n\n" +
 			"/model [名稱]\n  查看/切換模型\n\n" +
+			"/effort [級別]\n  查看/切換推理強度\n\n" +
 			"/mode [名稱]\n  查看/切換權限模式\n\n" +
 			"/lang [en|zh|zh-TW|ja|es|auto]\n  查看/切換語言\n\n" +
 			"/quiet [global]\n  開關思考和工具進度訊息（global = 全部會話）\n\n" +
@@ -735,6 +767,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/memory [add|global|global add]\n  エージェントメモリの表示/編集\n\n" +
 			"/allow <ツール名>\n  ツールを事前許可（次のセッションで有効）\n\n" +
 			"/model [名前]\n  モデルの表示/切り替え\n\n" +
+			"/effort [レベル]\n  推論強度の表示/切り替え\n\n" +
 			"/mode [名前]\n  権限モードの表示/切り替え\n\n" +
 			"/lang [en|zh|zh-TW|ja|es|auto]\n  言語の表示/切り替え\n\n" +
 			"/quiet [global]\n  思考/ツール進捗メッセージの表示切替（global = 全セッション）\n\n" +
@@ -770,6 +803,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/memory [add|global|global add]\n  Ver/editar archivos de memoria del agente\n\n" +
 			"/allow <herramienta>\n  Pre-autorizar herramienta (próxima sesión)\n\n" +
 			"/model [nombre]\n  Ver/cambiar modelo\n\n" +
+			"/effort [nivel]\n  Ver/cambiar nivel de razonamiento\n\n" +
 			"/mode [nombre]\n  Ver/cambiar modo de permisos\n\n" +
 			"/lang [en|zh|zh-TW|ja|es|auto]\n  Ver/cambiar idioma\n\n" +
 			"/quiet [global]\n  Alternar mensajes de progreso (global = todas las sesiones)\n\n" +
@@ -1547,6 +1581,34 @@ var messages = map[MsgKey]map[Language]string{
 		LangJapanese:           "使い方: `/model <番号>` または `/model <モデル名>`",
 		LangSpanish:            "Uso: `/model <número>` o `/model <nombre_modelo>`",
 	},
+	MsgEffortCurrent: {
+		LangEnglish:            "Current effort: %s\n",
+		LangChinese:            "当前推理强度: %s\n",
+		LangTraditionalChinese: "當前推理強度: %s\n",
+		LangJapanese:           "現在の推論強度: %s\n",
+		LangSpanish:            "Nivel actual de razonamiento: %s\n",
+	},
+	MsgEffortDefault: {
+		LangEnglish:            "Current effort: (not set, using agent default)\n",
+		LangChinese:            "当前推理强度: (未设置，使用 Agent 默认值)\n",
+		LangTraditionalChinese: "當前推理強度: (未設置，使用 Agent 預設值)\n",
+		LangJapanese:           "現在の推論強度: (未設定、エージェントのデフォルトを使用)\n",
+		LangSpanish:            "Nivel actual de razonamiento: (no configurado, usando el valor predeterminado del agente)\n",
+	},
+	MsgEffortListTitle: {
+		LangEnglish:            "Available effort levels:\n",
+		LangChinese:            "可用推理强度:\n",
+		LangTraditionalChinese: "可用推理強度:\n",
+		LangJapanese:           "利用可能な推論強度:\n",
+		LangSpanish:            "Niveles de razonamiento disponibles:\n",
+	},
+	MsgEffortUsage: {
+		LangEnglish:            "Usage: `/effort <number>` or `/effort <level>` (alias: `/reasoning`)",
+		LangChinese:            "用法: `/effort <序号>` 或 `/effort <级别>`（别名: `/reasoning`）",
+		LangTraditionalChinese: "用法: `/effort <序號>` 或 `/effort <級別>`（別名: `/reasoning`）",
+		LangJapanese:           "使い方: `/effort <番号>` または `/effort <レベル>`（別名: `/reasoning`）",
+		LangSpanish:            "Uso: `/effort <número>` o `/effort <nivel>` (alias: `/reasoning`)",
+	},
 	MsgModeUsage: {
 		LangEnglish:            "\nUse `/mode <name>` to switch.\nAvailable: %s",
 		LangChinese:            "\n使用 `/mode <名称>` 切换模式\n可用值: %s",
@@ -2229,6 +2291,13 @@ var messages = map[MsgKey]map[Language]string{
 		LangTraditionalChinese: "查看/切換權限模式，參數: [名稱]",
 		LangJapanese:           "権限モードの表示/切り替え、引数: [名前]",
 		LangSpanish:            "Ver/cambiar modo de permisos, arg: [nombre]",
+	},
+	MsgBuiltinCmdEffort: {
+		LangEnglish:            "View/switch reasoning effort, arg: [level]",
+		LangChinese:            "查看/切换推理强度，参数: [级别]",
+		LangTraditionalChinese: "查看/切換推理強度，參數: [級別]",
+		LangJapanese:           "推論強度の表示/切り替え、引数: [レベル]",
+		LangSpanish:            "Ver/cambiar nivel de razonamiento, arg: [nivel]",
 	},
 	MsgBuiltinCmdLang: {
 		LangEnglish:            "View/switch language, arg: [en|zh|zh-TW|ja|es|auto]",

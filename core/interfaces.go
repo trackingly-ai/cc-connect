@@ -292,6 +292,21 @@ type ModelOption struct {
 	Desc string // short description (display_name or empty)
 }
 
+// ReasoningLevelSwitcher is an optional interface for agents that support
+// runtime reasoning-depth or effort switching. Changes take effect on the next
+// session (existing sessions keep their current setting).
+type ReasoningLevelSwitcher interface {
+	SetReasoningLevel(level string)
+	GetReasoningLevel() string
+	AvailableReasoningLevels() []ReasoningLevelOption
+}
+
+// ReasoningLevelOption describes a selectable reasoning/effort level.
+type ReasoningLevelOption struct {
+	Name string // stable key passed back to the agent adapter
+	Desc string // short description for display
+}
+
 // ContextCompressor is an optional interface for agents that support
 // compressing/compacting the conversation context within a running session.
 // CompressCommand returns the native slash command (e.g. "/compact", "/compress")

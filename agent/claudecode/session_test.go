@@ -51,6 +51,7 @@ func TestReadJSONLines_AllowsLargeJSONLRecords(t *testing.T) {
 func TestBuildClaudeSessionArgsUsesExpectedDefaults(t *testing.T) {
 	args := buildClaudeSessionArgs(
 		"claude-sonnet",
+		"",
 		"357aaa11-8e6b-49dd-a6e3-b954cad2ca8d",
 		"bypassPermissions",
 		[]string{"Read", "Bash"},
@@ -79,7 +80,7 @@ func TestBuildClaudeSessionArgsUsesExpectedDefaults(t *testing.T) {
 }
 
 func TestBuildClaudeSessionArgsOmitsOptionalValues(t *testing.T) {
-	args := buildClaudeSessionArgs("", "", "default", nil, nil)
+	args := buildClaudeSessionArgs("", "", "", "default", nil, nil)
 
 	for _, forbidden := range []string{
 		"--permission-mode",
@@ -94,10 +95,19 @@ func TestBuildClaudeSessionArgsOmitsOptionalValues(t *testing.T) {
 }
 
 func TestBuildClaudeSessionArgsDoesNotResumeSyntheticSessionKey(t *testing.T) {
-	args := buildClaudeSessionArgs("", "echo-job-job_bb5b7c746d3b2298", "default", nil, nil)
+	args := buildClaudeSessionArgs("", "", "echo-job-job_bb5b7c746d3b2298", "default", nil, nil)
 
 	if slices.Contains(args, "--resume") {
 		t.Fatalf("args unexpectedly resumed synthetic session key: %v", args)
+	}
+}
+
+func TestBuildClaudeSessionArgsIncludesEffort(t *testing.T) {
+	args := buildClaudeSessionArgs("sonnet", "high", "", "default", nil, nil)
+
+	idx := slices.Index(args, "--effort")
+	if idx < 0 || idx+1 >= len(args) || args[idx+1] != "high" {
+		t.Fatalf("args missing --effort high: %v", args)
 	}
 }
 

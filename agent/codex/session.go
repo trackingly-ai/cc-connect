@@ -23,18 +23,19 @@ import (
 // codexSession manages a multi-turn Codex conversation.
 // First Send() uses `codex exec`, subsequent ones use `codex exec resume <threadID>`.
 type codexSession struct {
-	workDir   string
-	model     string
-	mode      string
-	extraDirs []string
-	extraEnv  []string
-	events    chan core.Event
-	closeOnce sync.Once
-	threadID  atomic.Value // stores string — Codex thread_id
-	ctx       context.Context
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
-	alive     atomic.Bool
+	workDir        string
+	model          string
+	reasoningLevel string
+	mode           string
+	extraDirs      []string
+	extraEnv       []string
+	events         chan core.Event
+	closeOnce      sync.Once
+	threadID       atomic.Value // stores string — Codex thread_id
+	ctx            context.Context
+	cancel         context.CancelFunc
+	wg             sync.WaitGroup
+	alive          atomic.Bool
 
 	pendingMsgs []string // buffered agent_message texts awaiting classification
 
@@ -46,19 +47,20 @@ type codexSession struct {
 	closeTimeout time.Duration
 }
 
-func newCodexSession(ctx context.Context, workDir, model, mode, resumeID string, extraDirs []string, extraEnv []string) (*codexSession, error) {
+func newCodexSession(ctx context.Context, workDir, model, reasoningLevel, mode, resumeID string, extraDirs []string, extraEnv []string) (*codexSession, error) {
 	sessionCtx, cancel := context.WithCancel(ctx)
 
 	cs := &codexSession{
-		workDir:      workDir,
-		model:        model,
-		mode:         mode,
-		extraDirs:    append([]string(nil), extraDirs...),
-		extraEnv:     extraEnv,
-		events:       make(chan core.Event, 64),
-		ctx:          sessionCtx,
-		cancel:       cancel,
-		closeTimeout: 8 * time.Second,
+		workDir:        workDir,
+		model:          model,
+		reasoningLevel: reasoningLevel,
+		mode:           mode,
+		extraDirs:      append([]string(nil), extraDirs...),
+		extraEnv:       extraEnv,
+		events:         make(chan core.Event, 64),
+		ctx:            sessionCtx,
+		cancel:         cancel,
+		closeTimeout:   8 * time.Second,
 	}
 	cs.alive.Store(true)
 
@@ -106,6 +108,9 @@ func (cs *codexSession) Send(prompt string, images []core.ImageAttachment, files
 
 	if cs.model != "" {
 		args = append(args, "--model", cs.model)
+	}
+	if cs.reasoningLevel != "" {
+		args = append(args, "-c", fmt.Sprintf("model_reasoning_effort=%s", cs.reasoningLevel))
 	}
 	if !isResume {
 		for _, dir := range cs.extraDirs {

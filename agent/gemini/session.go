@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,36 +25,49 @@ import (
 // Each Send() launches a new `gemini -p ... --output-format stream-json` process
 // with --resume for conversation continuity.
 type geminiSession struct {
-	cmd       string
-	workDir   string
-	model     string
-	mode      string
-	extraDirs []string
-	extraEnv  []string
-	events    chan core.Event
-	closeOnce sync.Once
-	chatID    atomic.Value // stores string — Gemini session ID
-	ctx       context.Context
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
-	alive     atomic.Bool
+	cmd          string
+	workDir      string
+	model        string
+	settingsPath string
+	mode         string
+	extraDirs    []string
+	extraEnv     []string
+	events       chan core.Event
+	closeOnce    sync.Once
+	chatID       atomic.Value // stores string — Gemini session ID
+	ctx          context.Context
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
+	alive        atomic.Bool
 
 	pendingMsgs []string // buffered assistant messages awaiting classification
 }
 
-func newGeminiSession(ctx context.Context, cmd, workDir, model, mode, resumeID string, extraDirs []string, extraEnv []string) (*geminiSession, error) {
+func newGeminiSession(ctx context.Context, cmd, workDir, model, reasoningLevel string, thinkingBudget int, mode, resumeID string, extraDirs []string, extraEnv []string) (*geminiSession, error) {
 	sessionCtx, cancel := context.WithCancel(ctx)
 
+	settingsPath := ""
+	if budget, ok := geminiEffectiveThinkingBudget(reasoningLevel, thinkingBudget); ok {
+		var err error
+		settingsPath, err = writeGeminiSystemSettingsOverride(budget)
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+		extraEnv = append(extraEnv, "GEMINI_CLI_SYSTEM_SETTINGS_PATH="+settingsPath)
+	}
+
 	gs := &geminiSession{
-		cmd:       cmd,
-		workDir:   workDir,
-		model:     model,
-		mode:      mode,
-		extraDirs: append([]string(nil), extraDirs...),
-		extraEnv:  extraEnv,
-		events:    make(chan core.Event, 64),
-		ctx:       sessionCtx,
-		cancel:    cancel,
+		cmd:          cmd,
+		workDir:      workDir,
+		model:        model,
+		settingsPath: settingsPath,
+		mode:         mode,
+		extraDirs:    append([]string(nil), extraDirs...),
+		extraEnv:     extraEnv,
+		events:       make(chan core.Event, 64),
+		ctx:          sessionCtx,
+		cancel:       cancel,
 	}
 	gs.alive.Store(true)
 
@@ -218,6 +232,71 @@ func (gs *geminiSession) readLoop(cmd *exec.Cmd, stdout io.ReadCloser, stderrBuf
 		case <-gs.ctx.Done():
 			return
 		}
+	}
+}
+
+func geminiEffectiveThinkingBudget(reasoningLevel string, thinkingBudget int) (int, bool) {
+	if thinkingBudget >= 0 {
+		return thinkingBudget, true
+	}
+	switch normalizeReasoningLevel(reasoningLevel) {
+	case "off":
+		return 0, true
+	case "low":
+		return 256, true
+	case "medium":
+		return 1024, true
+	case "high":
+		return 4096, true
+	default:
+		return 0, false
+	}
+}
+
+func writeGeminiSystemSettingsOverride(thinkingBudget int) (string, error) {
+	payload := map[string]any{
+		"modelConfigs": map[string]any{
+			"overrides": []map[string]any{
+				{
+					"match": map[string]any{},
+					"modelConfig": map[string]any{
+						"generateContentConfig": map[string]any{
+							"thinkingConfig": map[string]any{
+								"thinkingBudget": thinkingBudget,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	dir := filepath.Join(os.TempDir(), "cc-connect-gemini-settings")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("geminiSession: mkdir settings dir: %w", err)
+	}
+	f, err := os.CreateTemp(dir, "settings-*.json")
+	if err != nil {
+		return "", fmt.Errorf("geminiSession: create settings override: %w", err)
+	}
+	enc := json.NewEncoder(f)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(payload); err != nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		return "", fmt.Errorf("geminiSession: write settings override: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(f.Name())
+		return "", fmt.Errorf("geminiSession: close settings override: %w", err)
+	}
+	return f.Name(), nil
+}
+
+func (gs *geminiSession) cleanupSettingsOverride() {
+	if gs.settingsPath != "" {
+		_ = os.Remove(gs.settingsPath)
+		gs.settingsPath = ""
 	}
 }
 
@@ -449,6 +528,7 @@ func (gs *geminiSession) Close() error {
 	done := make(chan struct{})
 	go func() {
 		gs.wg.Wait()
+		gs.cleanupSettingsOverride()
 		gs.closeEvents()
 		close(done)
 	}()

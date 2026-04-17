@@ -28,13 +28,14 @@ func init() {
 //   - "full-auto": --full-auto (sandbox-protected auto execution)
 //   - "yolo":      --dangerously-bypass-approvals-and-sandbox
 type Agent struct {
-	workDir    string
-	model      string
-	mode       string // "suggest" | "auto-edit" | "full-auto" | "yolo"
-	providers  []core.ProviderConfig
-	activeIdx  int // -1 = no provider set
-	sessionEnv []string
-	mu         sync.Mutex
+	workDir        string
+	model          string
+	reasoningLevel string
+	mode           string // "suggest" | "auto-edit" | "full-auto" | "yolo"
+	providers      []core.ProviderConfig
+	activeIdx      int // -1 = no provider set
+	sessionEnv     []string
+	mu             sync.Mutex
 }
 
 func New(opts map[string]any) (core.Agent, error) {
@@ -43,6 +44,8 @@ func New(opts map[string]any) (core.Agent, error) {
 		workDir = "."
 	}
 	model, _ := opts["model"].(string)
+	reasoningLevel, _ := opts["reasoning_level"].(string)
+	reasoningLevel = normalizeReasoningLevel(reasoningLevel)
 	mode, _ := opts["mode"].(string)
 	mode = normalizeMode(mode)
 
@@ -51,10 +54,11 @@ func New(opts map[string]any) (core.Agent, error) {
 	}
 
 	return &Agent{
-		workDir:   workDir,
-		model:     model,
-		mode:      mode,
-		activeIdx: -1,
+		workDir:        workDir,
+		model:          model,
+		reasoningLevel: reasoningLevel,
+		mode:           mode,
+		activeIdx:      -1,
 	}, nil
 }
 
@@ -68,6 +72,21 @@ func normalizeMode(raw string) string {
 		return "yolo"
 	default:
 		return "suggest"
+	}
+}
+
+func normalizeReasoningLevel(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "low":
+		return "low"
+	case "medium", "med":
+		return "medium"
+	case "high":
+		return "high"
+	case "xhigh", "x-high", "extra-high", "extra_high", "very-high":
+		return "xhigh"
+	default:
+		return ""
 	}
 }
 
@@ -97,6 +116,28 @@ func (a *Agent) GetModel() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.model
+}
+
+func (a *Agent) SetReasoningLevel(level string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.reasoningLevel = normalizeReasoningLevel(level)
+	slog.Info("codex: reasoning level changed", "reasoning_level", a.reasoningLevel)
+}
+
+func (a *Agent) GetReasoningLevel() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.reasoningLevel
+}
+
+func (a *Agent) AvailableReasoningLevels() []core.ReasoningLevelOption {
+	return []core.ReasoningLevelOption{
+		{Name: "low", Desc: "Fastest, shallow reasoning"},
+		{Name: "medium", Desc: "Balanced default"},
+		{Name: "high", Desc: "Deeper reasoning"},
+		{Name: "xhigh", Desc: "Deepest reasoning"},
+	}
 }
 
 func (a *Agent) AvailableModels(ctx context.Context) []core.ModelOption {
@@ -189,6 +230,7 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 	a.mu.Lock()
 	mode := a.mode
 	model := a.model
+	reasoningLevel := a.reasoningLevel
 	extraEnv := a.providerEnvLocked()
 	extraEnv = append(extraEnv, a.sessionEnv...)
 	workDir := core.SessionWorkDirFromEnv(extraEnv, a.workDir)
@@ -200,7 +242,7 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 	}
 	a.mu.Unlock()
 
-	return newCodexSession(ctx, workDir, model, mode, sessionID, extraDirs, extraEnv)
+	return newCodexSession(ctx, workDir, model, reasoningLevel, mode, sessionID, extraDirs, extraEnv)
 }
 
 func (a *Agent) ListSessions(_ context.Context) ([]core.AgentSessionInfo, error) {
