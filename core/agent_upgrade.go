@@ -33,6 +33,7 @@ type AgentUpgradeStatus struct {
 	Enabled       bool
 	Strategy      string
 	Actionable    bool
+	BlockedReason string
 	BusySessions  int
 	Version       string
 	VersionErr    string
@@ -50,6 +51,11 @@ type AgentUpgradeRunResult struct {
 	Changed       bool
 	Output        string
 	Err           error
+}
+
+type resolvedAgentUpgradeTarget struct {
+	cfg           AgentUpgradeTargetConfig
+	blockedReason string
 }
 
 type AgentUpgradeCommandRunner func(ctx context.Context, cmd string) (string, error)
@@ -160,6 +166,7 @@ func (m *AgentUpgradeManager) Snapshot() AgentUpgradeConfig {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	cfg := m.cfg
+	cfg.AllowedUserIDs = append([]string(nil), cfg.AllowedUserIDs...)
 	cfg.Targets = cloneAgentUpgradeTargets(cfg.Targets)
 	return cfg
 }
@@ -196,12 +203,14 @@ func (m *AgentUpgradeManager) Statuses(ctx context.Context) []AgentUpgradeStatus
 	names := sortedAgentUpgradeTargetNames(cfg.Targets)
 	statuses := make([]AgentUpgradeStatus, 0, len(names))
 	for _, name := range names {
-		target := cfg.Targets[name]
+		resolved := m.resolveTarget(ctx, name, cfg.Targets[name], runner)
+		target := resolved.cfg
 		st := AgentUpgradeStatus{
 			Name:          name,
 			Enabled:       cfg.Enabled && target.Enabled,
 			Strategy:      target.Strategy,
-			Actionable:    cfg.Enabled && target.Enabled && target.Strategy != "observe" && target.Strategy != "disabled" && strings.TrimSpace(target.UpdateCommand) != "",
+			Actionable:    cfg.Enabled && target.Enabled && resolved.blockedReason == "" && target.Strategy != "observe" && target.Strategy != "disabled" && strings.TrimSpace(target.UpdateCommand) != "",
+			BlockedReason: resolved.blockedReason,
 			UpdateCommand: target.UpdateCommand,
 		}
 		if busyFn != nil {
@@ -235,7 +244,8 @@ func (m *AgentUpgradeManager) Run(ctx context.Context, target string) ([]AgentUp
 	}
 	results := make([]AgentUpgradeRunResult, 0, len(names))
 	for _, name := range names {
-		cfgTarget := cfg.Targets[name]
+		resolved := m.resolveTarget(ctx, name, cfg.Targets[name], runner)
+		cfgTarget := resolved.cfg
 		res := AgentUpgradeRunResult{Name: name, Strategy: cfgTarget.Strategy}
 		if !cfgTarget.Enabled || cfgTarget.Strategy == "disabled" {
 			res.Skipped = true
@@ -252,6 +262,12 @@ func (m *AgentUpgradeManager) Run(ctx context.Context, target string) ([]AgentUp
 		if strings.TrimSpace(cfgTarget.UpdateCommand) == "" {
 			res.Skipped = true
 			res.Reason = "no update command configured"
+			results = append(results, res)
+			continue
+		}
+		if resolved.blockedReason != "" {
+			res.Skipped = true
+			res.Reason = resolved.blockedReason
 			results = append(results, res)
 			continue
 		}
@@ -312,6 +328,28 @@ func (m *AgentUpgradeManager) Run(ctx context.Context, target string) ([]AgentUp
 	return results, nil
 }
 
+func (m *AgentUpgradeManager) resolveTarget(ctx context.Context, name string, target AgentUpgradeTargetConfig, runner AgentUpgradeCommandRunner) resolvedAgentUpgradeTarget {
+	resolved := resolvedAgentUpgradeTarget{cfg: target}
+	if name != "claudecode" || target.Strategy != "builtin" {
+		return resolved
+	}
+
+	switch source, updateCmd, blockedReason := detectClaudeCodeUpgradeRoute(ctx, runner); source {
+	case "native", "brew", "npm":
+		resolved.cfg.UpdateCommand = updateCmd
+		if source != "native" {
+			resolved.cfg.Strategy = "package_manager"
+		}
+		return resolved
+	case "apt", "dnf", "apk":
+		resolved.cfg.UpdateCommand = updateCmd
+		resolved.blockedReason = blockedReason
+		return resolved
+	default:
+		return resolved
+	}
+}
+
 func (m *AgentUpgradeManager) snapshotDeps() (AgentUpgradeConfig, AgentUpgradeCommandRunner, func(string) int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -354,6 +392,46 @@ func cloneAgentUpgradeTargets(in map[string]AgentUpgradeTargetConfig) map[string
 		out[k] = v
 	}
 	return out
+}
+
+func detectClaudeCodeUpgradeRoute(ctx context.Context, runner AgentUpgradeCommandRunner) (source string, updateCommand string, blockedReason string) {
+	if runner == nil {
+		runner = defaultAgentUpgradeCommandRunner
+	}
+	probe := func(cmd string) (string, bool) {
+		probeCtx, cancel := context.WithTimeout(ctx, defaultAgentUpgradeProbeTimeout)
+		defer cancel()
+		out, err := runner(probeCtx, cmd)
+		if err != nil {
+			return "", false
+		}
+		return normalizeAgentUpgradeOutput(out), true
+	}
+
+	if path, ok := probe("command -v claude"); ok {
+		if strings.Contains(path, "/.local/bin/claude") || strings.Contains(path, "/.local/share/claude/") {
+			return "native", "claude update", ""
+		}
+	}
+	if _, ok := probe("brew list --cask claude-code@latest >/dev/null && printf ok"); ok {
+		return "brew", "brew upgrade claude-code@latest", ""
+	}
+	if _, ok := probe("brew list --cask claude-code >/dev/null && printf ok"); ok {
+		return "brew", "brew upgrade claude-code", ""
+	}
+	if _, ok := probe("npm -g ls @anthropic-ai/claude-code --depth=0 >/dev/null && printf ok"); ok {
+		return "npm", "npm install -g @anthropic-ai/claude-code", ""
+	}
+	if _, ok := probe("dpkg -s claude-code >/dev/null && printf ok"); ok {
+		return "apt", "sudo apt update && sudo apt upgrade claude-code", "requires privileged apt upgrade; run manually"
+	}
+	if _, ok := probe("rpm -q claude-code >/dev/null && printf ok"); ok {
+		return "dnf", "sudo dnf upgrade claude-code", "requires privileged dnf upgrade; run manually"
+	}
+	if _, ok := probe("apk info -e claude-code >/dev/null && printf ok"); ok {
+		return "apk", "apk update && apk upgrade claude-code", "requires privileged apk upgrade; run manually"
+	}
+	return "", "", ""
 }
 
 func normalizeAgentUpgradeStrategy(v string) string {

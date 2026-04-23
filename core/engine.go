@@ -5750,6 +5750,9 @@ func (e *Engine) cmdAgentUpgrade(p Platform, msg *Message, args []string) {
 			if st.UpdateCommand != "" {
 				fmt.Fprintf(&sb, "  update: %s\n", st.UpdateCommand)
 			}
+			if st.BlockedReason != "" {
+				fmt.Fprintf(&sb, "  blocked: %s\n", st.BlockedReason)
+			}
 			if !st.Actionable {
 				sb.WriteString("  manual run: not actionable\n")
 			}

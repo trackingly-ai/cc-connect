@@ -194,3 +194,61 @@ func TestAgentUpgradeManagerApplyConfigUnknownStrategyDisablesTarget(t *testing.
 		t.Fatalf("codex strategy = %q, want disabled", got)
 	}
 }
+
+func TestDetectClaudeCodeUpgradeRoutePrefersNativeInstall(t *testing.T) {
+	runner := func(_ context.Context, cmd string) (string, error) {
+		switch cmd {
+		case "command -v claude":
+			return "/Users/edward/.local/bin/claude\n", nil
+		default:
+			return "", fmt.Errorf("unexpected command %q", cmd)
+		}
+	}
+
+	source, updateCmd, blockedReason := detectClaudeCodeUpgradeRoute(context.Background(), runner)
+	if source != "native" || updateCmd != "claude update" || blockedReason != "" {
+		t.Fatalf("route = (%q, %q, %q), want native/claude update/no block", source, updateCmd, blockedReason)
+	}
+}
+
+func TestDetectClaudeCodeUpgradeRouteFallsBackToHomebrew(t *testing.T) {
+	runner := func(_ context.Context, cmd string) (string, error) {
+		switch cmd {
+		case "command -v claude":
+			return "/opt/homebrew/bin/claude\n", nil
+		case "brew list --cask claude-code@latest >/dev/null && printf ok":
+			return "ok", nil
+		case "brew list --cask claude-code >/dev/null && printf ok":
+			return "", fmt.Errorf("not installed")
+		default:
+			return "", fmt.Errorf("unexpected command %q", cmd)
+		}
+	}
+
+	source, updateCmd, blockedReason := detectClaudeCodeUpgradeRoute(context.Background(), runner)
+	if source != "brew" || updateCmd != "brew upgrade claude-code@latest" || blockedReason != "" {
+		t.Fatalf("route = (%q, %q, %q), want brew/claude-code@latest/no block", source, updateCmd, blockedReason)
+	}
+}
+
+func TestDetectClaudeCodeUpgradeRouteMarksLinuxPackageManagersManualOnly(t *testing.T) {
+	runner := func(_ context.Context, cmd string) (string, error) {
+		switch cmd {
+		case "command -v claude":
+			return "/usr/bin/claude\n", nil
+		case "brew list --cask claude-code@latest >/dev/null && printf ok",
+			"brew list --cask claude-code >/dev/null && printf ok",
+			"npm -g ls @anthropic-ai/claude-code --depth=0 >/dev/null && printf ok":
+			return "", fmt.Errorf("not installed")
+		case "dpkg -s claude-code >/dev/null && printf ok":
+			return "ok", nil
+		default:
+			return "", fmt.Errorf("unexpected command %q", cmd)
+		}
+	}
+
+	source, updateCmd, blockedReason := detectClaudeCodeUpgradeRoute(context.Background(), runner)
+	if source != "apt" || updateCmd == "" || blockedReason == "" {
+		t.Fatalf("route = (%q, %q, %q), want manual apt fallback", source, updateCmd, blockedReason)
+	}
+}
