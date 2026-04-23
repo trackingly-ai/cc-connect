@@ -128,3 +128,69 @@ func TestAgentUpgradeManagerRunDisabled(t *testing.T) {
 		t.Fatal("expected disabled error")
 	}
 }
+
+func TestAgentUpgradeManagerAuthorizeRun(t *testing.T) {
+	mgr := NewAgentUpgradeManager(AgentUpgradeConfig{
+		Enabled:        true,
+		RunEnabled:     true,
+		AllowedUserIDs: []string{"ou_admin"},
+	})
+	if err := mgr.AuthorizeRun("ou_admin"); err != nil {
+		t.Fatalf("AuthorizeRun(allowed): %v", err)
+	}
+	if err := mgr.AuthorizeRun("ou_other"); err == nil {
+		t.Fatal("expected unauthorized user to be rejected")
+	}
+}
+
+func TestAgentUpgradeManagerRunCustomStrategy(t *testing.T) {
+	mgr := NewAgentUpgradeManager(AgentUpgradeConfig{
+		Enabled: true,
+		Targets: map[string]AgentUpgradeTargetConfig{
+			"codex": {
+				Enabled:        true,
+				Strategy:       "custom",
+				VersionCommand: "codex --version",
+				UpdateCommand:  "custom-codex-upgrade",
+			},
+		},
+	})
+	versions := map[string]string{"codex --version": "codex 1.0.0"}
+	mgr.SetCommandRunner(func(_ context.Context, cmd string) (string, error) {
+		switch cmd {
+		case "codex --version":
+			return versions[cmd], nil
+		case "custom-codex-upgrade":
+			versions["codex --version"] = "codex 1.1.0"
+			return "custom updated", nil
+		default:
+			return "", fmt.Errorf("unexpected command %q", cmd)
+		}
+	})
+
+	results, err := mgr.Run(context.Background(), "codex")
+	if err != nil {
+		t.Fatalf("Run(codex): %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("len(results) = %d, want 1", len(results))
+	}
+	if results[0].Strategy != "custom" || !results[0].Changed {
+		t.Fatalf("result = %#v, want custom changed run", results[0])
+	}
+}
+
+func TestAgentUpgradeManagerApplyConfigUnknownStrategyDisablesTarget(t *testing.T) {
+	mgr := NewAgentUpgradeManager(AgentUpgradeConfig{Enabled: true})
+	mgr.ApplyConfig(AgentUpgradeConfig{
+		Enabled: true,
+		Targets: map[string]AgentUpgradeTargetConfig{
+			"codex": {Enabled: true, Strategy: "yolo"},
+		},
+	})
+
+	cfg := mgr.Snapshot()
+	if got := cfg.Targets["codex"].Strategy; got != "disabled" {
+		t.Fatalf("codex strategy = %q, want disabled", got)
+	}
+}

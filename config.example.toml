@@ -152,6 +152,8 @@ level = "info" # debug, info, warn, error
 
 # [agent_updates]
 # enabled = true
+# run_enabled = false          # set true only if you explicitly allow chat-triggered host upgrades
+# allowed_user_ids = ["ou_xxx"] # required when run_enabled = true
 # timeout_secs = 1200
 #
 # [agent_updates.claudecode]

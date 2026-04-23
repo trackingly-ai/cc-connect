@@ -292,6 +292,46 @@ strategy = "magic"
 	}
 }
 
+func TestLoadParsesAgentUpdateRunAuthorization(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	content := minimalConfigTOML + `
+[agent_updates]
+enabled = true
+run_enabled = true
+allowed_user_ids = ["ou_admin", " ou_backup "]
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.AgentUpdates.RunEnabled == nil || !*cfg.AgentUpdates.RunEnabled {
+		t.Fatalf("run_enabled = %#v, want true", cfg.AgentUpdates.RunEnabled)
+	}
+	if len(cfg.AgentUpdates.AllowedUserIDs) != 2 {
+		t.Fatalf("allowed_user_ids = %#v", cfg.AgentUpdates.AllowedUserIDs)
+	}
+}
+
+func TestLoadRejectsAgentUpdateRunWithoutAllowedUsers(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	content := minimalConfigTOML + `
+[agent_updates]
+enabled = true
+run_enabled = true
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if _, err := Load(configPath); err == nil {
+		t.Fatal("expected missing allowed_user_ids validation error")
+	}
+}
+
 const minimalConfigTOML = `
 [[projects]]
 name = "demo"

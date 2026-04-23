@@ -199,6 +199,25 @@ func (sm *SessionManager) ActiveSessionID(userKey string) string {
 	return sm.activeSession[userKey]
 }
 
+func (sm *SessionManager) BusySessionCount() int {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	count := 0
+	for _, s := range sm.sessions {
+		if s == nil {
+			continue
+		}
+		s.mu.Lock()
+		busy := s.busy
+		s.mu.Unlock()
+		if busy {
+			count++
+		}
+	}
+	return count
+}
+
 // RenameActiveSession renames the current local session for the given user key.
 func (sm *SessionManager) RenameActiveSession(userKey, name string) *Session {
 	sm.mu.Lock()

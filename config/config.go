@@ -56,12 +56,14 @@ type EchoConfig struct {
 }
 
 type AgentUpdatesConfig struct {
-	Enabled     *bool                   `toml:"enabled,omitempty"`
-	TimeoutSecs int                     `toml:"timeout_secs,omitempty"`
-	ClaudeCode  AgentUpdateTargetConfig `toml:"claudecode"`
-	Codex       AgentUpdateTargetConfig `toml:"codex"`
-	Gemini      AgentUpdateTargetConfig `toml:"gemini"`
-	Qoder       AgentUpdateTargetConfig `toml:"qoder"`
+	Enabled        *bool                   `toml:"enabled,omitempty"`
+	RunEnabled     *bool                   `toml:"run_enabled,omitempty"`
+	AllowedUserIDs []string                `toml:"allowed_user_ids,omitempty"`
+	TimeoutSecs    int                     `toml:"timeout_secs,omitempty"`
+	ClaudeCode     AgentUpdateTargetConfig `toml:"claudecode"`
+	Codex          AgentUpdateTargetConfig `toml:"codex"`
+	Gemini         AgentUpdateTargetConfig `toml:"gemini"`
+	Qoder          AgentUpdateTargetConfig `toml:"qoder"`
 }
 
 type AgentUpdateTargetConfig struct {
@@ -266,6 +268,18 @@ func (c *Config) validate() error {
 	}
 	if c.AgentUpdates.TimeoutSecs < 0 {
 		return fmt.Errorf("config: agent_updates.timeout_secs must be >= 0")
+	}
+	if c.AgentUpdates.RunEnabled != nil && *c.AgentUpdates.RunEnabled {
+		hasAllowedUser := false
+		for _, userID := range c.AgentUpdates.AllowedUserIDs {
+			if strings.TrimSpace(userID) != "" {
+				hasAllowedUser = true
+				break
+			}
+		}
+		if !hasAllowedUser {
+			return fmt.Errorf("config: agent_updates.allowed_user_ids must include at least one user when run_enabled = true")
+		}
 	}
 	for key, target := range map[string]AgentUpdateTargetConfig{
 		"claudecode": c.AgentUpdates.ClaudeCode,

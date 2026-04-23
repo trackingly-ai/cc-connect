@@ -3,7 +3,6 @@ package core
 import (
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"slices"
 	"strings"
@@ -12,6 +11,7 @@ import (
 )
 
 const defaultAgentUpgradeTimeout = 20 * time.Minute
+const defaultAgentUpgradeProbeTimeout = 30 * time.Second
 
 type AgentUpgradeTargetConfig struct {
 	Enabled        bool
@@ -21,9 +21,11 @@ type AgentUpgradeTargetConfig struct {
 }
 
 type AgentUpgradeConfig struct {
-	Enabled bool
-	Timeout time.Duration
-	Targets map[string]AgentUpgradeTargetConfig
+	Enabled        bool
+	RunEnabled     bool
+	AllowedUserIDs []string
+	Timeout        time.Duration
+	Targets        map[string]AgentUpgradeTargetConfig
 }
 
 type AgentUpgradeStatus struct {
@@ -57,11 +59,13 @@ type AgentUpgradeManager struct {
 	cfg         AgentUpgradeConfig
 	runCommand  AgentUpgradeCommandRunner
 	busyCountFn func(string) int
+	running     map[string]bool
 }
 
 func NewAgentUpgradeManager(cfg AgentUpgradeConfig) *AgentUpgradeManager {
 	m := &AgentUpgradeManager{
 		runCommand: defaultAgentUpgradeCommandRunner,
+		running:    make(map[string]bool),
 	}
 	m.ApplyConfig(cfg)
 	return m
@@ -69,8 +73,9 @@ func NewAgentUpgradeManager(cfg AgentUpgradeConfig) *AgentUpgradeManager {
 
 func DefaultAgentUpgradeConfig() AgentUpgradeConfig {
 	return AgentUpgradeConfig{
-		Enabled: false,
-		Timeout: defaultAgentUpgradeTimeout,
+		Enabled:    false,
+		RunEnabled: false,
+		Timeout:    defaultAgentUpgradeTimeout,
 		Targets: map[string]AgentUpgradeTargetConfig{
 			"claudecode": {
 				Enabled:        true,
@@ -122,6 +127,8 @@ func (m *AgentUpgradeManager) ApplyConfig(cfg AgentUpgradeConfig) {
 
 	base := DefaultAgentUpgradeConfig()
 	base.Enabled = cfg.Enabled
+	base.RunEnabled = cfg.RunEnabled
+	base.AllowedUserIDs = dedupeTrimmedStrings(cfg.AllowedUserIDs)
 	if cfg.Timeout > 0 {
 		base.Timeout = cfg.Timeout
 	}
@@ -157,6 +164,33 @@ func (m *AgentUpgradeManager) Snapshot() AgentUpgradeConfig {
 	return cfg
 }
 
+func (m *AgentUpgradeManager) AuthorizeRun(userID string) error {
+	cfg := m.Snapshot()
+	if !cfg.RunEnabled {
+		return fmt.Errorf("interactive agent upgrades are disabled; set [agent_updates].run_enabled = true")
+	}
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return fmt.Errorf("interactive agent upgrades require a resolvable user id")
+	}
+	for _, allowed := range cfg.AllowedUserIDs {
+		if strings.EqualFold(strings.TrimSpace(allowed), userID) {
+			return nil
+		}
+	}
+	return fmt.Errorf("you are not allowed to run agent upgrades")
+}
+
+func (m *AgentUpgradeManager) IsTargetRunning(name string) bool {
+	name = normalizeAgentUpgradeTarget(name)
+	if name == "" {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.running[name]
+}
+
 func (m *AgentUpgradeManager) Statuses(ctx context.Context) []AgentUpgradeStatus {
 	cfg, runner, busyFn := m.snapshotDeps()
 	names := sortedAgentUpgradeTargetNames(cfg.Targets)
@@ -174,10 +208,7 @@ func (m *AgentUpgradeManager) Statuses(ctx context.Context) []AgentUpgradeStatus
 			st.BusySessions = busyFn(name)
 		}
 		if strings.TrimSpace(target.VersionCommand) != "" {
-			timeout := cfg.Timeout
-			if timeout <= 0 {
-				timeout = defaultAgentUpgradeTimeout
-			}
+			timeout := versionProbeTimeout(cfg.Timeout)
 			runCtx, cancel := context.WithTimeout(ctx, timeout)
 			out, err := runner(runCtx, target.VersionCommand)
 			cancel()
@@ -224,49 +255,59 @@ func (m *AgentUpgradeManager) Run(ctx context.Context, target string) ([]AgentUp
 			results = append(results, res)
 			continue
 		}
-		if busyFn != nil {
-			res.BusySessions = busyFn(name)
-			if res.BusySessions > 0 {
-				res.Skipped = true
-				res.Reason = fmt.Sprintf("%d active session(s)", res.BusySessions)
-				results = append(results, res)
-				continue
-			}
-		}
-
-		timeout := cfg.Timeout
-		if timeout <= 0 {
-			timeout = defaultAgentUpgradeTimeout
-		}
-		if strings.TrimSpace(cfgTarget.VersionCommand) != "" {
-			beforeCtx, cancel := context.WithTimeout(ctx, timeout)
-			out, err := runner(beforeCtx, cfgTarget.VersionCommand)
-			cancel()
-			if err == nil {
-				res.BeforeVersion = normalizeAgentUpgradeOutput(out)
-			}
-		}
-
-		runCtx, cancel := context.WithTimeout(ctx, timeout)
-		out, err := runner(runCtx, cfgTarget.UpdateCommand)
-		cancel()
-		res.Output = normalizeAgentUpgradeOutput(out)
-		if err != nil {
-			res.Err = err
+		if !m.beginTargetRun(name) {
+			res.Skipped = true
+			res.Reason = "upgrade already running"
 			results = append(results, res)
 			continue
 		}
+		func() {
+			defer m.endTargetRun(name)
 
-		if strings.TrimSpace(cfgTarget.VersionCommand) != "" {
-			afterCtx, cancel := context.WithTimeout(ctx, timeout)
-			out, err := runner(afterCtx, cfgTarget.VersionCommand)
-			cancel()
-			if err == nil {
-				res.AfterVersion = normalizeAgentUpgradeOutput(out)
+			if busyFn != nil {
+				res.BusySessions = busyFn(name)
+				if res.BusySessions > 0 {
+					res.Skipped = true
+					res.Reason = fmt.Sprintf("%d active session(s)", res.BusySessions)
+					results = append(results, res)
+					return
+				}
 			}
-		}
-		res.Changed = res.BeforeVersion != "" && res.AfterVersion != "" && res.BeforeVersion != res.AfterVersion
-		results = append(results, res)
+
+			timeout := cfg.Timeout
+			if timeout <= 0 {
+				timeout = defaultAgentUpgradeTimeout
+			}
+			if strings.TrimSpace(cfgTarget.VersionCommand) != "" {
+				beforeCtx, cancel := context.WithTimeout(ctx, versionProbeTimeout(timeout))
+				out, err := runner(beforeCtx, cfgTarget.VersionCommand)
+				cancel()
+				if err == nil {
+					res.BeforeVersion = normalizeAgentUpgradeOutput(out)
+				}
+			}
+
+			runCtx, cancel := context.WithTimeout(ctx, timeout)
+			out, err := runner(runCtx, cfgTarget.UpdateCommand)
+			cancel()
+			res.Output = normalizeAgentUpgradeOutput(out)
+			if err != nil {
+				res.Err = err
+				results = append(results, res)
+				return
+			}
+
+			if strings.TrimSpace(cfgTarget.VersionCommand) != "" {
+				afterCtx, cancel := context.WithTimeout(ctx, versionProbeTimeout(timeout))
+				out, err := runner(afterCtx, cfgTarget.VersionCommand)
+				cancel()
+				if err == nil {
+					res.AfterVersion = normalizeAgentUpgradeOutput(out)
+				}
+			}
+			res.Changed = res.BeforeVersion != "" && res.AfterVersion != "" && res.BeforeVersion != res.AfterVersion
+			results = append(results, res)
+		}()
 	}
 	return results, nil
 }
@@ -321,7 +362,7 @@ func normalizeAgentUpgradeStrategy(v string) string {
 	case "builtin", "package_manager", "custom", "observe", "disabled":
 		return v
 	default:
-		return v
+		return "disabled"
 	}
 }
 
@@ -346,11 +387,47 @@ func normalizeAgentUpgradeOutput(v string) string {
 }
 
 func defaultAgentUpgradeCommandRunner(ctx context.Context, cmd string) (string, error) {
-	shell := strings.TrimSpace(os.Getenv("SHELL"))
-	if shell == "" {
-		shell = "/bin/sh"
-	}
-	c := exec.CommandContext(ctx, shell, "-lc", cmd)
+	c := exec.CommandContext(ctx, "/bin/sh", "-lc", cmd)
 	out, err := c.CombinedOutput()
 	return string(out), err
+}
+
+func (m *AgentUpgradeManager) beginTargetRun(name string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.running[name] {
+		return false
+	}
+	m.running[name] = true
+	return true
+}
+
+func (m *AgentUpgradeManager) endTargetRun(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.running, name)
+}
+
+func versionProbeTimeout(timeout time.Duration) time.Duration {
+	if timeout <= 0 || timeout > defaultAgentUpgradeProbeTimeout {
+		return defaultAgentUpgradeProbeTimeout
+	}
+	return timeout
+}
+
+func dedupeTrimmedStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }

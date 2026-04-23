@@ -486,7 +486,7 @@ func main() {
 			if e.GetAgent().Name() != agentName {
 				continue
 			}
-			count += e.ActiveInteractiveSessionCount()
+			count += e.BusySessionCount()
 		}
 		return count
 	})
@@ -952,43 +952,34 @@ func buildAgentUpgradeConfig(cfg config.AgentUpdatesConfig) core.AgentUpgradeCon
 	if cfg.Enabled != nil {
 		result.Enabled = *cfg.Enabled
 	}
+	if cfg.RunEnabled != nil {
+		result.RunEnabled = *cfg.RunEnabled
+	}
+	result.AllowedUserIDs = dedupeTrimmedStrings(cfg.AllowedUserIDs)
 	if cfg.TimeoutSecs > 0 {
 		result.Timeout = time.Duration(cfg.TimeoutSecs) * time.Second
 	}
-	result.Targets = map[string]core.AgentUpgradeTargetConfig{
-		"claudecode": {
-			Enabled:        targetEnabledDefaultTrue(cfg.ClaudeCode.Enabled),
-			Strategy:       strings.TrimSpace(cfg.ClaudeCode.Strategy),
-			VersionCommand: strings.TrimSpace(cfg.ClaudeCode.VersionCommand),
-			UpdateCommand:  strings.TrimSpace(cfg.ClaudeCode.UpdateCommand),
-		},
-		"codex": {
-			Enabled:        targetEnabledDefaultTrue(cfg.Codex.Enabled),
-			Strategy:       strings.TrimSpace(cfg.Codex.Strategy),
-			VersionCommand: strings.TrimSpace(cfg.Codex.VersionCommand),
-			UpdateCommand:  strings.TrimSpace(cfg.Codex.UpdateCommand),
-		},
-		"gemini": {
-			Enabled:        targetEnabledDefaultTrue(cfg.Gemini.Enabled),
-			Strategy:       strings.TrimSpace(cfg.Gemini.Strategy),
-			VersionCommand: strings.TrimSpace(cfg.Gemini.VersionCommand),
-			UpdateCommand:  strings.TrimSpace(cfg.Gemini.UpdateCommand),
-		},
-		"qoder": {
-			Enabled:        targetEnabledDefaultTrue(cfg.Qoder.Enabled),
-			Strategy:       strings.TrimSpace(cfg.Qoder.Strategy),
-			VersionCommand: strings.TrimSpace(cfg.Qoder.VersionCommand),
-			UpdateCommand:  strings.TrimSpace(cfg.Qoder.UpdateCommand),
-		},
+	apply := func(name string, src config.AgentUpdateTargetConfig) {
+		target := result.Targets[name]
+		if src.Enabled != nil {
+			target.Enabled = *src.Enabled
+		}
+		if strategy := strings.TrimSpace(src.Strategy); strategy != "" {
+			target.Strategy = strategy
+		}
+		if versionCmd := strings.TrimSpace(src.VersionCommand); versionCmd != "" {
+			target.VersionCommand = versionCmd
+		}
+		if updateCmd := strings.TrimSpace(src.UpdateCommand); updateCmd != "" {
+			target.UpdateCommand = updateCmd
+		}
+		result.Targets[name] = target
 	}
+	apply("claudecode", cfg.ClaudeCode)
+	apply("codex", cfg.Codex)
+	apply("gemini", cfg.Gemini)
+	apply("qoder", cfg.Qoder)
 	return result
-}
-
-func targetEnabledDefaultTrue(v *bool) bool {
-	if v == nil {
-		return true
-	}
-	return *v
 }
 
 func dedupeTrimmedStrings(values []string) []string {

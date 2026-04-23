@@ -743,7 +743,11 @@ func TestCmdAgentUpgradeStatus(t *testing.T) {
 func TestCmdAgentUpgradeRunDefaultsToCurrentAgent(t *testing.T) {
 	p := &stubPlatformEngine{n: "telegram"}
 	e := NewEngine("test", &namedStubAgent{name: "qoder"}, []Platform{p}, "", LangEnglish)
-	mgr := NewAgentUpgradeManager(AgentUpgradeConfig{Enabled: true})
+	mgr := NewAgentUpgradeManager(AgentUpgradeConfig{
+		Enabled:        true,
+		RunEnabled:     true,
+		AllowedUserIDs: []string{"user"},
+	})
 	mgr.SetCommandRunner(func(_ context.Context, cmd string) (string, error) {
 		switch cmd {
 		case "qodercli --version":
@@ -756,7 +760,7 @@ func TestCmdAgentUpgradeRunDefaultsToCurrentAgent(t *testing.T) {
 	})
 	e.SetAgentUpgradeManager(mgr)
 
-	e.cmdAgentUpgrade(p, &Message{SessionKey: "tg:chat:user", ReplyCtx: "ctx"}, []string{"run"})
+	e.cmdAgentUpgrade(p, &Message{SessionKey: "tg:chat:user", UserID: "user", ReplyCtx: "ctx"}, []string{"run"})
 
 	if len(p.sent) == 0 {
 		t.Fatal("expected run reply")
@@ -764,6 +768,49 @@ func TestCmdAgentUpgradeRunDefaultsToCurrentAgent(t *testing.T) {
 	sent := strings.Join(p.sent, "\n")
 	if !strings.Contains(sent, "Agent upgrade run: qoder") || !strings.Contains(sent, "no version change detected") {
 		t.Fatalf("sent = %q", sent)
+	}
+}
+
+func TestCmdAgentUpgradeRunRejectsUnauthorizedUser(t *testing.T) {
+	p := &stubPlatformEngine{n: "telegram"}
+	e := NewEngine("test", &namedStubAgent{name: "codex"}, []Platform{p}, "", LangEnglish)
+	mgr := NewAgentUpgradeManager(AgentUpgradeConfig{
+		Enabled:        true,
+		RunEnabled:     true,
+		AllowedUserIDs: []string{"owner"},
+	})
+	e.SetAgentUpgradeManager(mgr)
+
+	e.cmdAgentUpgrade(p, &Message{SessionKey: "tg:chat:user", UserID: "user", ReplyCtx: "ctx"}, []string{"run", "codex"})
+
+	if len(p.sent) == 0 || !strings.Contains(p.sent[len(p.sent)-1], "not allowed") {
+		t.Fatalf("sent = %#v, want unauthorized reply", p.sent)
+	}
+}
+
+func TestHandleMessageBlocksNewTurnDuringAgentUpgrade(t *testing.T) {
+	p := &stubPlatformEngine{n: "telegram"}
+	e := NewEngine("test", &namedStubAgent{name: "codex"}, []Platform{p}, "", LangEnglish)
+	mgr := NewAgentUpgradeManager(AgentUpgradeConfig{Enabled: true})
+	if !mgr.beginTargetRun("codex") {
+		t.Fatal("expected beginTargetRun to succeed")
+	}
+	defer mgr.endTargetRun("codex")
+	e.SetAgentUpgradeManager(mgr)
+
+	e.handleMessage(p, &Message{
+		SessionKey: "tg:chat:user",
+		Platform:   "telegram",
+		UserID:     "user",
+		Content:    "hello",
+		ReplyCtx:   "ctx",
+	})
+
+	if len(p.sent) == 0 || !strings.Contains(p.sent[len(p.sent)-1], "upgrade is in progress") {
+		t.Fatalf("sent = %#v, want upgrade-in-progress reply", p.sent)
+	}
+	if got := e.sessions.BusySessionCount(); got != 0 {
+		t.Fatalf("busy sessions = %d, want 0", got)
 	}
 }
 

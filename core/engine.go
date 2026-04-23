@@ -471,6 +471,13 @@ func (e *Engine) ActiveInteractiveSessionCount() int {
 	return count
 }
 
+func (e *Engine) BusySessionCount() int {
+	if e.sessions == nil {
+		return 0
+	}
+	return e.sessions.BusySessionCount()
+}
+
 // AddCommand registers a custom slash command.
 func (e *Engine) AddCommand(name, description, prompt, exec, workDir, source string) {
 	e.commands.Add(name, description, prompt, exec, workDir, source)
@@ -913,9 +920,19 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 		msg.Files = append(append([]FileAttachment{}, pendingAttach.Files...), msg.Files...)
 	}
 
+	if e.agentUpgradeBlocksNewTurns() {
+		e.reply(p, msg.ReplyCtx, e.agentUpgradeBlockedMessage())
+		return
+	}
+
 	session := e.sessions.GetOrCreateActive(msg.SessionKey)
 	if !session.TryLock() {
 		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgPreviousProcessing))
+		return
+	}
+	if e.agentUpgradeBlocksNewTurns() {
+		session.Unlock()
+		e.reply(p, msg.ReplyCtx, e.agentUpgradeBlockedMessage())
 		return
 	}
 	if content != "" && pendingAttach != nil {
@@ -2037,6 +2054,21 @@ func (e *Engine) processInteractiveMessage(p Platform, msg *Message, session *Se
 	e.processInteractiveEvents(state, session, msg.SessionKey, msg.MessageID, turnStart)
 }
 
+func (e *Engine) agentUpgradeBlocksNewTurns() bool {
+	if e.agentUpgradeMgr == nil || e.agent == nil {
+		return false
+	}
+	return e.agentUpgradeMgr.IsTargetRunning(e.agent.Name())
+}
+
+func (e *Engine) agentUpgradeBlockedMessage() string {
+	agentName := "agent"
+	if e.agent != nil && strings.TrimSpace(e.agent.Name()) != "" {
+		agentName = e.agent.Name()
+	}
+	return fmt.Sprintf("⚠️ %s upgrade is in progress. Try again shortly.", agentName)
+}
+
 func (e *Engine) getOrCreateInteractiveState(sessionKey string, p Platform, replyCtx any, session *Session) *interactiveState {
 	e.interactiveMu.Lock()
 	defer e.interactiveMu.Unlock()
@@ -2055,6 +2087,12 @@ func (e *Engine) getOrCreateInteractiveState(sessionKey string, p Platform, repl
 	}
 
 	envVars := e.sessionEnv(sessionKey)
+
+	if e.agentUpgradeBlocksNewTurns() {
+		state = newInteractiveState(nil, p, replyCtx, quietMode)
+		e.interactiveStates[sessionKey] = state
+		return state
+	}
 
 	// Check if context is already canceled (e.g. during shutdown/restart)
 	if e.ctx.Err() != nil {
@@ -5718,6 +5756,10 @@ func (e *Engine) cmdAgentUpgrade(p Platform, msg *Message, args []string) {
 		}
 		e.reply(p, msg.ReplyCtx, strings.TrimRight(sb.String(), "\n"))
 	case "run":
+		if err := e.agentUpgradeMgr.AuthorizeRun(msg.UserID); err != nil {
+			e.reply(p, msg.ReplyCtx, fmt.Sprintf("❌ %v", err))
+			return
+		}
 		target := e.agent.Name()
 		if len(args) > 1 {
 			target = args[1]
@@ -5759,7 +5801,7 @@ func (e *Engine) cmdAgentUpgrade(p Platform, msg *Message, args []string) {
 		}
 		e.reply(p, msg.ReplyCtx, strings.TrimRight(sb.String(), "\n"))
 	default:
-		e.reply(p, msg.ReplyCtx, "Usage: `/agent-upgrade [status|check|run] [target|all]`")
+		e.reply(p, msg.ReplyCtx, "Usage: `/agent-upgrade [status|check(alias)|run] [target|all]`")
 	}
 }
 
