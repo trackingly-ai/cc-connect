@@ -26,6 +26,7 @@ type Config struct {
 	Language              string              `toml:"language"` // "en" or "zh", default is "en"
 	Speech                SpeechConfig        `toml:"speech"`
 	TTS                   TTSConfig           `toml:"tts"`
+	AgentUpdates          AgentUpdatesConfig  `toml:"agent_updates"`
 	Display               DisplayConfig       `toml:"display"`
 	StreamPreview         StreamPreviewConfig `toml:"stream_preview"`  // real-time streaming preview
 	RateLimit             RateLimitConfig     `toml:"rate_limit"`      // per-session rate limiting
@@ -52,6 +53,22 @@ type EchoConfig struct {
 	OrgID                string   `toml:"org_id"`
 	Tags                 []string `toml:"tags"`
 	HeartbeatIntervalSec int      `toml:"heartbeat_interval_sec"`
+}
+
+type AgentUpdatesConfig struct {
+	Enabled     *bool                   `toml:"enabled,omitempty"`
+	TimeoutSecs int                     `toml:"timeout_secs,omitempty"`
+	ClaudeCode  AgentUpdateTargetConfig `toml:"claudecode"`
+	Codex       AgentUpdateTargetConfig `toml:"codex"`
+	Gemini      AgentUpdateTargetConfig `toml:"gemini"`
+	Qoder       AgentUpdateTargetConfig `toml:"qoder"`
+}
+
+type AgentUpdateTargetConfig struct {
+	Enabled        *bool  `toml:"enabled,omitempty"`
+	Strategy       string `toml:"strategy,omitempty"`
+	VersionCommand string `toml:"version_command,omitempty"`
+	UpdateCommand  string `toml:"update_command,omitempty"`
 }
 
 // DisplayConfig controls how intermediate messages (thinking, tool output) are shown.
@@ -245,6 +262,24 @@ func (c *Config) validate() error {
 			if !filepath.IsAbs(dir) {
 				return fmt.Errorf("config: %s.skill_dirs[%d] must be an absolute path", prefix, j)
 			}
+		}
+	}
+	if c.AgentUpdates.TimeoutSecs < 0 {
+		return fmt.Errorf("config: agent_updates.timeout_secs must be >= 0")
+	}
+	for key, target := range map[string]AgentUpdateTargetConfig{
+		"claudecode": c.AgentUpdates.ClaudeCode,
+		"codex":      c.AgentUpdates.Codex,
+		"gemini":     c.AgentUpdates.Gemini,
+		"qoder":      c.AgentUpdates.Qoder,
+	} {
+		if target.Strategy == "" {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(target.Strategy)) {
+		case "builtin", "package_manager", "custom", "observe", "disabled":
+		default:
+			return fmt.Errorf("config: agent_updates.%s.strategy %q is invalid", key, target.Strategy)
 		}
 	}
 	return nil

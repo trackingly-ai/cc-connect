@@ -241,6 +241,57 @@ type = "telegram"
 	}
 }
 
+func TestLoadParsesAgentUpdatesConfig(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	content := minimalConfigTOML + `
+[agent_updates]
+enabled = true
+timeout_secs = 900
+
+[agent_updates.codex]
+strategy = "package_manager"
+update_command = "npm install -g @openai/codex@latest"
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.AgentUpdates.Enabled == nil || !*cfg.AgentUpdates.Enabled {
+		t.Fatalf("expected agent_updates.enabled=true, got %#v", cfg.AgentUpdates.Enabled)
+	}
+	if cfg.AgentUpdates.TimeoutSecs != 900 {
+		t.Fatalf("timeout_secs = %d, want 900", cfg.AgentUpdates.TimeoutSecs)
+	}
+	if cfg.AgentUpdates.Codex.Strategy != "package_manager" {
+		t.Fatalf("codex strategy = %q", cfg.AgentUpdates.Codex.Strategy)
+	}
+	if cfg.AgentUpdates.Codex.UpdateCommand != "npm install -g @openai/codex@latest" {
+		t.Fatalf("codex update command = %q", cfg.AgentUpdates.Codex.UpdateCommand)
+	}
+}
+
+func TestLoadRejectsInvalidAgentUpdateStrategy(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	content := minimalConfigTOML + `
+[agent_updates]
+enabled = true
+
+[agent_updates.gemini]
+strategy = "magic"
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if _, err := Load(configPath); err == nil {
+		t.Fatal("expected invalid agent update strategy to be rejected")
+	}
+}
+
 const minimalConfigTOML = `
 [[projects]]
 name = "demo"

@@ -139,6 +139,7 @@ func main() {
 	setupLogger(cfg.Log.Level, logWriter)
 
 	engines := make([]*core.Engine, 0, len(cfg.Projects))
+	var agentUpgradeMgr *core.AgentUpgradeManager
 
 	for _, proj := range cfg.Projects {
 		agent, err := core.CreateAgent(proj.Agent.Type, proj.Agent.Options)
@@ -472,10 +473,25 @@ func main() {
 		capturedEngine := engine
 		capturedProjName := projName
 		engine.SetConfigReloadFunc(func() (*core.ConfigReloadResult, error) {
-			return reloadConfig(configPath, capturedProjName, capturedEngine)
+			return reloadConfig(configPath, capturedProjName, capturedEngine, agentUpgradeMgr)
 		})
 
 		engines = append(engines, engine)
+	}
+
+	agentUpgradeMgr = core.NewAgentUpgradeManager(buildAgentUpgradeConfig(cfg.AgentUpdates))
+	agentUpgradeMgr.SetBusyCountFunc(func(agentName string) int {
+		count := 0
+		for _, e := range engines {
+			if e.GetAgent().Name() != agentName {
+				continue
+			}
+			count += e.ActiveInteractiveSessionCount()
+		}
+		return count
+	})
+	for _, e := range engines {
+		e.SetAgentUpgradeManager(agentUpgradeMgr)
 	}
 
 	// Start cron scheduler
@@ -827,10 +843,14 @@ func setupLogger(level string, w io.Writer) {
 
 // reloadConfig re-reads config.toml and applies hot-reloadable settings
 // (display, providers, commands) to the given engine.
-func reloadConfig(configPath, projName string, engine *core.Engine) (*core.ConfigReloadResult, error) {
+func reloadConfig(configPath, projName string, engine *core.Engine, agentUpgradeMgr *core.AgentUpgradeManager) (*core.ConfigReloadResult, error) {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("reload config: %w", err)
+	}
+
+	if agentUpgradeMgr != nil {
+		agentUpgradeMgr.ApplyConfig(buildAgentUpgradeConfig(cfg.AgentUpdates))
 	}
 
 	result := &core.ConfigReloadResult{}
@@ -925,6 +945,50 @@ func resolveProjectSkillDirs(proj config.ProjectConfig, ag core.Agent) []string 
 		}
 	}
 	return dedupeTrimmedStrings(dirs)
+}
+
+func buildAgentUpgradeConfig(cfg config.AgentUpdatesConfig) core.AgentUpgradeConfig {
+	result := core.DefaultAgentUpgradeConfig()
+	if cfg.Enabled != nil {
+		result.Enabled = *cfg.Enabled
+	}
+	if cfg.TimeoutSecs > 0 {
+		result.Timeout = time.Duration(cfg.TimeoutSecs) * time.Second
+	}
+	result.Targets = map[string]core.AgentUpgradeTargetConfig{
+		"claudecode": {
+			Enabled:        targetEnabledDefaultTrue(cfg.ClaudeCode.Enabled),
+			Strategy:       strings.TrimSpace(cfg.ClaudeCode.Strategy),
+			VersionCommand: strings.TrimSpace(cfg.ClaudeCode.VersionCommand),
+			UpdateCommand:  strings.TrimSpace(cfg.ClaudeCode.UpdateCommand),
+		},
+		"codex": {
+			Enabled:        targetEnabledDefaultTrue(cfg.Codex.Enabled),
+			Strategy:       strings.TrimSpace(cfg.Codex.Strategy),
+			VersionCommand: strings.TrimSpace(cfg.Codex.VersionCommand),
+			UpdateCommand:  strings.TrimSpace(cfg.Codex.UpdateCommand),
+		},
+		"gemini": {
+			Enabled:        targetEnabledDefaultTrue(cfg.Gemini.Enabled),
+			Strategy:       strings.TrimSpace(cfg.Gemini.Strategy),
+			VersionCommand: strings.TrimSpace(cfg.Gemini.VersionCommand),
+			UpdateCommand:  strings.TrimSpace(cfg.Gemini.UpdateCommand),
+		},
+		"qoder": {
+			Enabled:        targetEnabledDefaultTrue(cfg.Qoder.Enabled),
+			Strategy:       strings.TrimSpace(cfg.Qoder.Strategy),
+			VersionCommand: strings.TrimSpace(cfg.Qoder.VersionCommand),
+			UpdateCommand:  strings.TrimSpace(cfg.Qoder.UpdateCommand),
+		},
+	}
+	return result
+}
+
+func targetEnabledDefaultTrue(v *bool) bool {
+	if v == nil {
+		return true
+	}
+	return *v
 }
 
 func dedupeTrimmedStrings(values []string) []string {

@@ -720,6 +720,53 @@ func TestCmdEffort_InvalidValueShowsUsage(t *testing.T) {
 	}
 }
 
+func TestCmdAgentUpgradeStatus(t *testing.T) {
+	p := &stubPlatformEngine{n: "telegram"}
+	e := NewEngine("test", &namedStubAgent{name: "codex"}, []Platform{p}, "", LangEnglish)
+	mgr := NewAgentUpgradeManager(AgentUpgradeConfig{Enabled: true})
+	mgr.SetCommandRunner(func(_ context.Context, cmd string) (string, error) {
+		return "version for " + cmd, nil
+	})
+	e.SetAgentUpgradeManager(mgr)
+
+	e.cmdAgentUpgrade(p, &Message{SessionKey: "tg:chat:user", ReplyCtx: "ctx"}, []string{"status"})
+
+	if len(p.sent) == 0 {
+		t.Fatal("expected status reply")
+	}
+	sent := strings.Join(p.sent, "\n")
+	if !strings.Contains(sent, "Agent upgrades: enabled") || !strings.Contains(sent, "claudecode") {
+		t.Fatalf("sent = %q", sent)
+	}
+}
+
+func TestCmdAgentUpgradeRunDefaultsToCurrentAgent(t *testing.T) {
+	p := &stubPlatformEngine{n: "telegram"}
+	e := NewEngine("test", &namedStubAgent{name: "qoder"}, []Platform{p}, "", LangEnglish)
+	mgr := NewAgentUpgradeManager(AgentUpgradeConfig{Enabled: true})
+	mgr.SetCommandRunner(func(_ context.Context, cmd string) (string, error) {
+		switch cmd {
+		case "qodercli --version":
+			return "qoder 1.0.0", nil
+		case "qodercli update":
+			return "already up to date", nil
+		default:
+			return "", fmt.Errorf("unexpected command %q", cmd)
+		}
+	})
+	e.SetAgentUpgradeManager(mgr)
+
+	e.cmdAgentUpgrade(p, &Message{SessionKey: "tg:chat:user", ReplyCtx: "ctx"}, []string{"run"})
+
+	if len(p.sent) == 0 {
+		t.Fatal("expected run reply")
+	}
+	sent := strings.Join(p.sent, "\n")
+	if !strings.Contains(sent, "Agent upgrade run: qoder") || !strings.Contains(sent, "no version change detected") {
+		t.Fatalf("sent = %q", sent)
+	}
+}
+
 func TestHandleCardNav_SessionsActionPreservesPage(t *testing.T) {
 	sessions := make([]AgentSessionInfo, 25)
 	for i := range sessions {

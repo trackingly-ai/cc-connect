@@ -121,6 +121,64 @@ level = "info" # debug, info, warn, error
 #                            # 静默模式：不发送定时任务开始执行的通知消息（默认 false）
 
 # =============================================================================
+# Managed Agent CLI Upgrades / 托管 Agent CLI 升级
+# =============================================================================
+# Host-level upgrade orchestration for agent CLIs used by cc-connect.
+# This is global: one upgrade affects every project that uses the same agent type.
+# cc-connect only triggers the configured upgrade command; it does not guess your
+# installer beyond the built-in defaults.
+# 主机级 Agent CLI 升级编排。它是全局的：同一类 agent 升级一次，会影响所有使用该
+# agent 的 project。cc-connect 只会触发配置好的升级命令，不会额外猜测你的安装器。
+#
+# Phase 1 currently supports:
+# - `/agent-upgrade status`
+# - `/agent-upgrade check`
+# - `/agent-upgrade run <agent|all>`
+# 当前 Phase 1 支持：
+# - `/agent-upgrade status`
+# - `/agent-upgrade check`
+# - `/agent-upgrade run <agent|all>`
+#
+# Default strategies:
+# - claudecode: builtin (`claude update`)
+# - codex: package_manager (`npm install -g @openai/codex@latest`)
+# - gemini: observe-only by default (manual npm command shown but not auto-run)
+# - qoder: builtin (`qodercli update`)
+# 默认策略：
+# - claudecode: builtin（`claude update`）
+# - codex: package_manager（`npm install -g @openai/codex@latest`）
+# - gemini: 默认 observe-only（提供 npm 命令，但默认不执行）
+# - qoder: builtin（`qodercli update`）
+
+# [agent_updates]
+# enabled = true
+# timeout_secs = 1200
+#
+# [agent_updates.claudecode]
+# enabled = true
+# strategy = "builtin"          # builtin | package_manager | custom | observe | disabled
+# version_command = "claude --version"
+# update_command = "claude update"
+#
+# [agent_updates.codex]
+# enabled = true
+# strategy = "package_manager"
+# version_command = "codex --version"
+# update_command = "npm install -g @openai/codex@latest"
+#
+# [agent_updates.gemini]
+# enabled = true
+# strategy = "observe"
+# version_command = "gemini --version"
+# update_command = "npm install -g @google/gemini-cli@latest"
+#
+# [agent_updates.qoder]
+# enabled = true
+# strategy = "builtin"
+# version_command = "qodercli --version"
+# update_command = "qodercli update"
+
+# =============================================================================
 # Speech-to-Text (Voice Messages) / 语音转文字（语音消息）
 # =============================================================================
 # Enable to transcribe voice messages to text before sending to agents.

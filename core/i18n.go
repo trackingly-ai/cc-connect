@@ -367,38 +367,39 @@ const (
 	MsgSearchResult   MsgKey = "search_result"
 	MsgSearchHint     MsgKey = "search_hint"
 
-	MsgBuiltinCmdNew      MsgKey = "new"
-	MsgBuiltinCmdList     MsgKey = "list"
-	MsgBuiltinCmdSearch   MsgKey = "search"
-	MsgBuiltinCmdSwitch   MsgKey = "switch"
-	MsgBuiltinCmdDelete   MsgKey = "delete"
-	MsgBuiltinCmdName     MsgKey = "name"
-	MsgBuiltinCmdCurrent  MsgKey = "current"
-	MsgBuiltinCmdHistory  MsgKey = "history"
-	MsgBuiltinCmdProvider MsgKey = "provider"
-	MsgBuiltinCmdMemory   MsgKey = "memory"
-	MsgBuiltinCmdAllow    MsgKey = "allow"
-	MsgBuiltinCmdModel    MsgKey = "model"
-	MsgBuiltinCmdMode     MsgKey = "mode"
-	MsgBuiltinCmdEffort   MsgKey = "effort"
-	MsgBuiltinCmdLang     MsgKey = "lang"
-	MsgBuiltinCmdQuiet    MsgKey = "quiet"
-	MsgBuiltinCmdCompress MsgKey = "compress"
-	MsgBuiltinCmdStop     MsgKey = "stop"
-	MsgBuiltinCmdCron     MsgKey = "cron"
-	MsgBuiltinCmdCommands MsgKey = "commands"
-	MsgBuiltinCmdAlias    MsgKey = "alias"
-	MsgBuiltinCmdSkills   MsgKey = "skills"
-	MsgBuiltinCmdConfig   MsgKey = "config"
-	MsgBuiltinCmdDoctor   MsgKey = "doctor"
-	MsgBuiltinCmdUpgrade  MsgKey = "upgrade"
-	MsgBuiltinCmdRestart  MsgKey = "restart"
-	MsgBuiltinCmdStatus   MsgKey = "status"
-	MsgBuiltinCmdVersion  MsgKey = "version"
-	MsgBuiltinCmdHelp     MsgKey = "help"
-	MsgBuiltinCmdBind     MsgKey = "bind"
-	MsgBuiltinCmdShell    MsgKey = "shell"
-	MsgBuiltinCmdDir      MsgKey = "dir"
+	MsgBuiltinCmdNew          MsgKey = "new"
+	MsgBuiltinCmdList         MsgKey = "list"
+	MsgBuiltinCmdSearch       MsgKey = "search"
+	MsgBuiltinCmdSwitch       MsgKey = "switch"
+	MsgBuiltinCmdDelete       MsgKey = "delete"
+	MsgBuiltinCmdName         MsgKey = "name"
+	MsgBuiltinCmdCurrent      MsgKey = "current"
+	MsgBuiltinCmdHistory      MsgKey = "history"
+	MsgBuiltinCmdProvider     MsgKey = "provider"
+	MsgBuiltinCmdMemory       MsgKey = "memory"
+	MsgBuiltinCmdAllow        MsgKey = "allow"
+	MsgBuiltinCmdModel        MsgKey = "model"
+	MsgBuiltinCmdMode         MsgKey = "mode"
+	MsgBuiltinCmdEffort       MsgKey = "effort"
+	MsgBuiltinCmdLang         MsgKey = "lang"
+	MsgBuiltinCmdQuiet        MsgKey = "quiet"
+	MsgBuiltinCmdCompress     MsgKey = "compress"
+	MsgBuiltinCmdStop         MsgKey = "stop"
+	MsgBuiltinCmdCron         MsgKey = "cron"
+	MsgBuiltinCmdCommands     MsgKey = "commands"
+	MsgBuiltinCmdAlias        MsgKey = "alias"
+	MsgBuiltinCmdSkills       MsgKey = "skills"
+	MsgBuiltinCmdConfig       MsgKey = "config"
+	MsgBuiltinCmdDoctor       MsgKey = "doctor"
+	MsgBuiltinCmdUpgrade      MsgKey = "upgrade"
+	MsgBuiltinCmdAgentUpgrade MsgKey = "agent_upgrade"
+	MsgBuiltinCmdRestart      MsgKey = "restart"
+	MsgBuiltinCmdStatus       MsgKey = "status"
+	MsgBuiltinCmdVersion      MsgKey = "version"
+	MsgBuiltinCmdHelp         MsgKey = "help"
+	MsgBuiltinCmdBind         MsgKey = "bind"
+	MsgBuiltinCmdShell        MsgKey = "shell"
+	MsgBuiltinCmdDir          MsgKey = "dir"
 
 	MsgDirChanged      MsgKey = "dir_changed"
 	MsgDirCurrent      MsgKey = "dir_current"
@@ -672,6 +673,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/config [get|set|reload] [key] [value]\n  View/update runtime configuration\n\n" +
 			"/doctor\n  Run system diagnostics\n\n" +
 			"/upgrade\n  Check for updates and self-update\n\n" +
+			"/agent-upgrade [status|check|run] [target|all]\n  Check or run managed agent CLI upgrades\n\n" +
 			"/restart\n  Restart cc-connect service\n\n" +
 			"/status\n  Show system status\n\n" +
 			"/version\n  Show cc-connect version\n\n" +
@@ -709,6 +711,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/config [get|set|reload] [key] [value]\n  查看/修改运行时配置\n\n" +
 			"/doctor\n  运行系统诊断\n\n" +
 			"/upgrade\n  检查更新并自动升级\n\n" +
+			"/agent-upgrade [status|check|run] [目标|all]\n  查看或执行托管 Agent CLI 升级\n\n" +
 			"/restart\n  重启 cc-connect 服务\n\n" +
 			"/status\n  查看系统状态\n\n" +
 			"/version\n  查看 cc-connect 版本\n\n" +
@@ -746,6 +749,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/config [get|set|reload] [key] [value]\n  查看/修改執行階段配置\n\n" +
 			"/doctor\n  執行系統診斷\n\n" +
 			"/upgrade\n  檢查更新並自動升級\n\n" +
+			"/agent-upgrade [status|check|run] [目標|all]\n  查看或執行受管 Agent CLI 升級\n\n" +
 			"/restart\n  重啟 cc-connect 服務\n\n" +
 			"/status\n  查看系統狀態\n\n" +
 			"/version\n  查看 cc-connect 版本\n\n" +
@@ -782,6 +786,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/config [get|set|reload] [key] [value]\n  ランタイム設定の表示/変更\n\n" +
 			"/doctor\n  システム診断を実行\n\n" +
 			"/upgrade\n  アップデートを確認して自動更新\n\n" +
+			"/agent-upgrade [status|check|run] [target|all]\n  管理対象エージェント CLI の更新確認/実行\n\n" +
 			"/restart\n  cc-connect サービスを再起動\n\n" +
 			"/status\n  システム状態を表示\n\n" +
 			"/version\n  cc-connect のバージョンを表示\n\n" +
@@ -818,6 +823,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/config [get|set|reload] [key] [value]\n  Ver/actualizar configuración en tiempo de ejecución\n\n" +
 			"/doctor\n  Ejecutar diagnósticos del sistema\n\n" +
 			"/upgrade\n  Buscar actualizaciones y auto-actualizar\n\n" +
+			"/agent-upgrade [status|check|run] [objetivo|all]\n  Ver o ejecutar actualizaciones de los CLI de agentes gestionados\n\n" +
 			"/restart\n  Reiniciar el servicio cc-connect\n\n" +
 			"/status\n  Mostrar estado del sistema\n\n" +
 			"/version\n  Mostrar versión de cc-connect\n\n" +
@@ -2375,6 +2381,13 @@ var messages = map[MsgKey]map[Language]string{
 		LangTraditionalChinese: "檢查更新並自動升級",
 		LangJapanese:           "アップデートを確認して自動更新",
 		LangSpanish:            "Buscar actualizaciones y auto-actualizar",
+	},
+	MsgBuiltinCmdAgentUpgrade: {
+		LangEnglish:            "Check or run managed agent CLI upgrades",
+		LangChinese:            "查看或执行托管 Agent CLI 升级",
+		LangTraditionalChinese: "查看或執行受管 Agent CLI 升級",
+		LangJapanese:           "管理対象エージェント CLI の更新確認/実行",
+		LangSpanish:            "Ver o ejecutar actualizaciones de los CLI de agentes gestionados",
 	},
 	MsgBuiltinCmdRestart: {
 		LangEnglish:            "Restart cc-connect service",

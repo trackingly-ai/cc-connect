@@ -145,6 +145,7 @@ type Engine struct {
 
 	displaySaveFunc  func(thinkingMaxLen, toolMaxLen *int) error
 	configReloadFunc func() (*ConfigReloadResult, error)
+	agentUpgradeMgr  *AgentUpgradeManager
 
 	cronScheduler *CronScheduler
 
@@ -446,9 +447,28 @@ func (e *Engine) SetConfigReloadFunc(fn func() (*ConfigReloadResult, error)) {
 	e.configReloadFunc = fn
 }
 
+func (e *Engine) SetAgentUpgradeManager(mgr *AgentUpgradeManager) {
+	e.agentUpgradeMgr = mgr
+}
+
 // GetAgent returns the engine's agent (for type assertions like ProviderSwitcher).
 func (e *Engine) GetAgent() Agent {
 	return e.agent
+}
+
+func (e *Engine) ActiveInteractiveSessionCount() int {
+	e.interactiveMu.Lock()
+	defer e.interactiveMu.Unlock()
+	count := 0
+	for _, state := range e.interactiveStates {
+		if state == nil || state.agentSession == nil {
+			continue
+		}
+		if state.agentSession.Alive() {
+			count++
+		}
+	}
+	return count
 }
 
 // AddCommand registers a custom slash command.
@@ -2562,6 +2582,7 @@ var builtinCommands = []struct {
 	{[]string{"config"}, "config"},
 	{[]string{"doctor"}, "doctor"},
 	{[]string{"upgrade", "update"}, "upgrade"},
+	{[]string{"agent-upgrade", "agentupgrade", "agent-updates"}, "agent-upgrade"},
 	{[]string{"restart"}, "restart"},
 	{[]string{"alias"}, "alias"},
 	{[]string{"delete", "del", "rm"}, "delete"},
@@ -2687,6 +2708,8 @@ func (e *Engine) handleCommand(p Platform, msg *Message, raw string) bool {
 		e.cmdDoctor(p, msg)
 	case "upgrade":
 		e.cmdUpgrade(p, msg, args)
+	case "agent-upgrade":
+		e.cmdAgentUpgrade(p, msg, args)
 	case "restart":
 		e.cmdRestart(p, msg)
 	case "alias":
@@ -5649,6 +5672,95 @@ func (e *Engine) cmdDoctor(p Platform, msg *Message) {
 	results := RunDoctorChecks(e.ctx, e.agent, e.platforms)
 	report := FormatDoctorResults(results, e.i18n)
 	e.reply(p, msg.ReplyCtx, report)
+}
+
+func (e *Engine) cmdAgentUpgrade(p Platform, msg *Message, args []string) {
+	if e.agentUpgradeMgr == nil {
+		e.reply(p, msg.ReplyCtx, "❌ Agent upgrade manager is not configured")
+		return
+	}
+
+	sub := "status"
+	if len(args) > 0 {
+		sub = matchSubCommand(strings.ToLower(args[0]), []string{"status", "check", "run"})
+	}
+
+	switch sub {
+	case "status", "check":
+		statuses := e.agentUpgradeMgr.Statuses(e.ctx)
+		cfg := e.agentUpgradeMgr.Snapshot()
+		var sb strings.Builder
+		state := "disabled"
+		if cfg.Enabled {
+			state = "enabled"
+		}
+		timeout := cfg.Timeout
+		if timeout <= 0 {
+			timeout = defaultAgentUpgradeTimeout
+		}
+		fmt.Fprintf(&sb, "Agent upgrades: %s (timeout=%s)\n", state, timeout)
+		for _, st := range statuses {
+			fmt.Fprintf(&sb, "\n- %s\n", st.Name)
+			fmt.Fprintf(&sb, "  strategy: %s\n", st.Strategy)
+			fmt.Fprintf(&sb, "  enabled: %v\n", st.Enabled)
+			fmt.Fprintf(&sb, "  busy sessions: %d\n", st.BusySessions)
+			if st.VersionErr != "" {
+				fmt.Fprintf(&sb, "  version: error: %s\n", st.VersionErr)
+			} else if st.Version != "" {
+				fmt.Fprintf(&sb, "  version: %s\n", st.Version)
+			}
+			if st.UpdateCommand != "" {
+				fmt.Fprintf(&sb, "  update: %s\n", st.UpdateCommand)
+			}
+			if !st.Actionable {
+				sb.WriteString("  manual run: not actionable\n")
+			}
+		}
+		e.reply(p, msg.ReplyCtx, strings.TrimRight(sb.String(), "\n"))
+	case "run":
+		target := e.agent.Name()
+		if len(args) > 1 {
+			target = args[1]
+		}
+		results, err := e.agentUpgradeMgr.Run(e.ctx, target)
+		if err != nil {
+			e.reply(p, msg.ReplyCtx, fmt.Sprintf("❌ %v", err))
+			return
+		}
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "Agent upgrade run: %s\n", target)
+		for _, res := range results {
+			fmt.Fprintf(&sb, "\n- %s\n", res.Name)
+			fmt.Fprintf(&sb, "  strategy: %s\n", res.Strategy)
+			if res.BusySessions > 0 {
+				fmt.Fprintf(&sb, "  busy sessions: %d\n", res.BusySessions)
+			}
+			if res.Skipped {
+				fmt.Fprintf(&sb, "  skipped: %s\n", res.Reason)
+				continue
+			}
+			if res.BeforeVersion != "" {
+				fmt.Fprintf(&sb, "  before: %s\n", res.BeforeVersion)
+			}
+			if res.AfterVersion != "" {
+				fmt.Fprintf(&sb, "  after: %s\n", res.AfterVersion)
+			}
+			if res.Changed {
+				sb.WriteString("  result: updated\n")
+			} else {
+				sb.WriteString("  result: no version change detected\n")
+			}
+			if res.Output != "" {
+				fmt.Fprintf(&sb, "  output: %s\n", res.Output)
+			}
+			if res.Err != nil {
+				fmt.Fprintf(&sb, "  error: %v\n", res.Err)
+			}
+		}
+		e.reply(p, msg.ReplyCtx, strings.TrimRight(sb.String(), "\n"))
+	default:
+		e.reply(p, msg.ReplyCtx, "Usage: `/agent-upgrade [status|check|run] [target|all]`")
+	}
 }
 
 func (e *Engine) cmdUpgrade(p Platform, msg *Message, args []string) {
