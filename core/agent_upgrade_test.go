@@ -77,6 +77,46 @@ func TestAgentUpgradeManagerStatuses(t *testing.T) {
 	}
 }
 
+func TestAgentUpgradeManagerStatusesIncludeBackoffState(t *testing.T) {
+	cfg := singleTargetUpgradeConfig("codex", "custom", "codex --version", "custom-codex-upgrade")
+	cfg.Targets["codex"] = AgentUpgradeTargetConfig{
+		Enabled:        true,
+		Strategy:       "custom",
+		VersionCommand: "codex --version",
+		UpdateCommand:  "custom-codex-upgrade",
+		MaxFailures:    2,
+		FailureBackoff: time.Hour,
+	}
+	mgr := NewAgentUpgradeManager(cfg)
+	mgr.SetCommandRunner(func(_ context.Context, cmd string) (string, error) {
+		if cmd == "codex --version" {
+			return "codex 0.124.0", nil
+		}
+		return "", fmt.Errorf("boom")
+	})
+
+	_, _ = mgr.runWithOptions(context.Background(), "codex", true)
+	_, _ = mgr.runWithOptions(context.Background(), "codex", true)
+
+	statuses := mgr.Statuses(context.Background())
+	for _, st := range statuses {
+		if st.Name != "codex" {
+			continue
+		}
+		if st.ConsecutiveFailures != 2 {
+			t.Fatalf("codex failures = %d, want 2", st.ConsecutiveFailures)
+		}
+		if st.BackoffUntil.IsZero() {
+			t.Fatal("expected codex backoff_until to be populated")
+		}
+		if !strings.Contains(st.BlockedReason, "backing off until") {
+			t.Fatalf("blocked_reason = %q, want backoff message", st.BlockedReason)
+		}
+		return
+	}
+	t.Fatal("codex status not found")
+}
+
 func TestAgentUpgradeManagerRunAll(t *testing.T) {
 	mgr := NewAgentUpgradeManager(AgentUpgradeConfig{Enabled: true, Timeout: time.Minute})
 	mgr.SetBusyCountFunc(func(name string) int {
@@ -208,6 +248,68 @@ func TestAgentUpgradeManagerRunCustomStrategy(t *testing.T) {
 	}
 }
 
+func TestAgentUpgradeManagerRunPackageManagerPinVersion(t *testing.T) {
+	cfg := DefaultAgentUpgradeConfig()
+	cfg.Enabled = true
+	cfg.Targets["codex"] = AgentUpgradeTargetConfig{
+		Enabled:        true,
+		Strategy:       "package_manager",
+		VersionCommand: "codex --version",
+		UpdateCommand:  "npm install -g @openai/codex@latest",
+		PinVersion:     "0.124.0",
+	}
+	mgr := NewAgentUpgradeManager(cfg)
+
+	var ranUpdate string
+	mgr.SetCommandRunner(func(_ context.Context, cmd string) (string, error) {
+		switch cmd {
+		case "codex --version":
+			return "codex-cli 0.123.0", nil
+		default:
+			ranUpdate = cmd
+			return "updated", nil
+		}
+	})
+
+	results, err := mgr.Run(context.Background(), "codex")
+	if err != nil {
+		t.Fatalf("Run(codex): %v", err)
+	}
+	if len(results) != 1 || results[0].Skipped {
+		t.Fatalf("results = %#v, want one executed result", results)
+	}
+	if ranUpdate != "npm install -g @openai/codex@0.124.0" {
+		t.Fatalf("update command = %q, want pinned npm install", ranUpdate)
+	}
+}
+
+func TestAgentUpgradeManagerRunSkipsWhenMinimumVersionAlreadyMet(t *testing.T) {
+	cfg := DefaultAgentUpgradeConfig()
+	cfg.Enabled = true
+	cfg.Targets["codex"] = AgentUpgradeTargetConfig{
+		Enabled:        true,
+		Strategy:       "package_manager",
+		VersionCommand: "codex --version",
+		UpdateCommand:  "npm install -g @openai/codex@latest",
+		MinimumVersion: "0.124.0",
+	}
+	mgr := NewAgentUpgradeManager(cfg)
+	mgr.SetCommandRunner(func(_ context.Context, cmd string) (string, error) {
+		if cmd == "codex --version" {
+			return "codex-cli 0.124.1", nil
+		}
+		return "", fmt.Errorf("unexpected update command %q", cmd)
+	})
+
+	results, err := mgr.Run(context.Background(), "codex")
+	if err != nil {
+		t.Fatalf("Run(codex): %v", err)
+	}
+	if len(results) != 1 || !results[0].Skipped || !strings.Contains(results[0].Reason, "already meets minimum_version 0.124.0") {
+		t.Fatalf("results = %#v, want minimum_version skip", results)
+	}
+}
+
 func TestAgentUpgradeManagerApplyConfigUnknownStrategyDisablesTarget(t *testing.T) {
 	mgr := NewAgentUpgradeManager(AgentUpgradeConfig{Enabled: true})
 	mgr.ApplyConfig(AgentUpgradeConfig{
@@ -270,6 +372,43 @@ func TestAgentUpgradeManagerAutoCheckOffReturnsNil(t *testing.T) {
 	}
 	if results != nil {
 		t.Fatalf("results = %#v, want nil", results)
+	}
+}
+
+func TestAgentUpgradeManagerAutoCheckIdleOnlyBacksOffAfterFailures(t *testing.T) {
+	cfg := singleTargetUpgradeConfig("codex", "custom", "codex --version", "custom-codex-upgrade")
+	cfg.Targets["codex"] = AgentUpgradeTargetConfig{
+		Enabled:        true,
+		Strategy:       "custom",
+		VersionCommand: "codex --version",
+		UpdateCommand:  "custom-codex-upgrade",
+		MaxFailures:    2,
+		FailureBackoff: time.Hour,
+	}
+	mgr := NewAgentUpgradeManager(cfg)
+	mgr.SetCommandRunner(func(_ context.Context, cmd string) (string, error) {
+		switch cmd {
+		case "codex --version":
+			return "codex-cli 0.123.0", nil
+		case "custom-codex-upgrade":
+			return "", fmt.Errorf("network error")
+		default:
+			return "", fmt.Errorf("unexpected command %q", cmd)
+		}
+	})
+
+	if results, err := mgr.AutoCheck(context.Background()); err != nil || len(results) != 4 || results[1].Err == nil {
+		t.Fatalf("first AutoCheck = (%#v, %v), want failing codex run", results, err)
+	}
+	if results, err := mgr.AutoCheck(context.Background()); err != nil || len(results) != 4 || results[1].Err == nil {
+		t.Fatalf("second AutoCheck = (%#v, %v), want second failing codex run", results, err)
+	}
+	results, err := mgr.AutoCheck(context.Background())
+	if err != nil {
+		t.Fatalf("third AutoCheck: %v", err)
+	}
+	if len(results) != 4 || !results[1].Skipped || !strings.Contains(results[1].Reason, "backing off until") {
+		t.Fatalf("third AutoCheck results = %#v, want codex backoff skip", results)
 	}
 }
 
@@ -390,7 +529,7 @@ func TestDetectClaudeCodeUpgradeRoutePrefersNativeInstall(t *testing.T) {
 		}
 	}
 
-	source, updateCmd, blockedReason := detectClaudeCodeUpgradeRoute(context.Background(), runner)
+	source, updateCmd, blockedReason := detectClaudeCodeUpgradeRoute(context.Background(), runner, "")
 	if source != "native" || updateCmd != "claude update" || blockedReason != "" {
 		t.Fatalf("route = (%q, %q, %q), want native/claude update/no block", source, updateCmd, blockedReason)
 	}
@@ -410,9 +549,43 @@ func TestDetectClaudeCodeUpgradeRouteFallsBackToHomebrew(t *testing.T) {
 		}
 	}
 
-	source, updateCmd, blockedReason := detectClaudeCodeUpgradeRoute(context.Background(), runner)
+	source, updateCmd, blockedReason := detectClaudeCodeUpgradeRoute(context.Background(), runner, "")
 	if source != "brew" || updateCmd != "brew upgrade claude-code@latest" || blockedReason != "" {
 		t.Fatalf("route = (%q, %q, %q), want brew/claude-code@latest/no block", source, updateCmd, blockedReason)
+	}
+}
+
+func TestDetectClaudeCodeUpgradeRouteHonorsStableChannel(t *testing.T) {
+	runner := func(_ context.Context, cmd string) (string, error) {
+		switch cmd {
+		case "command -v claude":
+			return "/opt/homebrew/bin/claude\n", nil
+		case "brew list --cask claude-code >/dev/null && printf ok":
+			return "ok", nil
+		default:
+			return "", fmt.Errorf("unexpected command %q", cmd)
+		}
+	}
+
+	source, updateCmd, blockedReason := detectClaudeCodeUpgradeRoute(context.Background(), runner, "stable")
+	if source != "brew" || updateCmd != "brew upgrade claude-code" || blockedReason != "" {
+		t.Fatalf("route = (%q, %q, %q), want brew stable route", source, updateCmd, blockedReason)
+	}
+}
+
+func TestDetectClaudeCodeUpgradeRouteRejectsLatestChannelForNativeInstall(t *testing.T) {
+	runner := func(_ context.Context, cmd string) (string, error) {
+		switch cmd {
+		case "command -v claude":
+			return "/Users/edward/.local/bin/claude\n", nil
+		default:
+			return "", fmt.Errorf("unexpected command %q", cmd)
+		}
+	}
+
+	source, updateCmd, blockedReason := detectClaudeCodeUpgradeRoute(context.Background(), runner, "latest")
+	if source != "native" || updateCmd != "claude update" || !strings.Contains(blockedReason, "channel \"latest\"") {
+		t.Fatalf("route = (%q, %q, %q), want native route with latest-channel block", source, updateCmd, blockedReason)
 	}
 }
 
@@ -432,7 +605,7 @@ func TestDetectClaudeCodeUpgradeRouteMarksLinuxPackageManagersManualOnly(t *test
 		}
 	}
 
-	source, updateCmd, blockedReason := detectClaudeCodeUpgradeRoute(context.Background(), runner)
+	source, updateCmd, blockedReason := detectClaudeCodeUpgradeRoute(context.Background(), runner, "")
 	if source != "apt" || updateCmd == "" || blockedReason == "" {
 		t.Fatalf("route = (%q, %q, %q), want manual apt fallback", source, updateCmd, blockedReason)
 	}

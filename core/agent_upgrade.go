@@ -18,8 +18,13 @@ const defaultAgentUpgradeInterval = 24 * time.Hour
 type AgentUpgradeTargetConfig struct {
 	Enabled        bool
 	Strategy       string
+	Channel        string
 	VersionCommand string
 	UpdateCommand  string
+	MinimumVersion string
+	PinVersion     string
+	FailureBackoff time.Duration
+	MaxFailures    int
 }
 
 type AgentUpgradeConfig struct {
@@ -33,15 +38,21 @@ type AgentUpgradeConfig struct {
 }
 
 type AgentUpgradeStatus struct {
-	Name          string
-	Enabled       bool
-	Strategy      string
-	Actionable    bool
-	BlockedReason string
-	BusySessions  int
-	Version       string
-	VersionErr    string
-	UpdateCommand string
+	Name                string
+	Enabled             bool
+	Strategy            string
+	Channel             string
+	MinimumVersion      string
+	PinVersion          string
+	Actionable          bool
+	BlockedReason       string
+	BusySessions        int
+	Version             string
+	VersionErr          string
+	UpdateCommand       string
+	ConsecutiveFailures int
+	LastFailureReason   string
+	BackoffUntil        time.Time
 }
 
 type AgentUpgradeRunResult struct {
@@ -62,6 +73,13 @@ type resolvedAgentUpgradeTarget struct {
 	blockedReason string
 }
 
+type agentUpgradeFailureState struct {
+	ConsecutiveFailures int
+	LastFailureReason   string
+	LastFailureAt       time.Time
+	BackoffUntil        time.Time
+}
+
 type AgentUpgradeCommandRunner func(ctx context.Context, cmd string) (string, error)
 
 type AgentUpgradeManager struct {
@@ -70,6 +88,7 @@ type AgentUpgradeManager struct {
 	runCommand  AgentUpgradeCommandRunner
 	busyCountFn func(string) int
 	running     map[string]bool
+	failures    map[string]agentUpgradeFailureState
 	lastAutoRun time.Time
 	nextAutoRun time.Time
 	startOnce   sync.Once
@@ -81,6 +100,7 @@ func NewAgentUpgradeManager(cfg AgentUpgradeConfig) *AgentUpgradeManager {
 	m := &AgentUpgradeManager{
 		runCommand: defaultAgentUpgradeCommandRunner,
 		running:    make(map[string]bool),
+		failures:   make(map[string]agentUpgradeFailureState),
 		wakeCh:     make(chan struct{}, 1),
 		loopDone:   make(chan struct{}),
 	}
@@ -99,6 +119,7 @@ func DefaultAgentUpgradeConfig() AgentUpgradeConfig {
 			"claudecode": {
 				Enabled:        true,
 				Strategy:       "builtin",
+				Channel:        "stable",
 				VersionCommand: "claude --version",
 				UpdateCommand:  "claude update",
 			},
@@ -168,11 +189,26 @@ func (m *AgentUpgradeManager) ApplyConfig(cfg AgentUpgradeConfig) {
 			if override.Strategy != "" {
 				target.Strategy = normalizeAgentUpgradeStrategy(override.Strategy)
 			}
+			if override.Channel != "" {
+				target.Channel = normalizeAgentUpgradeChannel(override.Channel)
+			}
 			if strings.TrimSpace(override.VersionCommand) != "" {
 				target.VersionCommand = strings.TrimSpace(override.VersionCommand)
 			}
 			if strings.TrimSpace(override.UpdateCommand) != "" {
 				target.UpdateCommand = strings.TrimSpace(override.UpdateCommand)
+			}
+			if minVersion := strings.TrimSpace(override.MinimumVersion); minVersion != "" {
+				target.MinimumVersion = minVersion
+			}
+			if pinVersion := strings.TrimSpace(override.PinVersion); pinVersion != "" {
+				target.PinVersion = pinVersion
+			}
+			if override.FailureBackoff > 0 {
+				target.FailureBackoff = override.FailureBackoff
+			}
+			if override.MaxFailures > 0 {
+				target.MaxFailures = override.MaxFailures
 			}
 			base.Targets[name] = target
 		}
@@ -257,7 +293,7 @@ func (m *AgentUpgradeManager) AutoCheck(ctx context.Context) ([]AgentUpgradeRunR
 		}
 		return nil, nil
 	case "idle_only":
-		return m.Run(ctx, "all")
+		return m.runWithOptions(ctx, "all", true)
 	default:
 		return nil, nil
 	}
@@ -345,13 +381,24 @@ func (m *AgentUpgradeManager) Statuses(ctx context.Context) []AgentUpgradeStatus
 	for _, name := range names {
 		resolved := m.resolveTarget(ctx, name, cfg.Targets[name], runner)
 		target := resolved.cfg
+		failureState := m.failureState(name)
+		blockedReason := resolved.blockedReason
+		if backoffReason := targetBackoffReason(failureState); backoffReason != "" {
+			blockedReason = joinBlockedReasons(blockedReason, backoffReason)
+		}
 		st := AgentUpgradeStatus{
-			Name:          name,
-			Enabled:       cfg.Enabled && target.Enabled,
-			Strategy:      target.Strategy,
-			Actionable:    cfg.Enabled && target.Enabled && resolved.blockedReason == "" && target.Strategy != "observe" && target.Strategy != "disabled" && strings.TrimSpace(target.UpdateCommand) != "",
-			BlockedReason: resolved.blockedReason,
-			UpdateCommand: target.UpdateCommand,
+			Name:                name,
+			Enabled:             cfg.Enabled && target.Enabled,
+			Strategy:            target.Strategy,
+			Channel:             target.Channel,
+			MinimumVersion:      target.MinimumVersion,
+			PinVersion:          target.PinVersion,
+			Actionable:          cfg.Enabled && target.Enabled && blockedReason == "" && target.Strategy != "observe" && target.Strategy != "disabled" && strings.TrimSpace(target.UpdateCommand) != "",
+			BlockedReason:       blockedReason,
+			UpdateCommand:       target.UpdateCommand,
+			ConsecutiveFailures: failureState.ConsecutiveFailures,
+			LastFailureReason:   failureState.LastFailureReason,
+			BackoffUntil:        failureState.BackoffUntil,
 		}
 		if busyFn != nil {
 			st.BusySessions = busyFn(name)
@@ -365,14 +412,22 @@ func (m *AgentUpgradeManager) Statuses(ctx context.Context) []AgentUpgradeStatus
 				st.VersionErr = err.Error()
 			} else {
 				st.Version = normalizeAgentUpgradeOutput(out)
+				if policyReason := evaluateTargetVersionPolicy(target, st.Version); policyReason != "" {
+					st.BlockedReason = joinBlockedReasons(st.BlockedReason, policyReason)
+				}
 			}
 		}
+		st.Actionable = cfg.Enabled && target.Enabled && st.BlockedReason == "" && target.Strategy != "observe" && target.Strategy != "disabled" && strings.TrimSpace(target.UpdateCommand) != ""
 		statuses = append(statuses, st)
 	}
 	return statuses
 }
 
 func (m *AgentUpgradeManager) Run(ctx context.Context, target string) ([]AgentUpgradeRunResult, error) {
+	return m.runWithOptions(ctx, target, false)
+}
+
+func (m *AgentUpgradeManager) runWithOptions(ctx context.Context, target string, automatic bool) ([]AgentUpgradeRunResult, error) {
 	cfg, runner, busyFn := m.snapshotDeps()
 	if !cfg.Enabled {
 		return nil, fmt.Errorf("agent upgrades are disabled in config")
@@ -387,6 +442,14 @@ func (m *AgentUpgradeManager) Run(ctx context.Context, target string) ([]AgentUp
 		resolved := m.resolveTarget(ctx, name, cfg.Targets[name], runner)
 		cfgTarget := resolved.cfg
 		res := AgentUpgradeRunResult{Name: name, Strategy: cfgTarget.Strategy}
+		if automatic {
+			if backoffReason := targetBackoffReason(m.failureState(name)); backoffReason != "" {
+				res.Skipped = true
+				res.Reason = backoffReason
+				results = append(results, res)
+				continue
+			}
+		}
 		if !cfgTarget.Enabled || cfgTarget.Strategy == "disabled" {
 			res.Skipped = true
 			res.Reason = "disabled"
@@ -442,6 +505,13 @@ func (m *AgentUpgradeManager) Run(ctx context.Context, target string) ([]AgentUp
 					res.BeforeVersion = normalizeAgentUpgradeOutput(out)
 				}
 			}
+			if policyReason := evaluateTargetVersionPolicy(cfgTarget, res.BeforeVersion); policyReason != "" {
+				res.Skipped = true
+				res.Reason = policyReason
+				m.clearFailureState(name)
+				results = append(results, res)
+				return
+			}
 
 			runCtx, cancel := context.WithTimeout(ctx, timeout)
 			out, err := runner(runCtx, cfgTarget.UpdateCommand)
@@ -449,6 +519,7 @@ func (m *AgentUpgradeManager) Run(ctx context.Context, target string) ([]AgentUp
 			res.Output = normalizeAgentUpgradeOutput(out)
 			if err != nil {
 				res.Err = err
+				m.recordFailure(name, cfgTarget, err.Error())
 				results = append(results, res)
 				return
 			}
@@ -462,6 +533,7 @@ func (m *AgentUpgradeManager) Run(ctx context.Context, target string) ([]AgentUp
 				}
 			}
 			res.Changed = res.BeforeVersion != "" && res.AfterVersion != "" && res.BeforeVersion != res.AfterVersion
+			m.clearFailureState(name)
 			results = append(results, res)
 		}()
 	}
@@ -470,20 +542,34 @@ func (m *AgentUpgradeManager) Run(ctx context.Context, target string) ([]AgentUp
 
 func (m *AgentUpgradeManager) resolveTarget(ctx context.Context, name string, target AgentUpgradeTargetConfig, runner AgentUpgradeCommandRunner) resolvedAgentUpgradeTarget {
 	resolved := resolvedAgentUpgradeTarget{cfg: target}
-	if name != "claudecode" || target.Strategy != "builtin" {
-		return resolved
-	}
-
-	switch source, updateCmd, blockedReason := detectClaudeCodeUpgradeRoute(ctx, runner); source {
-	case "native", "brew", "npm":
-		resolved.cfg.UpdateCommand = updateCmd
-		if source != "native" {
-			resolved.cfg.Strategy = "package_manager"
+	switch name {
+	case "claudecode":
+		return resolveClaudeCodeUpgradeTarget(ctx, runner, target)
+	case "codex":
+		if target.Channel != "" {
+			resolved.blockedReason = fmt.Sprintf("channel %q is not supported for codex", target.Channel)
+			return resolved
+		}
+		if target.PinVersion != "" && target.Strategy == "package_manager" {
+			resolved.cfg.UpdateCommand = fmt.Sprintf("npm install -g @openai/codex@%s", shellEscapeSingleQuotes(target.PinVersion))
 		}
 		return resolved
-	case "apt", "dnf", "apk":
-		resolved.cfg.UpdateCommand = updateCmd
-		resolved.blockedReason = blockedReason
+	case "gemini":
+		if target.Channel != "" {
+			resolved.blockedReason = fmt.Sprintf("channel %q is not supported for gemini", target.Channel)
+			return resolved
+		}
+		if target.PinVersion != "" && target.Strategy == "package_manager" {
+			resolved.cfg.UpdateCommand = fmt.Sprintf("npm install -g @google/gemini-cli@%s", shellEscapeSingleQuotes(target.PinVersion))
+		}
+		return resolved
+	case "qoder":
+		if target.Channel != "" {
+			resolved.blockedReason = fmt.Sprintf("channel %q is not supported for qoder", target.Channel)
+		}
+		if target.PinVersion != "" {
+			resolved.blockedReason = joinBlockedReasons(resolved.blockedReason, "pin_version is not supported for qoder")
+		}
 		return resolved
 	default:
 		return resolved
@@ -534,10 +620,35 @@ func cloneAgentUpgradeTargets(in map[string]AgentUpgradeTargetConfig) map[string
 	return out
 }
 
-func detectClaudeCodeUpgradeRoute(ctx context.Context, runner AgentUpgradeCommandRunner) (source string, updateCommand string, blockedReason string) {
+func resolveClaudeCodeUpgradeTarget(ctx context.Context, runner AgentUpgradeCommandRunner, target AgentUpgradeTargetConfig) resolvedAgentUpgradeTarget {
+	resolved := resolvedAgentUpgradeTarget{cfg: target}
+	source, updateCommand, blockedReason := detectClaudeCodeUpgradeRoute(ctx, runner, target.Channel)
+	switch source {
+	case "native", "brew", "npm":
+		resolved.cfg.UpdateCommand = updateCommand
+		if source != "native" {
+			resolved.cfg.Strategy = "package_manager"
+		}
+	case "apt", "dnf", "apk":
+		resolved.cfg.UpdateCommand = updateCommand
+	}
+	resolved.blockedReason = blockedReason
+	if target.PinVersion != "" {
+		switch source {
+		case "npm":
+			resolved.cfg.UpdateCommand = fmt.Sprintf("npm install -g @anthropic-ai/claude-code@%s", shellEscapeSingleQuotes(target.PinVersion))
+		case "native", "brew", "apt", "dnf", "apk":
+			resolved.blockedReason = joinBlockedReasons(resolved.blockedReason, fmt.Sprintf("pin_version %q is not supported for the detected claude install route", target.PinVersion))
+		}
+	}
+	return resolved
+}
+
+func detectClaudeCodeUpgradeRoute(ctx context.Context, runner AgentUpgradeCommandRunner, channel string) (source string, updateCommand string, blockedReason string) {
 	if runner == nil {
 		runner = defaultAgentUpgradeCommandRunner
 	}
+	channel = normalizeAgentUpgradeChannel(channel)
 	probe := func(cmd string) (string, bool) {
 		probeCtx, cancel := context.WithTimeout(ctx, defaultAgentUpgradeProbeTimeout)
 		defer cancel()
@@ -550,26 +661,48 @@ func detectClaudeCodeUpgradeRoute(ctx context.Context, runner AgentUpgradeComman
 
 	if path, ok := probe("command -v claude"); ok {
 		if strings.Contains(path, "/.local/bin/claude") || strings.Contains(path, "/.local/share/claude/") {
+			if channel == "latest" {
+				return "native", "claude update", "channel \"latest\" is not supported for native claude installs"
+			}
 			return "native", "claude update", ""
 		}
 	}
+	switch channel {
+	case "stable":
+		if _, ok := probe("brew list --cask claude-code >/dev/null && printf ok"); ok {
+			return "brew", "brew upgrade claude-code", ""
+		}
+	case "latest":
+		if _, ok := probe("brew list --cask claude-code@latest >/dev/null && printf ok"); ok {
+			return "brew", "brew upgrade claude-code@latest", ""
+		}
+	}
 	if _, ok := probe("brew list --cask claude-code@latest >/dev/null && printf ok"); ok {
+		if channel == "stable" {
+			return "brew", "brew upgrade claude-code", "requested claude stable channel but Homebrew stable cask is not installed"
+		}
 		return "brew", "brew upgrade claude-code@latest", ""
 	}
 	if _, ok := probe("brew list --cask claude-code >/dev/null && printf ok"); ok {
+		if channel == "latest" {
+			return "brew", "brew upgrade claude-code@latest", "requested claude latest channel but Homebrew latest cask is not installed"
+		}
 		return "brew", "brew upgrade claude-code", ""
 	}
 	if _, ok := probe("npm -g ls @anthropic-ai/claude-code --depth=0 >/dev/null && printf ok"); ok {
+		if channel == "latest" || channel == "stable" {
+			return "npm", "npm install -g @anthropic-ai/claude-code", fmt.Sprintf("channel %q is not supported for npm-based claude installs", channel)
+		}
 		return "npm", "npm install -g @anthropic-ai/claude-code", ""
 	}
 	if _, ok := probe("dpkg -s claude-code >/dev/null && printf ok"); ok {
-		return "apt", "sudo apt update && sudo apt upgrade claude-code", "requires privileged apt upgrade; run manually"
+		return "apt", "sudo apt update && sudo apt upgrade claude-code", joinBlockedReasons("requires privileged apt upgrade; run manually", unsupportedClaudeChannelReason(channel))
 	}
 	if _, ok := probe("rpm -q claude-code >/dev/null && printf ok"); ok {
-		return "dnf", "sudo dnf upgrade claude-code", "requires privileged dnf upgrade; run manually"
+		return "dnf", "sudo dnf upgrade claude-code", joinBlockedReasons("requires privileged dnf upgrade; run manually", unsupportedClaudeChannelReason(channel))
 	}
 	if _, ok := probe("apk info -e claude-code >/dev/null && printf ok"); ok {
-		return "apk", "apk update && apk upgrade claude-code", "requires privileged apk upgrade; run manually"
+		return "apk", "apk update && apk upgrade claude-code", joinBlockedReasons("requires privileged apk upgrade; run manually", unsupportedClaudeChannelReason(channel))
 	}
 	return "", "", ""
 }
@@ -581,6 +714,16 @@ func normalizeAgentUpgradeStrategy(v string) string {
 		return v
 	default:
 		return "disabled"
+	}
+}
+
+func normalizeAgentUpgradeChannel(v string) string {
+	v = strings.ToLower(strings.TrimSpace(v))
+	switch v {
+	case "", "stable", "latest":
+		return v
+	default:
+		return ""
 	}
 }
 
@@ -614,6 +757,140 @@ func normalizeAgentUpgradeOutput(v string) string {
 	return strings.TrimSpace(strings.ReplaceAll(v, "\r\n", "\n"))
 }
 
+func shellEscapeSingleQuotes(v string) string {
+	return strings.ReplaceAll(strings.TrimSpace(v), `'`, `'\''`)
+}
+
+func evaluateTargetVersionPolicy(target AgentUpgradeTargetConfig, currentVersion string) string {
+	if target.MinimumVersion == "" && target.PinVersion == "" {
+		return ""
+	}
+	current := extractAgentVersion(currentVersion)
+	if current == "" {
+		return "version constraints require a parseable version from version_command"
+	}
+	if target.PinVersion != "" && sameVersion(current, target.PinVersion) {
+		return fmt.Sprintf("already pinned at %s", target.PinVersion)
+	}
+	if target.MinimumVersion != "" {
+		if ok, cmp := compareVersionStrings(current, target.MinimumVersion); ok && cmp >= 0 {
+			return fmt.Sprintf("already meets minimum_version %s", target.MinimumVersion)
+		}
+	}
+	return ""
+}
+
+func extractAgentVersion(v string) string {
+	v = strings.TrimSpace(v)
+	start := -1
+	for i, r := range v {
+		if r >= '0' && r <= '9' {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return ""
+	}
+	end := start
+	for end < len(v) {
+		c := v[end]
+		if (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '.' || c == '-' || c == '+' {
+			end++
+			continue
+		}
+		break
+	}
+	return strings.Trim(v[start:end], ".,;:()[]{}")
+}
+
+func compareVersionStrings(a, b string) (bool, int) {
+	aParts, aOk := parseVersionParts(extractAgentVersion(a))
+	bParts, bOk := parseVersionParts(extractAgentVersion(b))
+	if !aOk || !bOk {
+		return false, 0
+	}
+	n := len(aParts)
+	if len(bParts) > n {
+		n = len(bParts)
+	}
+	for i := 0; i < n; i++ {
+		var av, bv int
+		if i < len(aParts) {
+			av = aParts[i]
+		}
+		if i < len(bParts) {
+			bv = bParts[i]
+		}
+		switch {
+		case av < bv:
+			return true, -1
+		case av > bv:
+			return true, 1
+		}
+	}
+	return true, 0
+}
+
+func parseVersionParts(v string) ([]int, bool) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return nil, false
+	}
+	parts := strings.Split(v, ".")
+	out := make([]int, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			return nil, false
+		}
+		value := 0
+		digits := 0
+		for i := 0; i < len(part); i++ {
+			c := part[i]
+			if c < '0' || c > '9' {
+				break
+			}
+			value = value*10 + int(c-'0')
+			digits++
+		}
+		if digits == 0 {
+			return nil, false
+		}
+		out = append(out, value)
+	}
+	return out, true
+}
+
+func sameVersion(a, b string) bool {
+	ok, cmp := compareVersionStrings(a, b)
+	return ok && cmp == 0
+}
+
+func unsupportedClaudeChannelReason(channel string) string {
+	if channel == "" {
+		return ""
+	}
+	return fmt.Sprintf("channel %q is not supported for the detected claude install route", channel)
+}
+
+func joinBlockedReasons(parts ...string) string {
+	out := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if _, ok := seen[part]; ok {
+			continue
+		}
+		seen[part] = struct{}{}
+		out = append(out, part)
+	}
+	return strings.Join(out, "; ")
+}
+
 func defaultAgentUpgradeCommandRunner(ctx context.Context, cmd string) (string, error) {
 	c := exec.CommandContext(ctx, "/bin/sh", "-lc", cmd)
 	out, err := c.CombinedOutput()
@@ -643,6 +920,41 @@ func (m *AgentUpgradeManager) updateScheduleState(last, next time.Time) {
 		m.lastAutoRun = last
 	}
 	m.nextAutoRun = next
+}
+
+func (m *AgentUpgradeManager) failureState(name string) agentUpgradeFailureState {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.failures[name]
+}
+
+func (m *AgentUpgradeManager) recordFailure(name string, target AgentUpgradeTargetConfig, reason string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	state := m.failures[name]
+	state.ConsecutiveFailures++
+	state.LastFailureReason = strings.TrimSpace(reason)
+	state.LastFailureAt = time.Now()
+	if target.MaxFailures > 0 && target.FailureBackoff > 0 && state.ConsecutiveFailures >= target.MaxFailures {
+		state.BackoffUntil = state.LastFailureAt.Add(target.FailureBackoff)
+	}
+	m.failures[name] = state
+}
+
+func (m *AgentUpgradeManager) clearFailureState(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.failures, name)
+}
+
+func targetBackoffReason(state agentUpgradeFailureState) string {
+	if state.BackoffUntil.IsZero() || time.Now().After(state.BackoffUntil) {
+		return ""
+	}
+	if state.LastFailureReason != "" {
+		return fmt.Sprintf("backing off until %s after failures: %s", state.BackoffUntil.Format(time.RFC3339), state.LastFailureReason)
+	}
+	return fmt.Sprintf("backing off until %s", state.BackoffUntil.Format(time.RFC3339))
 }
 
 func versionProbeTimeout(timeout time.Duration) time.Duration {

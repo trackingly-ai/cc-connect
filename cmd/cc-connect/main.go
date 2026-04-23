@@ -977,11 +977,26 @@ func buildAgentUpgradeConfig(cfg config.AgentUpdatesConfig) core.AgentUpgradeCon
 		if strategy := strings.TrimSpace(src.Strategy); strategy != "" {
 			target.Strategy = strategy
 		}
+		if channel := strings.TrimSpace(src.Channel); channel != "" {
+			target.Channel = channel
+		}
 		if versionCmd := strings.TrimSpace(src.VersionCommand); versionCmd != "" {
 			target.VersionCommand = versionCmd
 		}
 		if updateCmd := strings.TrimSpace(src.UpdateCommand); updateCmd != "" {
 			target.UpdateCommand = updateCmd
+		}
+		if minVersion := strings.TrimSpace(src.MinimumVersion); minVersion != "" {
+			target.MinimumVersion = minVersion
+		}
+		if pinVersion := strings.TrimSpace(src.PinVersion); pinVersion != "" {
+			target.PinVersion = pinVersion
+		}
+		if src.FailureBackoffSecs > 0 {
+			target.FailureBackoff = time.Duration(src.FailureBackoffSecs) * time.Second
+		}
+		if src.MaxFailures > 0 {
+			target.MaxFailures = src.MaxFailures
 		}
 		result.Targets[name] = target
 	}

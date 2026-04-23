@@ -69,10 +69,15 @@ type AgentUpdatesConfig struct {
 }
 
 type AgentUpdateTargetConfig struct {
-	Enabled        *bool  `toml:"enabled,omitempty"`
-	Strategy       string `toml:"strategy,omitempty"`
-	VersionCommand string `toml:"version_command,omitempty"`
-	UpdateCommand  string `toml:"update_command,omitempty"`
+	Enabled            *bool  `toml:"enabled,omitempty"`
+	Strategy           string `toml:"strategy,omitempty"`
+	Channel            string `toml:"channel,omitempty"`
+	VersionCommand     string `toml:"version_command,omitempty"`
+	UpdateCommand      string `toml:"update_command,omitempty"`
+	MinimumVersion     string `toml:"minimum_version,omitempty"`
+	PinVersion         string `toml:"pin_version,omitempty"`
+	FailureBackoffSecs int    `toml:"failure_backoff_secs,omitempty"`
+	MaxFailures        int    `toml:"max_failures,omitempty"`
 }
 
 // DisplayConfig controls how intermediate messages (thinking, tool output) are shown.
@@ -299,13 +304,26 @@ func (c *Config) validate() error {
 		"gemini":     c.AgentUpdates.Gemini,
 		"qoder":      c.AgentUpdates.Qoder,
 	} {
-		if target.Strategy == "" {
-			continue
+		if target.Channel != "" {
+			switch strings.ToLower(strings.TrimSpace(target.Channel)) {
+			case "stable", "latest":
+			default:
+				return fmt.Errorf("config: agent_updates.%s.channel %q is invalid", key, target.Channel)
+			}
 		}
-		switch strings.ToLower(strings.TrimSpace(target.Strategy)) {
-		case "builtin", "package_manager", "custom", "observe", "disabled":
-		default:
-			return fmt.Errorf("config: agent_updates.%s.strategy %q is invalid", key, target.Strategy)
+		if target.Strategy == "" {
+		} else {
+			switch strings.ToLower(strings.TrimSpace(target.Strategy)) {
+			case "builtin", "package_manager", "custom", "observe", "disabled":
+			default:
+				return fmt.Errorf("config: agent_updates.%s.strategy %q is invalid", key, target.Strategy)
+			}
+		}
+		if target.FailureBackoffSecs < 0 {
+			return fmt.Errorf("config: agent_updates.%s.failure_backoff_secs must be >= 0", key)
+		}
+		if target.MaxFailures < 0 {
+			return fmt.Errorf("config: agent_updates.%s.max_failures must be >= 0", key)
 		}
 	}
 	return nil

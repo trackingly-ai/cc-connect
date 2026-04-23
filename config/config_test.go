@@ -253,6 +253,10 @@ timeout_secs = 900
 [agent_updates.codex]
 strategy = "package_manager"
 update_command = "npm install -g @openai/codex@latest"
+minimum_version = "0.124.0"
+pin_version = "0.124.0"
+failure_backoff_secs = 3600
+max_failures = 3
 `
 	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -279,6 +283,12 @@ update_command = "npm install -g @openai/codex@latest"
 	}
 	if cfg.AgentUpdates.Codex.UpdateCommand != "npm install -g @openai/codex@latest" {
 		t.Fatalf("codex update command = %q", cfg.AgentUpdates.Codex.UpdateCommand)
+	}
+	if cfg.AgentUpdates.Codex.MinimumVersion != "0.124.0" || cfg.AgentUpdates.Codex.PinVersion != "0.124.0" {
+		t.Fatalf("codex version constraints = %#v", cfg.AgentUpdates.Codex)
+	}
+	if cfg.AgentUpdates.Codex.FailureBackoffSecs != 3600 || cfg.AgentUpdates.Codex.MaxFailures != 3 {
+		t.Fatalf("codex failure controls = %#v", cfg.AgentUpdates.Codex)
 	}
 }
 
@@ -313,6 +323,24 @@ policy = "fast"
 
 	if _, err := Load(configPath); err == nil {
 		t.Fatal("expected invalid agent update policy to be rejected")
+	}
+}
+
+func TestLoadRejectsInvalidAgentUpdateChannel(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	content := minimalConfigTOML + `
+[agent_updates]
+enabled = true
+
+[agent_updates.claudecode]
+channel = "beta"
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if _, err := Load(configPath); err == nil {
+		t.Fatal("expected invalid agent update channel to be rejected")
 	}
 }
 
@@ -353,6 +381,23 @@ run_enabled = true
 
 	if _, err := Load(configPath); err == nil {
 		t.Fatal("expected missing allowed_user_ids validation error")
+	}
+}
+
+func TestLoadRejectsNegativeAgentUpdateFailureControls(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	content := minimalConfigTOML + `
+[agent_updates]
+enabled = true
+
+[agent_updates.codex]
+failure_backoff_secs = -1
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if _, err := Load(configPath); err == nil {
+		t.Fatal("expected negative failure_backoff_secs to be rejected")
 	}
 }
 

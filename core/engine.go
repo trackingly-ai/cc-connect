@@ -5761,11 +5761,29 @@ func (e *Engine) cmdAgentUpgrade(p Platform, msg *Message, args []string) {
 			fmt.Fprintf(&sb, "\n- %s\n", st.Name)
 			fmt.Fprintf(&sb, "  strategy: %s\n", st.Strategy)
 			fmt.Fprintf(&sb, "  enabled: %v\n", st.Enabled)
+			if st.Channel != "" {
+				fmt.Fprintf(&sb, "  channel: %s\n", st.Channel)
+			}
 			fmt.Fprintf(&sb, "  busy sessions: %d\n", st.BusySessions)
 			if st.VersionErr != "" {
 				fmt.Fprintf(&sb, "  version: error: %s\n", st.VersionErr)
 			} else if st.Version != "" {
 				fmt.Fprintf(&sb, "  version: %s\n", st.Version)
+			}
+			if st.MinimumVersion != "" {
+				fmt.Fprintf(&sb, "  minimum_version: %s\n", st.MinimumVersion)
+			}
+			if st.PinVersion != "" {
+				fmt.Fprintf(&sb, "  pin_version: %s\n", st.PinVersion)
+			}
+			if st.ConsecutiveFailures > 0 {
+				fmt.Fprintf(&sb, "  consecutive failures: %d\n", st.ConsecutiveFailures)
+			}
+			if !st.BackoffUntil.IsZero() {
+				fmt.Fprintf(&sb, "  backoff until: %s\n", st.BackoffUntil.Format(time.RFC3339))
+			}
+			if st.LastFailureReason != "" {
+				fmt.Fprintf(&sb, "  last failure: %s\n", st.LastFailureReason)
 			}
 			if st.UpdateCommand != "" {
 				fmt.Fprintf(&sb, "  update: %s\n", st.UpdateCommand)
