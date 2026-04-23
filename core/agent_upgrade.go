@@ -119,7 +119,6 @@ func DefaultAgentUpgradeConfig() AgentUpgradeConfig {
 			"claudecode": {
 				Enabled:        true,
 				Strategy:       "builtin",
-				Channel:        "stable",
 				VersionCommand: "claude --version",
 				UpdateCommand:  "claude update",
 			},
@@ -551,7 +550,7 @@ func (m *AgentUpgradeManager) resolveTarget(ctx context.Context, name string, ta
 			return resolved
 		}
 		if target.PinVersion != "" && target.Strategy == "package_manager" {
-			resolved.cfg.UpdateCommand = fmt.Sprintf("npm install -g @openai/codex@%s", shellEscapeSingleQuotes(target.PinVersion))
+			resolved.cfg.UpdateCommand = fmt.Sprintf("npm install -g %s", shellQuote("@openai/codex@"+strings.TrimSpace(target.PinVersion)))
 		}
 		return resolved
 	case "gemini":
@@ -560,7 +559,7 @@ func (m *AgentUpgradeManager) resolveTarget(ctx context.Context, name string, ta
 			return resolved
 		}
 		if target.PinVersion != "" && target.Strategy == "package_manager" {
-			resolved.cfg.UpdateCommand = fmt.Sprintf("npm install -g @google/gemini-cli@%s", shellEscapeSingleQuotes(target.PinVersion))
+			resolved.cfg.UpdateCommand = fmt.Sprintf("npm install -g %s", shellQuote("@google/gemini-cli@"+strings.TrimSpace(target.PinVersion)))
 		}
 		return resolved
 	case "qoder":
@@ -636,7 +635,7 @@ func resolveClaudeCodeUpgradeTarget(ctx context.Context, runner AgentUpgradeComm
 	if target.PinVersion != "" {
 		switch source {
 		case "npm":
-			resolved.cfg.UpdateCommand = fmt.Sprintf("npm install -g @anthropic-ai/claude-code@%s", shellEscapeSingleQuotes(target.PinVersion))
+			resolved.cfg.UpdateCommand = fmt.Sprintf("npm install -g %s", shellQuote("@anthropic-ai/claude-code@"+strings.TrimSpace(target.PinVersion)))
 		case "native", "brew", "apt", "dnf", "apk":
 			resolved.blockedReason = joinBlockedReasons(resolved.blockedReason, fmt.Sprintf("pin_version %q is not supported for the detected claude install route", target.PinVersion))
 		}
@@ -757,8 +756,12 @@ func normalizeAgentUpgradeOutput(v string) string {
 	return strings.TrimSpace(strings.ReplaceAll(v, "\r\n", "\n"))
 }
 
-func shellEscapeSingleQuotes(v string) string {
-	return strings.ReplaceAll(strings.TrimSpace(v), `'`, `'\''`)
+func shellQuote(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(v, "'", `'\''`) + "'"
 }
 
 func evaluateTargetVersionPolicy(target AgentUpgradeTargetConfig, currentVersion string) string {

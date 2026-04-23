@@ -278,8 +278,15 @@ func TestAgentUpgradeManagerRunPackageManagerPinVersion(t *testing.T) {
 	if len(results) != 1 || results[0].Skipped {
 		t.Fatalf("results = %#v, want one executed result", results)
 	}
-	if ranUpdate != "npm install -g @openai/codex@0.124.0" {
+	if ranUpdate != "npm install -g '@openai/codex@0.124.0'" {
 		t.Fatalf("update command = %q, want pinned npm install", ranUpdate)
+	}
+}
+
+func TestDefaultAgentUpgradeConfigLeavesClaudeChannelUnset(t *testing.T) {
+	cfg := DefaultAgentUpgradeConfig()
+	if got := cfg.Targets["claudecode"].Channel; got != "" {
+		t.Fatalf("claudecode channel = %q, want empty default", got)
 	}
 }
 
@@ -552,6 +559,27 @@ func TestDetectClaudeCodeUpgradeRouteFallsBackToHomebrew(t *testing.T) {
 	source, updateCmd, blockedReason := detectClaudeCodeUpgradeRoute(context.Background(), runner, "")
 	if source != "brew" || updateCmd != "brew upgrade claude-code@latest" || blockedReason != "" {
 		t.Fatalf("route = (%q, %q, %q), want brew/claude-code@latest/no block", source, updateCmd, blockedReason)
+	}
+}
+
+func TestDetectClaudeCodeUpgradeRouteAllowsDefaultNpmInstall(t *testing.T) {
+	runner := func(_ context.Context, cmd string) (string, error) {
+		switch cmd {
+		case "command -v claude":
+			return "/usr/local/bin/claude\n", nil
+		case "brew list --cask claude-code@latest >/dev/null && printf ok",
+			"brew list --cask claude-code >/dev/null && printf ok":
+			return "", fmt.Errorf("not installed")
+		case "npm -g ls @anthropic-ai/claude-code --depth=0 >/dev/null && printf ok":
+			return "ok", nil
+		default:
+			return "", fmt.Errorf("unexpected command %q", cmd)
+		}
+	}
+
+	source, updateCmd, blockedReason := detectClaudeCodeUpgradeRoute(context.Background(), runner, "")
+	if source != "npm" || updateCmd != "npm install -g @anthropic-ai/claude-code" || blockedReason != "" {
+		t.Fatalf("route = (%q, %q, %q), want npm route with no default block", source, updateCmd, blockedReason)
 	}
 }
 
