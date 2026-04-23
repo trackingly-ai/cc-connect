@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os/exec"
 	"slices"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 const defaultAgentUpgradeTimeout = 20 * time.Minute
 const defaultAgentUpgradeProbeTimeout = 30 * time.Second
+const defaultAgentUpgradeInterval = 24 * time.Hour
 
 type AgentUpgradeTargetConfig struct {
 	Enabled        bool
@@ -24,6 +26,8 @@ type AgentUpgradeConfig struct {
 	Enabled        bool
 	RunEnabled     bool
 	AllowedUserIDs []string
+	Policy         string
+	Interval       time.Duration
 	Timeout        time.Duration
 	Targets        map[string]AgentUpgradeTargetConfig
 }
@@ -66,12 +70,15 @@ type AgentUpgradeManager struct {
 	runCommand  AgentUpgradeCommandRunner
 	busyCountFn func(string) int
 	running     map[string]bool
+	startOnce   sync.Once
+	wakeCh      chan struct{}
 }
 
 func NewAgentUpgradeManager(cfg AgentUpgradeConfig) *AgentUpgradeManager {
 	m := &AgentUpgradeManager{
 		runCommand: defaultAgentUpgradeCommandRunner,
 		running:    make(map[string]bool),
+		wakeCh:     make(chan struct{}, 1),
 	}
 	m.ApplyConfig(cfg)
 	return m
@@ -81,6 +88,8 @@ func DefaultAgentUpgradeConfig() AgentUpgradeConfig {
 	return AgentUpgradeConfig{
 		Enabled:    false,
 		RunEnabled: false,
+		Policy:     "off",
+		Interval:   defaultAgentUpgradeInterval,
 		Timeout:    defaultAgentUpgradeTimeout,
 		Targets: map[string]AgentUpgradeTargetConfig{
 			"claudecode": {
@@ -135,6 +144,12 @@ func (m *AgentUpgradeManager) ApplyConfig(cfg AgentUpgradeConfig) {
 	base.Enabled = cfg.Enabled
 	base.RunEnabled = cfg.RunEnabled
 	base.AllowedUserIDs = dedupeTrimmedStrings(cfg.AllowedUserIDs)
+	if cfg.Policy != "" {
+		base.Policy = normalizeAgentUpgradePolicy(cfg.Policy)
+	}
+	if cfg.Interval > 0 {
+		base.Interval = cfg.Interval
+	}
 	if cfg.Timeout > 0 {
 		base.Timeout = cfg.Timeout
 	}
@@ -160,6 +175,10 @@ func (m *AgentUpgradeManager) ApplyConfig(cfg AgentUpgradeConfig) {
 	}
 
 	m.cfg = base
+	select {
+	case m.wakeCh <- struct{}{}:
+	default:
+	}
 }
 
 func (m *AgentUpgradeManager) Snapshot() AgentUpgradeConfig {
@@ -196,6 +215,105 @@ func (m *AgentUpgradeManager) IsTargetRunning(name string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.running[name]
+}
+
+func (m *AgentUpgradeManager) Start(ctx context.Context) {
+	m.startOnce.Do(func() {
+		go m.loop(ctx)
+	})
+}
+
+func (m *AgentUpgradeManager) AutoCheck(ctx context.Context) ([]AgentUpgradeRunResult, error) {
+	cfg := m.Snapshot()
+	if !cfg.Enabled {
+		return nil, nil
+	}
+	switch cfg.Policy {
+	case "check_only":
+		statuses := m.Statuses(ctx)
+		for _, st := range statuses {
+			slog.Info("agent upgrade check",
+				"agent", st.Name,
+				"strategy", st.Strategy,
+				"actionable", st.Actionable,
+				"busy_sessions", st.BusySessions,
+				"version", st.Version,
+				"version_error", st.VersionErr,
+				"blocked_reason", st.BlockedReason,
+			)
+		}
+		return nil, nil
+	case "idle_only":
+		return m.Run(ctx, "all")
+	default:
+		return nil, nil
+	}
+}
+
+func (m *AgentUpgradeManager) loop(ctx context.Context) {
+	nextRun := time.Time{}
+	for {
+		cfg := m.Snapshot()
+		if !cfg.Enabled || cfg.Policy == "off" {
+			nextRun = time.Time{}
+		}
+
+		interval := cfg.Interval
+		if interval <= 0 {
+			interval = defaultAgentUpgradeInterval
+		}
+		if nextRun.IsZero() && cfg.Enabled && cfg.Policy != "off" {
+			nextRun = time.Now().Add(interval)
+		}
+
+		wait := time.Minute
+		if !nextRun.IsZero() {
+			wait = time.Until(nextRun)
+			if wait < time.Second {
+				wait = time.Second
+			}
+		}
+
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-m.wakeCh:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			continue
+		case <-timer.C:
+		}
+
+		cfg = m.Snapshot()
+		if !cfg.Enabled || cfg.Policy == "off" {
+			nextRun = time.Time{}
+			continue
+		}
+		results, err := m.AutoCheck(ctx)
+		if err != nil {
+			slog.Warn("agent upgrade auto-check failed", "error", err)
+		} else {
+			for _, res := range results {
+				slog.Info("agent upgrade auto-run",
+					"agent", res.Name,
+					"strategy", res.Strategy,
+					"busy_sessions", res.BusySessions,
+					"skipped", res.Skipped,
+					"reason", res.Reason,
+					"before", res.BeforeVersion,
+					"after", res.AfterVersion,
+					"changed", res.Changed,
+				)
+			}
+		}
+		nextRun = time.Now().Add(interval)
+	}
 }
 
 func (m *AgentUpgradeManager) Statuses(ctx context.Context) []AgentUpgradeStatus {
@@ -441,6 +559,16 @@ func normalizeAgentUpgradeStrategy(v string) string {
 		return v
 	default:
 		return "disabled"
+	}
+}
+
+func normalizeAgentUpgradePolicy(v string) string {
+	v = strings.ToLower(strings.TrimSpace(v))
+	switch v {
+	case "off", "check_only", "idle_only":
+		return v
+	default:
+		return "off"
 	}
 }
 

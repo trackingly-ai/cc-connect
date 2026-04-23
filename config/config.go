@@ -59,6 +59,8 @@ type AgentUpdatesConfig struct {
 	Enabled        *bool                   `toml:"enabled,omitempty"`
 	RunEnabled     *bool                   `toml:"run_enabled,omitempty"`
 	AllowedUserIDs []string                `toml:"allowed_user_ids,omitempty"`
+	Policy         string                  `toml:"policy,omitempty"`
+	IntervalSecs   int                     `toml:"interval_secs,omitempty"`
 	TimeoutSecs    int                     `toml:"timeout_secs,omitempty"`
 	ClaudeCode     AgentUpdateTargetConfig `toml:"claudecode"`
 	Codex          AgentUpdateTargetConfig `toml:"codex"`
@@ -268,6 +270,16 @@ func (c *Config) validate() error {
 	}
 	if c.AgentUpdates.TimeoutSecs < 0 {
 		return fmt.Errorf("config: agent_updates.timeout_secs must be >= 0")
+	}
+	if c.AgentUpdates.IntervalSecs < 0 {
+		return fmt.Errorf("config: agent_updates.interval_secs must be >= 0")
+	}
+	if c.AgentUpdates.Policy != "" {
+		switch strings.ToLower(strings.TrimSpace(c.AgentUpdates.Policy)) {
+		case "off", "check_only", "idle_only":
+		default:
+			return fmt.Errorf("config: agent_updates.policy %q is invalid", c.AgentUpdates.Policy)
+		}
 	}
 	if c.AgentUpdates.RunEnabled != nil && *c.AgentUpdates.RunEnabled {
 		hasAllowedUser := false

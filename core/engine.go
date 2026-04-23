@@ -5732,11 +5732,19 @@ func (e *Engine) cmdAgentUpgrade(p Platform, msg *Message, args []string) {
 		if cfg.Enabled {
 			state = "enabled"
 		}
+		policy := cfg.Policy
+		if policy == "" {
+			policy = "off"
+		}
 		timeout := cfg.Timeout
 		if timeout <= 0 {
 			timeout = defaultAgentUpgradeTimeout
 		}
-		fmt.Fprintf(&sb, "Agent upgrades: %s (timeout=%s)\n", state, timeout)
+		interval := cfg.Interval
+		if interval <= 0 {
+			interval = defaultAgentUpgradeInterval
+		}
+		fmt.Fprintf(&sb, "Agent upgrades: %s (policy=%s, interval=%s, timeout=%s)\n", state, policy, interval, timeout)
 		for _, st := range statuses {
 			fmt.Fprintf(&sb, "\n- %s\n", st.Name)
 			fmt.Fprintf(&sb, "  strategy: %s\n", st.Strategy)

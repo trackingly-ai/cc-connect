@@ -246,6 +246,8 @@ func TestLoadParsesAgentUpdatesConfig(t *testing.T) {
 	content := minimalConfigTOML + `
 [agent_updates]
 enabled = true
+policy = "idle_only"
+interval_secs = 86400
 timeout_secs = 900
 
 [agent_updates.codex]
@@ -265,6 +267,12 @@ update_command = "npm install -g @openai/codex@latest"
 	}
 	if cfg.AgentUpdates.TimeoutSecs != 900 {
 		t.Fatalf("timeout_secs = %d, want 900", cfg.AgentUpdates.TimeoutSecs)
+	}
+	if cfg.AgentUpdates.Policy != "idle_only" {
+		t.Fatalf("policy = %q, want idle_only", cfg.AgentUpdates.Policy)
+	}
+	if cfg.AgentUpdates.IntervalSecs != 86400 {
+		t.Fatalf("interval_secs = %d, want 86400", cfg.AgentUpdates.IntervalSecs)
 	}
 	if cfg.AgentUpdates.Codex.Strategy != "package_manager" {
 		t.Fatalf("codex strategy = %q", cfg.AgentUpdates.Codex.Strategy)
@@ -289,6 +297,22 @@ strategy = "magic"
 
 	if _, err := Load(configPath); err == nil {
 		t.Fatal("expected invalid agent update strategy to be rejected")
+	}
+}
+
+func TestLoadRejectsInvalidAgentUpdatePolicy(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	content := minimalConfigTOML + `
+[agent_updates]
+enabled = true
+policy = "fast"
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if _, err := Load(configPath); err == nil {
+		t.Fatal("expected invalid agent update policy to be rejected")
 	}
 }
 

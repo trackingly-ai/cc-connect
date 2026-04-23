@@ -154,6 +154,8 @@ level = "info" # debug, info, warn, error
 # enabled = true
 # run_enabled = false          # set true only if you explicitly allow chat-triggered host upgrades
 # allowed_user_ids = ["ou_xxx"] # required when run_enabled = true
+# policy = "idle_only"         # off | check_only | idle_only
+# interval_secs = 86400        # 24h
 # timeout_secs = 1200
 #
 # [agent_updates.claudecode]

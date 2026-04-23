@@ -195,6 +195,56 @@ func TestAgentUpgradeManagerApplyConfigUnknownStrategyDisablesTarget(t *testing.
 	}
 }
 
+func TestAgentUpgradeManagerAutoCheckIdleOnlyRunsUpgrades(t *testing.T) {
+	mgr := NewAgentUpgradeManager(AgentUpgradeConfig{
+		Enabled:  true,
+		Policy:   "idle_only",
+		Interval: time.Hour,
+	})
+	versions := map[string]string{
+		"claude --version":   "claude 1.0.0",
+		"codex --version":    "codex 0.1.0",
+		"gemini --version":   "gemini 0.2.0",
+		"qodercli --version": "qoder 0.3.0",
+	}
+	mgr.SetBusyCountFunc(func(string) int { return 0 })
+	mgr.SetCommandRunner(func(_ context.Context, cmd string) (string, error) {
+		switch cmd {
+		case "claude --version", "codex --version", "gemini --version", "qodercli --version":
+			return versions[cmd], nil
+		case "claude update":
+			versions["claude --version"] = "claude 1.1.0"
+			return "updated", nil
+		case "qodercli update":
+			return "already up to date", nil
+		default:
+			return "", fmt.Errorf("unexpected command %q", cmd)
+		}
+	})
+
+	results, err := mgr.AutoCheck(context.Background())
+	if err != nil {
+		t.Fatalf("AutoCheck: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected idle_only auto-check to return run results")
+	}
+}
+
+func TestAgentUpgradeManagerAutoCheckOffReturnsNil(t *testing.T) {
+	mgr := NewAgentUpgradeManager(AgentUpgradeConfig{
+		Enabled: true,
+		Policy:  "off",
+	})
+	results, err := mgr.AutoCheck(context.Background())
+	if err != nil {
+		t.Fatalf("AutoCheck(off): %v", err)
+	}
+	if results != nil {
+		t.Fatalf("results = %#v, want nil", results)
+	}
+}
+
 func TestDetectClaudeCodeUpgradeRoutePrefersNativeInstall(t *testing.T) {
 	runner := func(_ context.Context, cmd string) (string, error) {
 		switch cmd {

@@ -114,6 +114,8 @@ func main() {
 
 	core.VersionInfo = fmt.Sprintf("cc-connect %s\ncommit: %s\nbuilt: %s", version, commit, buildTime)
 	core.CurrentVersion = version
+	serviceCtx, stopServices := context.WithCancel(context.Background())
+	defer stopServices()
 
 	configPath := resolveConfigPath(*configFlag)
 
@@ -493,6 +495,7 @@ func main() {
 	for _, e := range engines {
 		e.SetAgentUpgradeManager(agentUpgradeMgr)
 	}
+	agentUpgradeMgr.Start(serviceCtx)
 
 	// Start cron scheduler
 	cronStore, err := core.NewCronStore(cfg.DataDir)
@@ -601,6 +604,7 @@ func main() {
 	if stopWorkerClient != nil {
 		stopWorkerClient()
 	}
+	stopServices()
 	if workerClient != nil {
 		if err := workerClient.Stop(context.Background()); err != nil {
 			slog.Warn("echo worker client shutdown error", "error", err)
@@ -956,6 +960,12 @@ func buildAgentUpgradeConfig(cfg config.AgentUpdatesConfig) core.AgentUpgradeCon
 		result.RunEnabled = *cfg.RunEnabled
 	}
 	result.AllowedUserIDs = dedupeTrimmedStrings(cfg.AllowedUserIDs)
+	if policy := strings.TrimSpace(cfg.Policy); policy != "" {
+		result.Policy = policy
+	}
+	if cfg.IntervalSecs > 0 {
+		result.Interval = time.Duration(cfg.IntervalSecs) * time.Second
+	}
 	if cfg.TimeoutSecs > 0 {
 		result.Timeout = time.Duration(cfg.TimeoutSecs) * time.Second
 	}
