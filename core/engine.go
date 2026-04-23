@@ -5727,6 +5727,7 @@ func (e *Engine) cmdAgentUpgrade(p Platform, msg *Message, args []string) {
 	case "status", "check":
 		statuses := e.agentUpgradeMgr.Statuses(e.ctx)
 		cfg := e.agentUpgradeMgr.Snapshot()
+		lastAutoRun, nextAutoRun := e.agentUpgradeMgr.ScheduleState()
 		var sb strings.Builder
 		state := "disabled"
 		if cfg.Enabled {
@@ -5745,6 +5746,17 @@ func (e *Engine) cmdAgentUpgrade(p Platform, msg *Message, args []string) {
 			interval = defaultAgentUpgradeInterval
 		}
 		fmt.Fprintf(&sb, "Agent upgrades: %s (policy=%s, interval=%s, timeout=%s)\n", state, policy, interval, timeout)
+		if cfg.RunEnabled {
+			fmt.Fprintf(&sb, "interactive run: enabled for %d allowed user(s)\n", len(cfg.AllowedUserIDs))
+		} else {
+			sb.WriteString("interactive run: disabled (scheduler still follows policy)\n")
+		}
+		if !lastAutoRun.IsZero() {
+			fmt.Fprintf(&sb, "last auto-check: %s\n", lastAutoRun.Format(time.RFC3339))
+		}
+		if !nextAutoRun.IsZero() {
+			fmt.Fprintf(&sb, "next auto-check: %s\n", nextAutoRun.Format(time.RFC3339))
+		}
 		for _, st := range statuses {
 			fmt.Fprintf(&sb, "\n- %s\n", st.Name)
 			fmt.Fprintf(&sb, "  strategy: %s\n", st.Strategy)

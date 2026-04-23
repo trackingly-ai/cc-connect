@@ -4,9 +4,37 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+func singleTargetUpgradeConfig(name, strategy, versionCmd, updateCmd string) AgentUpgradeConfig {
+	cfg := DefaultAgentUpgradeConfig()
+	cfg.Enabled = true
+	cfg.Policy = "idle_only"
+	cfg.Interval = 10 * time.Millisecond
+	for targetName, target := range cfg.Targets {
+		target.Enabled = false
+		cfg.Targets[targetName] = target
+	}
+	cfg.Targets[name] = AgentUpgradeTargetConfig{
+		Enabled:        true,
+		Strategy:       strategy,
+		VersionCommand: versionCmd,
+		UpdateCommand:  updateCmd,
+	}
+	return cfg
+}
+
+func waitForLoopExit(t *testing.T, mgr *AgentUpgradeManager) {
+	t.Helper()
+	select {
+	case <-mgr.loopDone:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("timed out waiting for agent upgrade loop to stop")
+	}
+}
 
 func TestAgentUpgradeManagerStatuses(t *testing.T) {
 	mgr := NewAgentUpgradeManager(AgentUpgradeConfig{Enabled: true})
@@ -243,6 +271,113 @@ func TestAgentUpgradeManagerAutoCheckOffReturnsNil(t *testing.T) {
 	if results != nil {
 		t.Fatalf("results = %#v, want nil", results)
 	}
+}
+
+func TestAgentUpgradeManagerLoopWakeStartsChecksFromOff(t *testing.T) {
+	cfg := singleTargetUpgradeConfig("codex", "custom", "codex --version", "custom-codex-upgrade")
+	cfg.Policy = "off"
+
+	mgr := NewAgentUpgradeManager(cfg)
+	triggered := make(chan struct{}, 1)
+	mgr.SetCommandRunner(func(_ context.Context, cmd string) (string, error) {
+		switch cmd {
+		case "codex --version":
+			return "codex 1.0.0", nil
+		case "custom-codex-upgrade":
+			select {
+			case triggered <- struct{}{}:
+			default:
+			}
+			return "updated", nil
+		default:
+			return "", fmt.Errorf("unexpected command %q", cmd)
+		}
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	mgr.Start(ctx)
+	defer func() {
+		cancel()
+		waitForLoopExit(t, mgr)
+	}()
+
+	select {
+	case <-triggered:
+		t.Fatal("unexpected auto-upgrade while policy=off")
+	case <-time.After(40 * time.Millisecond):
+	}
+
+	cfg.Policy = "idle_only"
+	cfg.Interval = 10 * time.Millisecond
+	mgr.ApplyConfig(cfg)
+
+	select {
+	case <-triggered:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("expected wake-triggered auto-check after enabling idle_only")
+	}
+}
+
+func TestAgentUpgradeManagerLoopRecalculatesNextRunAfterReload(t *testing.T) {
+	cfg := singleTargetUpgradeConfig("codex", "custom", "codex --version", "custom-codex-upgrade")
+	mgr := NewAgentUpgradeManager(cfg)
+
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var mu sync.Mutex
+	runCount := 0
+	mgr.SetCommandRunner(func(_ context.Context, cmd string) (string, error) {
+		switch cmd {
+		case "codex --version":
+			return "codex 1.0.0", nil
+		case "custom-codex-upgrade":
+			mu.Lock()
+			runCount++
+			current := runCount
+			mu.Unlock()
+			if current == 1 {
+				select {
+				case started <- struct{}{}:
+				default:
+				}
+				<-release
+			}
+			return "updated", nil
+		default:
+			return "", fmt.Errorf("unexpected command %q", cmd)
+		}
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	mgr.Start(ctx)
+	defer func() {
+		cancel()
+		waitForLoopExit(t, mgr)
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("expected first auto-check to start")
+	}
+
+	cfg.Interval = time.Hour
+	mgr.ApplyConfig(cfg)
+	close(release)
+
+	deadline := time.Now().Add(250 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		lastRun, nextRun := mgr.ScheduleState()
+		if !lastRun.IsZero() && !nextRun.IsZero() {
+			if got := nextRun.Sub(lastRun); got < 59*time.Minute {
+				t.Fatalf("next run delta = %s, want reload-adjusted interval close to 1h", got)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	lastRun, nextRun := mgr.ScheduleState()
+	t.Fatalf("schedule state not updated after reload, last=%v next=%v", lastRun, nextRun)
 }
 
 func TestDetectClaudeCodeUpgradeRoutePrefersNativeInstall(t *testing.T) {

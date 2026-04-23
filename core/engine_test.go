@@ -723,10 +723,11 @@ func TestCmdEffort_InvalidValueShowsUsage(t *testing.T) {
 func TestCmdAgentUpgradeStatus(t *testing.T) {
 	p := &stubPlatformEngine{n: "telegram"}
 	e := NewEngine("test", &namedStubAgent{name: "codex"}, []Platform{p}, "", LangEnglish)
-	mgr := NewAgentUpgradeManager(AgentUpgradeConfig{Enabled: true})
+	mgr := NewAgentUpgradeManager(AgentUpgradeConfig{Enabled: true, Policy: "idle_only", Interval: time.Hour})
 	mgr.SetCommandRunner(func(_ context.Context, cmd string) (string, error) {
 		return "version for " + cmd, nil
 	})
+	mgr.updateScheduleState(time.Date(2026, 4, 23, 10, 0, 0, 0, time.UTC), time.Date(2026, 4, 24, 10, 0, 0, 0, time.UTC))
 	e.SetAgentUpgradeManager(mgr)
 
 	e.cmdAgentUpgrade(p, &Message{SessionKey: "tg:chat:user", ReplyCtx: "ctx"}, []string{"status"})
@@ -736,6 +737,12 @@ func TestCmdAgentUpgradeStatus(t *testing.T) {
 	}
 	sent := strings.Join(p.sent, "\n")
 	if !strings.Contains(sent, "Agent upgrades: enabled") || !strings.Contains(sent, "claudecode") {
+		t.Fatalf("sent = %q", sent)
+	}
+	if !strings.Contains(sent, "interactive run: disabled (scheduler still follows policy)") {
+		t.Fatalf("sent = %q, want interactive-run semantics", sent)
+	}
+	if !strings.Contains(sent, "last auto-check: 2026-04-23T10:00:00Z") || !strings.Contains(sent, "next auto-check: 2026-04-24T10:00:00Z") {
 		t.Fatalf("sent = %q", sent)
 	}
 }

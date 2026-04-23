@@ -152,7 +152,7 @@ level = "info" # debug, info, warn, error
 
 # [agent_updates]
 # enabled = true
-# run_enabled = false          # set true only if you explicitly allow chat-triggered host upgrades
+# run_enabled = false          # gates only chat-triggered `/agent-upgrade run`; scheduler still follows policy below
 # allowed_user_ids = ["ou_xxx"] # required when run_enabled = true
 # policy = "idle_only"         # off | check_only | idle_only
 # interval_secs = 86400        # 24h

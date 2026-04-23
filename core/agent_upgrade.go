@@ -70,8 +70,11 @@ type AgentUpgradeManager struct {
 	runCommand  AgentUpgradeCommandRunner
 	busyCountFn func(string) int
 	running     map[string]bool
+	lastAutoRun time.Time
+	nextAutoRun time.Time
 	startOnce   sync.Once
 	wakeCh      chan struct{}
+	loopDone    chan struct{}
 }
 
 func NewAgentUpgradeManager(cfg AgentUpgradeConfig) *AgentUpgradeManager {
@@ -79,6 +82,7 @@ func NewAgentUpgradeManager(cfg AgentUpgradeConfig) *AgentUpgradeManager {
 		runCommand: defaultAgentUpgradeCommandRunner,
 		running:    make(map[string]bool),
 		wakeCh:     make(chan struct{}, 1),
+		loopDone:   make(chan struct{}),
 	}
 	m.ApplyConfig(cfg)
 	return m
@@ -219,8 +223,17 @@ func (m *AgentUpgradeManager) IsTargetRunning(name string) bool {
 
 func (m *AgentUpgradeManager) Start(ctx context.Context) {
 	m.startOnce.Do(func() {
-		go m.loop(ctx)
+		go func() {
+			defer close(m.loopDone)
+			m.loop(ctx)
+		}()
 	})
+}
+
+func (m *AgentUpgradeManager) ScheduleState() (time.Time, time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.lastAutoRun, m.nextAutoRun
 }
 
 func (m *AgentUpgradeManager) AutoCheck(ctx context.Context) ([]AgentUpgradeRunResult, error) {
@@ -256,6 +269,13 @@ func (m *AgentUpgradeManager) loop(ctx context.Context) {
 		cfg := m.Snapshot()
 		if !cfg.Enabled || cfg.Policy == "off" {
 			nextRun = time.Time{}
+			m.updateScheduleState(time.Time{}, nextRun)
+			select {
+			case <-ctx.Done():
+				return
+			case <-m.wakeCh:
+				continue
+			}
 		}
 
 		interval := cfg.Interval
@@ -265,13 +285,11 @@ func (m *AgentUpgradeManager) loop(ctx context.Context) {
 		if nextRun.IsZero() && cfg.Enabled && cfg.Policy != "off" {
 			nextRun = time.Now().Add(interval)
 		}
+		m.updateScheduleState(time.Time{}, nextRun)
 
-		wait := time.Minute
-		if !nextRun.IsZero() {
-			wait = time.Until(nextRun)
-			if wait < time.Second {
-				wait = time.Second
-			}
+		wait := time.Until(nextRun)
+		if wait < 0 {
+			wait = 0
 		}
 
 		timer := time.NewTimer(wait)
@@ -286,6 +304,7 @@ func (m *AgentUpgradeManager) loop(ctx context.Context) {
 				default:
 				}
 			}
+			nextRun = time.Time{}
 			continue
 		case <-timer.C:
 		}
@@ -293,9 +312,11 @@ func (m *AgentUpgradeManager) loop(ctx context.Context) {
 		cfg = m.Snapshot()
 		if !cfg.Enabled || cfg.Policy == "off" {
 			nextRun = time.Time{}
+			m.updateScheduleState(time.Time{}, nextRun)
 			continue
 		}
 		results, err := m.AutoCheck(ctx)
+		completedAt := time.Now()
 		if err != nil {
 			slog.Warn("agent upgrade auto-check failed", "error", err)
 		} else {
@@ -312,7 +333,8 @@ func (m *AgentUpgradeManager) loop(ctx context.Context) {
 				)
 			}
 		}
-		nextRun = time.Now().Add(interval)
+		nextRun = time.Time{}
+		m.updateScheduleState(completedAt, nextRun)
 	}
 }
 
@@ -612,6 +634,15 @@ func (m *AgentUpgradeManager) endTargetRun(name string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.running, name)
+}
+
+func (m *AgentUpgradeManager) updateScheduleState(last, next time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !last.IsZero() {
+		m.lastAutoRun = last
+	}
+	m.nextAutoRun = next
 }
 
 func versionProbeTimeout(timeout time.Duration) time.Duration {
