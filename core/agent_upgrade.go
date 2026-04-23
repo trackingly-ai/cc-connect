@@ -666,23 +666,31 @@ func detectClaudeCodeUpgradeRoute(ctx context.Context, runner AgentUpgradeComman
 			return "native", "claude update", ""
 		}
 	}
+	hasBrewLatest := false
+	if _, ok := probe("brew list --cask claude-code@latest >/dev/null && printf ok"); ok {
+		hasBrewLatest = true
+	}
+	hasBrewStable := false
+	if _, ok := probe("brew list --cask claude-code >/dev/null && printf ok"); ok {
+		hasBrewStable = true
+	}
 	switch channel {
 	case "stable":
-		if _, ok := probe("brew list --cask claude-code >/dev/null && printf ok"); ok {
+		if hasBrewStable {
 			return "brew", "brew upgrade claude-code", ""
 		}
 	case "latest":
-		if _, ok := probe("brew list --cask claude-code@latest >/dev/null && printf ok"); ok {
+		if hasBrewLatest {
 			return "brew", "brew upgrade claude-code@latest", ""
 		}
 	}
-	if _, ok := probe("brew list --cask claude-code@latest >/dev/null && printf ok"); ok {
+	if hasBrewLatest {
 		if channel == "stable" {
 			return "brew", "brew upgrade claude-code", "requested claude stable channel but Homebrew stable cask is not installed"
 		}
 		return "brew", "brew upgrade claude-code@latest", ""
 	}
-	if _, ok := probe("brew list --cask claude-code >/dev/null && printf ok"); ok {
+	if hasBrewStable {
 		if channel == "latest" {
 			return "brew", "brew upgrade claude-code@latest", "requested claude latest channel but Homebrew latest cask is not installed"
 		}

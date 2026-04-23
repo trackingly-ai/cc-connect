@@ -404,18 +404,56 @@ func TestAgentUpgradeManagerAutoCheckIdleOnlyBacksOffAfterFailures(t *testing.T)
 		}
 	})
 
-	if results, err := mgr.AutoCheck(context.Background()); err != nil || len(results) != 4 || results[1].Err == nil {
-		t.Fatalf("first AutoCheck = (%#v, %v), want failing codex run", results, err)
+	firstResults, err := mgr.AutoCheck(context.Background())
+	if err != nil {
+		t.Fatalf("first AutoCheck: %v", err)
 	}
-	if results, err := mgr.AutoCheck(context.Background()); err != nil || len(results) != 4 || results[1].Err == nil {
-		t.Fatalf("second AutoCheck = (%#v, %v), want second failing codex run", results, err)
+	firstCodex := findAgentUpgradeResult(t, firstResults, "codex")
+	if firstCodex.Err == nil {
+		t.Fatalf("first codex result = %#v, want failure", firstCodex)
+	}
+	secondResults, err := mgr.AutoCheck(context.Background())
+	if err != nil {
+		t.Fatalf("second AutoCheck: %v", err)
+	}
+	secondCodex := findAgentUpgradeResult(t, secondResults, "codex")
+	if secondCodex.Err == nil {
+		t.Fatalf("second codex result = %#v, want failure", secondCodex)
 	}
 	results, err := mgr.AutoCheck(context.Background())
 	if err != nil {
 		t.Fatalf("third AutoCheck: %v", err)
 	}
-	if len(results) != 4 || !results[1].Skipped || !strings.Contains(results[1].Reason, "backing off until") {
-		t.Fatalf("third AutoCheck results = %#v, want codex backoff skip", results)
+	codex := findAgentUpgradeResult(t, results, "codex")
+	if !codex.Skipped || !strings.Contains(codex.Reason, "backing off until") {
+		t.Fatalf("third codex result = %#v, want backoff skip", codex)
+	}
+}
+
+func findAgentUpgradeResult(t *testing.T, results []AgentUpgradeRunResult, name string) AgentUpgradeRunResult {
+	t.Helper()
+	for _, result := range results {
+		if result.Name == name {
+			return result
+		}
+	}
+	t.Fatalf("result %q not found in %#v", name, results)
+	return AgentUpgradeRunResult{}
+}
+
+func TestShellQuote(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{in: "", want: "''"},
+		{in: "0.124.0", want: "'0.124.0'"},
+		{in: "1.0.0-rc'1", want: "'1.0.0-rc'\\''1'"},
+	}
+	for _, tc := range tests {
+		if got := shellQuote(tc.in); got != tc.want {
+			t.Fatalf("shellQuote(%q) = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }
 
